@@ -27,3 +27,12 @@ Maven:
    <version>VERSION</version>
 </dependency>
 ```
+
+Obtaining an instance of the API:
+```java
+RegisteredServiceProvider<GrimAbstractAPI> provider = Bukkit.getServicesManager().getRegistration(GrimAbstractAPI.class);
+if (provider != null) {
+    GrimAbstractAPI api = provider.getProvider();
+}
+```
+
