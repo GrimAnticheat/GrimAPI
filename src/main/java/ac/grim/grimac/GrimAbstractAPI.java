@@ -1,7 +1,10 @@
 package ac.grim.grimac;
+
+import net.kyori.adventure.text.Component;
 import org.bukkit.entity.Player;
 
 import javax.annotation.Nullable;
+import java.util.function.Function;
 
 public interface GrimAbstractAPI {
 
@@ -15,7 +18,23 @@ public interface GrimAbstractAPI {
 
     /**
      * This is specifically for setting the server's name in grim's discord messages.
+     * Use {@link GrimAbstractAPI#registerVariable(String, Function)} instead.
      * @param name
      */
+    @Deprecated
     void setServerName(String name);
+
+    /**
+     * Used to create or replace variables, such as %player%. This only works
+     * for player related messages.
+     * @param variable
+     * @param replacement
+     */
+    void registerVariable(String variable, Function<GrimUser, String> replacement);
+
+    /**
+     * Reloads grim
+     */
+    void reload();
+
 }

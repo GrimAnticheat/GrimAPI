@@ -9,7 +9,6 @@ import org.jetbrains.annotations.NotNull;
 
 public class FlagEvent extends Event implements Cancellable {
     private static final HandlerList handlers = new HandlerList();
-
     private final GrimUser grimUser;
     private final AbstractCheck check;
     private boolean cancelled;
@@ -32,6 +31,10 @@ public class FlagEvent extends Event implements Cancellable {
 
     public GrimUser getPlayer() {
         return grimUser;
+    }
+
+    public AbstractCheck getCheck() {
+        return check;
     }
 
     public double getViolations() {
