@@ -9,6 +9,20 @@ public interface GrimUser {
 
     UUID getUniqueId();
 
+    String getBrand();
+
+    int getTransactionPing();
+
+    int getKeepAlivePing();
+
+    String getVersionName();
+
+    double getHorizontalSensitivity();
+
+    double getVerticalSensitivity();
+
+    boolean isVanillaMath();
+
     Collection<? extends AbstractCheck> getChecks();
 
     /**

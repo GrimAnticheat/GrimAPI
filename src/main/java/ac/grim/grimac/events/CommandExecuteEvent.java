@@ -6,13 +6,19 @@ import org.bukkit.event.HandlerList;
 import org.jetbrains.annotations.NotNull;
 
 public class CommandExecuteEvent extends FlagEvent {
-
     private static final HandlerList handlers = new HandlerList();
+
+    private final AbstractCheck check;
     private final String command;
 
     public CommandExecuteEvent(GrimUser player, AbstractCheck check, String command) {
         super(player, check); // Async!
+        this.check = check;
         this.command = command;
+    }
+
+    public AbstractCheck getCheck() {
+        return check;
     }
 
     public static HandlerList getHandlerList() {
