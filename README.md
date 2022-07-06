@@ -10,7 +10,7 @@ repositories {
 }
 
 dependencies {
-    implementation 'com.github.MWHunter:GrimAPI:VERSION'
+    compileOnly 'com.github.MWHunter:GrimAPI:VERSION'
 }
 ```
 
@@ -25,6 +25,7 @@ Maven:
    <groupId>com.github.MWHunter</groupId>
    <artifactId>GrimAPI</artifactId>
    <version>VERSION</version>
+   <scope>provided</scope>
 </dependency>
 ```
 
