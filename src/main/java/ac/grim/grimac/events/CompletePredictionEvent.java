@@ -1,30 +1,24 @@
 package ac.grim.grimac.events;
 
+import ac.grim.grimac.AbstractCheck;
 import ac.grim.grimac.GrimUser;
 import org.bukkit.event.Cancellable;
-import org.bukkit.event.Event;
 import org.bukkit.event.HandlerList;
 import org.jetbrains.annotations.NotNull;
 
-public class CompletePredictionEvent extends Event implements Cancellable {
+public class CompletePredictionEvent extends FlagEvent implements Cancellable {
 
     private static final HandlerList handlers = new HandlerList();
-    private final GrimUser player;
     private final double offset;
     private boolean cancelled;
 
-    public CompletePredictionEvent(GrimUser player, double offset) {
-        super(true); // Async!
-        this.player = player;
+    public CompletePredictionEvent(GrimUser grimUser, AbstractCheck check, double offset) {
+        super(grimUser, check);
         this.offset = offset;
     }
 
     public static HandlerList getHandlerList() {
         return handlers;
-    }
-
-    public GrimUser getPlayer() {
-        return player;
     }
 
     public double getOffset() {
