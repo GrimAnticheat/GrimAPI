@@ -23,6 +23,8 @@ public interface GrimUser {
 
     boolean isVanillaMath();
 
+    void updatePermissions();
+
     Collection<? extends AbstractCheck> getChecks();
 
     /**
