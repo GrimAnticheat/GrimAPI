@@ -1,0 +1,10 @@
+name: Bug
+description: Report API related issues here
+labels: ["bug"]
+body:
+  - type: textarea
+    attributes:
+      label: Bug description
+      description: Describe the bug and how to replicate it
+    validations:
+      required: true
