@@ -14,4 +14,7 @@ public interface AbstractCheck {
 
     double getSetbackVL();
 
+    void setEnabled(boolean enabled);
+
+    void reload();
 }
