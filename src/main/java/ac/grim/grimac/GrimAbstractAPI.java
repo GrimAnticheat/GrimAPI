@@ -18,7 +18,7 @@ public interface GrimAbstractAPI {
 
     /**
      * This is specifically for setting the server's name in grim's discord messages.
-     * Use {@link GrimAbstractAPI#registerVariable(String, Function)} instead.
+     * Use {@link GrimAbstractAPI#registerVariable(String, String)} instead.
      * @param name
      */
     @Deprecated
@@ -31,6 +31,14 @@ public interface GrimAbstractAPI {
      * @param replacement
      */
     void registerVariable(String variable, Function<GrimUser, String> replacement);
+
+
+    /**
+     * Used to create or replace static variables, such as %server%.
+     * @param variable
+     * @param replacement
+     */
+    void registerVariable(String variable, String replacement);
 
     /**
      * Reloads grim
