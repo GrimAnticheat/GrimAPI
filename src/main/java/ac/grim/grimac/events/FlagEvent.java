@@ -6,17 +6,20 @@ import org.bukkit.event.Cancellable;
 import org.bukkit.event.Event;
 import org.bukkit.event.HandlerList;
 import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
 
 public class FlagEvent extends Event implements Cancellable {
     private static final HandlerList handlers = new HandlerList();
     private final GrimUser grimUser;
     private final AbstractCheck check;
+    private final String verbose;
     private boolean cancelled;
 
-    public FlagEvent(GrimUser grimUser, AbstractCheck check) {
+    public FlagEvent(GrimUser grimUser, AbstractCheck check, @Nullable String verbose) {
         super(true); // Async!
         this.grimUser = grimUser;
         this.check = check;
+        this.verbose = verbose;
     }
 
     @Override
@@ -39,6 +42,10 @@ public class FlagEvent extends Event implements Cancellable {
 
     public double getViolations() {
         return check.getViolations();
+    }
+
+    public @Nullable String getVerbose() {
+        return verbose;
     }
 
     @NotNull
