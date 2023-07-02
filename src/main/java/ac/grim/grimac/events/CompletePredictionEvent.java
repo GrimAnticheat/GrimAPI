@@ -13,7 +13,7 @@ public class CompletePredictionEvent extends FlagEvent implements Cancellable {
     private boolean cancelled;
 
     public CompletePredictionEvent(GrimUser grimUser, AbstractCheck check, double offset) {
-        super(grimUser, check);
+        super(grimUser, check, null);
         this.offset = offset;
     }
 

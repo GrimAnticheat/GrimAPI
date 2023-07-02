@@ -12,7 +12,7 @@ public class CommandExecuteEvent extends FlagEvent {
     private final String command;
 
     public CommandExecuteEvent(GrimUser player, AbstractCheck check, String command) {
-        super(player, check); // Async!
+        super(player, check, null); // Async!
         this.check = check;
         this.command = command;
     }
