@@ -1,6 +1,5 @@
 package ac.grim.grimac;
 
-import net.kyori.adventure.text.Component;
 import org.bukkit.entity.Player;
 
 import javax.annotation.Nullable;
@@ -32,7 +31,6 @@ public interface GrimAbstractAPI {
      */
     void registerVariable(String variable, Function<GrimUser, String> replacement);
 
-
     /**
      * Used to create or replace static variables, such as %server%.
      * @param variable
@@ -40,9 +38,20 @@ public interface GrimAbstractAPI {
      */
     void registerVariable(String variable, String replacement);
 
+    String getGrimVersion();
+
+    /**
+     * Used for future expansion. Don't use this unless you know what you're doing.
+     */
+    void registerFunction(String key, Function<Object, Object> function);
+
+    /**
+     * Used for future expansion. Don't use this unless you know what you're doing.
+     */
+    Function<Object, Object> getFunction(String key);
+
     /**
      * Reloads grim
      */
     void reload();
-
 }
