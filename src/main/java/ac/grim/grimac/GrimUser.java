@@ -27,6 +27,8 @@ public interface GrimUser {
 
     Collection<? extends AbstractCheck> getChecks();
 
+    boolean isLikelySpoofingBrand();
+
     /**
      * Runs the runnable on the player's netty thread. This may need to be used
      * to access parts of the API safely. This might be removed in future for
