@@ -17,4 +17,6 @@ public interface AbstractCheck {
     void setEnabled(boolean enabled);
 
     void reload();
+
+    default void onEndOfTick(){}
 }
