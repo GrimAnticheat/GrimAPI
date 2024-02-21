@@ -5,7 +5,7 @@ plugins {
 
 group 'ac.grim.grimac'
 version '1.0'
-description = 'GrimAPI'
+description 'GrimAPI'
 java.sourceCompatibility = JavaVersion.VERSION_1_8
 java.targetCompatibility = JavaVersion.VERSION_1_8
 
@@ -30,13 +30,14 @@ repositories {
 
 dependencies {
     compileOnly 'org.spigotmc:spigot-api:1.18-R0.1-SNAPSHOT'
-    compileOnly 'com.github.retrooper.packetevents:spigot:2.0-SNAPSHOT'
+    compileOnly 'com.github.retrooper.packetevents:spigot:2.2.1'
+    compileOnly 'org.jetbrains:annotations:24.1.0'
 
-    compileOnly 'org.projectlombok:lombok:1.18.28'
-    annotationProcessor 'org.projectlombok:lombok:1.18.28'
+    compileOnly 'org.projectlombok:lombok:1.18.30'
+    annotationProcessor 'org.projectlombok:lombok:1.18.30'
 
-    testCompileOnly 'org.projectlombok:lombok:1.18.28'
-    testAnnotationProcessor 'org.projectlombok:lombok:1.18.28'
+    testCompileOnly 'org.projectlombok:lombok:1.18.30'
+    testAnnotationProcessor 'org.projectlombok:lombok:1.18.30'
 }
 
 test {
