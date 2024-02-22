@@ -1,7 +1,7 @@
-package ac.grim.grimac.events;
+package ac.grim.grimac.api.events;
 
-import ac.grim.grimac.AbstractCheck;
-import ac.grim.grimac.GrimUser;
+import ac.grim.grimac.api.AbstractCheck;
+import ac.grim.grimac.api.GrimUser;
 import org.bukkit.event.Cancellable;
 import org.bukkit.event.Event;
 import org.bukkit.event.HandlerList;
