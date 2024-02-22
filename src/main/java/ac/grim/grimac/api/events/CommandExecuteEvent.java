@@ -1,7 +1,7 @@
-package ac.grim.grimac.events;
+package ac.grim.grimac.api.events;
 
-import ac.grim.grimac.AbstractCheck;
-import ac.grim.grimac.GrimUser;
+import ac.grim.grimac.api.AbstractCheck;
+import ac.grim.grimac.api.GrimUser;
 import org.bukkit.event.HandlerList;
 import org.jetbrains.annotations.NotNull;
 

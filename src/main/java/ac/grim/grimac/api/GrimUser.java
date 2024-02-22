@@ -1,4 +1,4 @@
-package ac.grim.grimac;
+package ac.grim.grimac.api;
 
 import java.util.Collection;
 import java.util.UUID;
