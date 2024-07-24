@@ -1,16 +1,20 @@
 # GrimAPI
-A work in progress API for [Grim Anticheat](https://github.com/MWHunter/Grim)
+A work in progress API for [Grim Anticheat](https://github.com/GrimAnticheat/Grim)
 
-You can find the latest version here: https://jitpack.io/#MWHunter/GrimAPI
+You can find the latest version here: https://jitpack.io/#GrimAnticheat/GrimAPI
 
 Gradle:
 ```gradle
 repositories {
-    maven { url = 'https://jitpack.io/' }
+    maven("https://jitpack.io/") { // Grim API
+        content {
+            includeGroup("com.github.grimanticheat")
+        }
+    }
 }
 
 dependencies {
-    compileOnly 'com.github.MWHunter:GrimAPI:VERSION'
+    compileOnly 'com.github.grimanticheat:grimapi:VERSION'
 }
 ```
 
@@ -22,7 +26,7 @@ Maven:
 </repository>
   
 <dependency>
-   <groupId>com.github.MWHunter</groupId>
+   <groupId>com.github.grimanticheat</groupId>
    <artifactId>GrimAPI</artifactId>
    <version>VERSION</version>
    <scope>provided</scope>
