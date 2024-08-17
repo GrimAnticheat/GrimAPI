@@ -1,5 +1,6 @@
 package ac.grim.grimac.api;
 
+import ac.grim.grimac.api.alerts.AlertManager;
 import org.bukkit.entity.Player;
 
 import javax.annotation.Nullable;
@@ -54,4 +55,10 @@ public interface GrimAbstractAPI {
      * Reloads grim
      */
     void reload();
+
+    /**
+     * Retrieves the alert manager.
+     * @return AlertManager
+     */
+    AlertManager getAlertManager();
 }
