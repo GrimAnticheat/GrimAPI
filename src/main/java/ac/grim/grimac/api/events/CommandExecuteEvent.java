@@ -6,8 +6,8 @@ import org.bukkit.event.HandlerList;
 import org.jetbrains.annotations.NotNull;
 
 public class CommandExecuteEvent extends FlagEvent {
-    private static final HandlerList handlers = new HandlerList();
 
+    private static final HandlerList handlers = new HandlerList();
     private final AbstractCheck check;
     private final String command;
 

@@ -1,6 +1,9 @@
 package ac.grim.grimac.api;
 
-public interface AbstractCheck {
+import ac.grim.grimac.api.common.BasicReloadable;
+import ac.grim.grimac.api.config.ConfigReloadable;
+
+public interface AbstractCheck extends ConfigReloadable, BasicReloadable {
 
     String getCheckName();
 
@@ -15,8 +18,6 @@ public interface AbstractCheck {
     double getSetbackVL();
 
     void setEnabled(boolean enabled);
-
-    void reload();
 
     boolean isExperimental();
 }
