@@ -1,9 +1,12 @@
 package ac.grim.grimac.api;
 
+import ac.grim.grimac.api.common.BasicReloadable;
+import ac.grim.grimac.api.config.ConfigReloadable;
+
 import java.util.Collection;
 import java.util.UUID;
 
-public interface GrimUser {
+public interface GrimUser extends ConfigReloadable, BasicReloadable {
 
     String getName();
 

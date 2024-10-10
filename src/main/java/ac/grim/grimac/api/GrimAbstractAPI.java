@@ -1,12 +1,16 @@
 package ac.grim.grimac.api;
 
 import ac.grim.grimac.api.alerts.AlertManager;
+import ac.grim.grimac.api.common.BasicReloadable;
+import ac.grim.grimac.api.config.ConfigManager;
+import ac.grim.grimac.api.config.ConfigReloadable;
 import org.bukkit.entity.Player;
+import org.jetbrains.annotations.Nullable;
 
-import javax.annotation.Nullable;
+import java.util.concurrent.CompletableFuture;
 import java.util.function.Function;
 
-public interface GrimAbstractAPI {
+public interface GrimAbstractAPI extends ConfigReloadable, BasicReloadable {
 
     /**
      * Retrieves a GrimUser reference from the player.
@@ -30,35 +34,53 @@ public interface GrimAbstractAPI {
      * @param variable
      * @param replacement
      */
-    void registerVariable(String variable, Function<GrimUser, String> replacement);
+    void registerVariable(String variable, @Nullable Function<GrimUser, String> replacement);
 
     /**
      * Used to create or replace static variables, such as %server%.
      * @param variable
      * @param replacement
      */
-    void registerVariable(String variable, String replacement);
+    void registerVariable(String variable, @Nullable String replacement);
 
     String getGrimVersion();
 
     /**
      * Used for future expansion. Don't use this unless you know what you're doing.
      */
-    void registerFunction(String key, Function<Object, Object> function);
+    void registerFunction(String key, @Nullable Function<Object, Object> function);
 
     /**
      * Used for future expansion. Don't use this unless you know what you're doing.
      */
-    Function<Object, Object> getFunction(String key);
-
-    /**
-     * Reloads grim
-     */
-    void reload();
+    @Nullable Function<Object, Object> getFunction(String key);
 
     /**
      * Retrieves the alert manager.
      * @return AlertManager
      */
     AlertManager getAlertManager();
+
+    /**
+     * Retrieves the config manager.
+     * @return Configurable
+     */
+    ConfigManager getConfigManager();
+
+    /**
+     * Reloads Grim using the config file.
+     */
+    @Override
+    default void reload() {
+        reload(getConfigManager());
+    }
+
+    /**
+     * Reloads Grim asynchronously using the config file.
+     * @return CompletableFuture<Boolean>
+     */
+    default CompletableFuture<Boolean> reloadAsync() {
+        return reloadAsync(getConfigManager());
+    }
+
 }
