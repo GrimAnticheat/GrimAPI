@@ -4,13 +4,31 @@ import ac.grim.grimac.api.alerts.AlertManager;
 import ac.grim.grimac.api.common.BasicReloadable;
 import ac.grim.grimac.api.config.ConfigManager;
 import ac.grim.grimac.api.config.ConfigReloadable;
-import org.bukkit.entity.Player;
 import org.jetbrains.annotations.Nullable;
 
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Function;
 
-public interface GrimAbstractAPI extends ConfigReloadable, BasicReloadable {
+public interface GrimAPI<USER> extends ConfigReloadable, BasicReloadable {
+    static <USER> GrimAPI<USER> getAPI() {
+        return GrimPlatform.<USER>getInstance().getApi();
+    }
+
+    /**
+     * Reloads Grim using the config file.
+     */
+    @Override
+    default void reload() {
+        this.reload(this.getConfigManager());
+    }
+
+    /**
+     * Reloads Grim asynchronously using the config file.
+     * @return CompletableFuture<Boolean>
+     */
+    default CompletableFuture<Boolean> reloadAsync() {
+        return this.reloadAsync(this.getConfigManager());
+    }
 
     /**
      * Retrieves a GrimUser reference from the player.
@@ -18,11 +36,11 @@ public interface GrimAbstractAPI extends ConfigReloadable, BasicReloadable {
      * @return GrimUser
      */
     @Nullable
-    GrimUser getGrimUser(Player player);
+    GrimUser<USER> getGrimUser(USER player);
 
     /**
      * This is specifically for setting the server's name in grim's discord messages.
-     * Use {@link GrimAbstractAPI#registerVariable(String, String)} instead.
+     * Use {@link GrimAPI#registerVariable(String, String)} instead.
      * @param name
      */
     @Deprecated
@@ -59,28 +77,12 @@ public interface GrimAbstractAPI extends ConfigReloadable, BasicReloadable {
      * Retrieves the alert manager.
      * @return AlertManager
      */
-    AlertManager getAlertManager();
+    AlertManager<USER> getAlertManager();
 
     /**
      * Retrieves the config manager.
      * @return Configurable
      */
     ConfigManager getConfigManager();
-
-    /**
-     * Reloads Grim using the config file.
-     */
-    @Override
-    default void reload() {
-        reload(getConfigManager());
-    }
-
-    /**
-     * Reloads Grim asynchronously using the config file.
-     * @return CompletableFuture<Boolean>
-     */
-    default CompletableFuture<Boolean> reloadAsync() {
-        return reloadAsync(getConfigManager());
-    }
 
 }
