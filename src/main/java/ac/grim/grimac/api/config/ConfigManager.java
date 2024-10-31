@@ -32,4 +32,6 @@ public interface ConfigManager extends BasicReloadable {
 
     @Nullable <K, V> Map<K, V> getMapElse(String key, Map<K, V> otherwise);
 
+    boolean hasLoaded();
+
 }
