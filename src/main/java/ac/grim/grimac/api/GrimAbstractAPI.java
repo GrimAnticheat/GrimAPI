@@ -83,4 +83,10 @@ public interface GrimAbstractAPI extends ConfigReloadable, BasicReloadable {
         return reloadAsync(getConfigManager());
     }
 
+    /**
+     * Checks if the API has reached the start phase of the plugin.
+     * @return boolean
+     */
+    boolean hasStarted();
+
 }
