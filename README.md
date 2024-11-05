@@ -33,6 +33,11 @@ Maven:
 </dependency>
 ```
 
+Make sure to depend or softdepend on GrimAC in your plugin's `plugin.yml`:
+```yml
+softdepend: [GrimAC]
+```
+
 Obtaining an instance of the API:
 ```java
 RegisteredServiceProvider<GrimAbstractAPI> provider = Bukkit.getServicesManager().getRegistration(GrimAbstractAPI.class);
