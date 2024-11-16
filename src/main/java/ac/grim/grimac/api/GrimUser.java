@@ -42,4 +42,9 @@ public interface GrimUser extends ConfigReloadable, BasicReloadable {
     GrimUserBlockResyncHandler getBlockResyncHandler();
 
     void setBlockResyncHandler(GrimUserBlockResyncHandler blockResyncHandler);
+
+    /**
+     * Resets the block resync handler to default
+     */
+    void resetBlockResyncHandler();
 }
