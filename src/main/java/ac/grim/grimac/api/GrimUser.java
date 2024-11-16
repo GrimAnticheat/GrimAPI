@@ -2,6 +2,7 @@ package ac.grim.grimac.api;
 
 import ac.grim.grimac.api.common.BasicReloadable;
 import ac.grim.grimac.api.config.ConfigReloadable;
+import ac.grim.grimac.api.resync.GrimUserBlockResyncHandler;
 
 import java.util.Collection;
 import java.util.UUID;
@@ -37,4 +38,8 @@ public interface GrimUser extends ConfigReloadable, BasicReloadable {
      * @param runnable
      */
     void runSafely(Runnable runnable);
+
+    GrimUserBlockResyncHandler getBlockResyncHandler();
+
+    void setBlockResyncHandler(GrimUserBlockResyncHandler blockResyncHandler);
 }
