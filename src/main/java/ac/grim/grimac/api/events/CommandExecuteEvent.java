@@ -11,8 +11,8 @@ public class CommandExecuteEvent extends FlagEvent {
     private final AbstractCheck check;
     private final String command;
 
-    public CommandExecuteEvent(GrimUser player, AbstractCheck check, String command) {
-        super(player, check); // Async!
+    public CommandExecuteEvent(GrimUser player, AbstractCheck check, String verbose, String command) {
+        super(player, check, verbose); // Async!
         this.check = check;
         this.command = command;
     }
