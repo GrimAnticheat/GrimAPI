@@ -1,6 +1,7 @@
 package ac.grim.grimac.api;
 
 import ac.grim.grimac.api.common.BasicStatus;
+import ac.grim.grimac.api.dynamic.UnloadedBehavior;
 
 public interface AbstractCheck extends AbstractProcessor, BasicStatus {
 
@@ -18,4 +19,5 @@ public interface AbstractCheck extends AbstractProcessor, BasicStatus {
 
     boolean isExperimental();
 
+    UnloadedBehavior getUnloadedBehavior();
 }
