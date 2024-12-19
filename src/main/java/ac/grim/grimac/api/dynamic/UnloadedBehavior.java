@@ -5,6 +5,7 @@ import java.lang.reflect.Method;
 /**
  * Defines how an unloaded check should behave when its methods are called.
  * This allows for graceful degradation when checks are disabled/unloaded.
+ *
  */
 public interface UnloadedBehavior {
     /**
