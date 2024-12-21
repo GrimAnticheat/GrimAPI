@@ -1,6 +1,7 @@
 package ac.grim.grimac.api;
 
 import ac.grim.grimac.api.common.BasicStatus;
+import ac.grim.grimac.api.dynamic.DefaultUnloadedBehavior;
 import ac.grim.grimac.api.dynamic.UnloadedBehavior;
 import java.util.Collections;
 import java.util.Set;
@@ -59,7 +60,9 @@ public interface AbstractCheck extends AbstractProcessor, BasicStatus {
      *
      * @return The UnloadedBehavior implementation for this check
      */
-    UnloadedBehavior getUnloadedBehavior();
+    default UnloadedBehavior getUnloadedBehavior() {
+        return DefaultUnloadedBehavior.INSTANCE;
+    }
 
     /**
      * @return Set of check classes that must be loaded along with this check to run
@@ -99,14 +102,14 @@ public interface AbstractCheck extends AbstractProcessor, BasicStatus {
     /**
      * @return Bit mask representing all check types this check implements
      */
-    int getCheckMask();
+    int getMask();
 
     /**
      * Test if this check is of a specific type
      * @param type The check type to test for
      * @return true if this check handles the given type
      */
-    default boolean isCheckType(CheckType type) {
-        return (getCheckMask() & type.getMask()) != 0;
+    default boolean is(CheckType type) {
+        return (getMask() & type.getMask()) != 0;
     }
 }
