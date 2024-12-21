@@ -112,4 +112,15 @@ public interface AbstractCheck extends AbstractProcessor, BasicStatus {
     default boolean is(CheckType type) {
         return (getMask() & type.getMask()) != 0;
     }
+    /**
+     * Determines if this check supports/is compatible with the given player.
+     * This can be used to disable checks for players on certain versions,
+     * with specific conditions, or other compatibility requirements.
+     *
+     * @param player The {@link GrimUser} to check compatibility for
+     * @return true if the check supports this player, false otherwise
+     */
+    default boolean supportsPlayer(GrimUser player) {
+        return true;
+    }
 }
