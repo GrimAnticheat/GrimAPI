@@ -13,14 +13,12 @@ public enum CheckType {
     BLOCK_PLACE(6),
     POST_PREDICTION(7);
 
-    private final int bitPosition;
     private final int mask;
     
     CheckType(int bitPosition) {
         if (bitPosition >= 32) {
             throw new IllegalArgumentException("Cannot have more than 32 check types");
         }
-        this.bitPosition = bitPosition;
         this.mask = 1 << bitPosition;
     }
     
