@@ -22,7 +22,7 @@ public interface AbstractCheck extends AbstractProcessor, BasicStatus {
 
     /**
      * Gets an alternative name for this check, defaults to the check name.
-     * Useful for checks that may have multiple names or variants (IE AntiKB and AntiKnockback)
+     * Useful for checks that may have multiple names or variants (ie AntiKB and AntiKnockback)
      * @return The alternative check name
      */
     default String getAlternativeName() {
@@ -112,6 +112,7 @@ public interface AbstractCheck extends AbstractProcessor, BasicStatus {
     default boolean is(CheckType type) {
         return (getMask() & type.getMask()) != 0;
     }
+
     /**
      * Determines if this check supports/is compatible with the given player.
      * This can be used to disable checks for players on certain versions,
