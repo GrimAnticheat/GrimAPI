@@ -10,14 +10,14 @@ import java.lang.reflect.Method;
  * - object methods return null
  */
 public class DefaultUnloadedBehavior implements UnloadedBehavior {
-  public static final UnloadedBehavior INSTANCE = new DefaultUnloadedBehavior();
+    public static final UnloadedBehavior INSTANCE = new DefaultUnloadedBehavior();
 
-  @Override
-  public Object handleUnloadedCall(Method method, Object[] args) {
-    Class<?> returnType = method.getReturnType();
-    if (returnType == boolean.class) return false;
-    if (returnType == int.class) return 0;
-    if (returnType == void.class) return null;
-    return null;
-  }
+    @Override
+    public Object handleUnloadedCall(Method method, Object[] args) {
+        Class<?> returnType = method.getReturnType();
+        if (returnType == boolean.class) return false;
+        if (returnType == int.class) return 0;
+        if (returnType == void.class) return null;
+        return null;
+    }
 }
