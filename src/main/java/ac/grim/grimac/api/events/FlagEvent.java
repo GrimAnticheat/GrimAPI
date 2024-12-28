@@ -39,7 +39,7 @@ public class FlagEvent extends Event implements Cancellable {
         return check;
     }
 
-    public AbstractCheck getVerbose() {
+    public String getVerbose() {
         return verbose;
     }
 
