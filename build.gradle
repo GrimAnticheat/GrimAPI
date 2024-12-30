@@ -7,12 +7,22 @@ plugins {
 group 'ac.grim.grimac'
 version '1.0'
 description 'GrimAPI'
-java.sourceCompatibility = JavaVersion.VERSION_1_8
-java.targetCompatibility = JavaVersion.VERSION_1_8
 
+def targetJavaVersion = 17
 java {
-    withJavadocJar()
+    def javaVersion = JavaVersion.toVersion(targetJavaVersion)
+    sourceCompatibility = javaVersion
+    targetCompatibility = javaVersion
+    //
+    toolchain.languageVersion.set(JavaLanguageVersion.of(21))
+    //
     withSourcesJar()
+    withJavadocJar()
+    disableAutoTargetJvm()
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.release.set(17)
 }
 
 publishing {
