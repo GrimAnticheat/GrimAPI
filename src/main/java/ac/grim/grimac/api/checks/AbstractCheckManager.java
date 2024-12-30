@@ -3,7 +3,7 @@ package ac.grim.grimac.api.checks;
 
 import ac.grim.grimac.api.AbstractCheck;
 import ac.grim.grimac.api.AbstractProcessor;
-import org.jetbrains.annotations.NotNull;
+import ac.grim.grimac.api.GrimUser;
 
 import java.util.Collection;
 
@@ -11,18 +11,15 @@ public interface AbstractCheckManager {
 
     /**
      * Register a processor
-     * @param clazz The class of the processor
-     * @param processor The processor
-     * @return The number of listeners registered
      */
-    <T extends AbstractProcessor> int registerProcessor(@NotNull Class<T> clazz, @NotNull T processor);
+    <T extends AbstractProcessor> int registerProcessor(Class<T> clazz, T processor);
 
     /**
-     * Unregister a processor
-     * @param processor The processor
+     * Register a processor
+     * @param clazz Processor class
+     * @return Was successful in unregistering
      */
-
-    void unregisterProcessor(AbstractProcessor processor);
+    <T extends AbstractProcessor> boolean unregisterProcessor(Class<T> clazz);
 
     /**
      * Get all processors
@@ -35,5 +32,9 @@ public interface AbstractCheckManager {
      * @return All checks
      */
     Collection<? extends AbstractCheck> getAllChecks();
+
+
+    boolean handleViolation(GrimUser user, AbstractCheck check, String verbose);
+
 
 }

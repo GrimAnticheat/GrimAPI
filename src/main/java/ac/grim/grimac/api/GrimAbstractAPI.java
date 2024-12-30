@@ -88,5 +88,4 @@ public interface GrimAbstractAPI extends ConfigReloadable, BasicReloadable {
      * @return boolean
      */
     boolean hasStarted();
-
 }

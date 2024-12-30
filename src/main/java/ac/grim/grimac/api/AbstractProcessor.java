@@ -1,10 +1,9 @@
 package ac.grim.grimac.api;
-
-import ac.grim.grimac.api.checks.ListenerType;
 import ac.grim.grimac.api.common.BasicReloadable;
 import ac.grim.grimac.api.config.ConfigReloadable;
+import ac.grim.grimac.api.debug.Debuggable;
 
-public interface AbstractProcessor extends BasicReloadable, ConfigReloadable {
+public interface AbstractProcessor extends BasicReloadable, ConfigReloadable, Debuggable {
     /**
      * Get the name of the processor
      * @return
@@ -12,10 +11,11 @@ public interface AbstractProcessor extends BasicReloadable, ConfigReloadable {
     String getConfigName();
 
     /**
-     * Get the listener type of the processor
+     * Get the group type of the processor
      * @return
      */
-    ListenerType getListenerType();
+    String getGroupType();
+
     /**
      * Check if the processor is supported
      * @return If the processor is supported
@@ -33,6 +33,16 @@ public interface AbstractProcessor extends BasicReloadable, ConfigReloadable {
      * @param listeners The number of listeners
      */
     void setListeners(int listeners);
+
+    default String identifier() {
+        return getConfigName();
+    }
+
+    /**
+     * Number of times the processor has been reloaded
+     * @return The number of reloads
+     */
+    int getReloadCount();
 
 }
 
