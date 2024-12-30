@@ -1,9 +1,9 @@
 package ac.grim.grimac.api;
 
+import ac.grim.grimac.api.checks.CheckManager;
 import ac.grim.grimac.api.common.BasicReloadable;
 import ac.grim.grimac.api.config.ConfigReloadable;
 
-import java.util.Collection;
 import java.util.UUID;
 
 public interface GrimUser extends ConfigReloadable, BasicReloadable {
@@ -28,7 +28,7 @@ public interface GrimUser extends ConfigReloadable, BasicReloadable {
 
     void updatePermissions();
 
-    Collection<? extends AbstractCheck> getChecks();
+    CheckManager getCheckManager();
 
     /**
      * Runs the runnable on the player's netty thread. This may need to be used
