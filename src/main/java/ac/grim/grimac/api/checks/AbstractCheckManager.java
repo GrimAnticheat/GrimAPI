@@ -7,7 +7,7 @@ import org.jetbrains.annotations.NotNull;
 
 import java.util.Collection;
 
-public interface CheckManager {
+public interface AbstractCheckManager {
 
     <T extends AbstractProcessor> void registerProcessor(@NotNull Class<T> clazz, @NotNull T processor, @NotNull ListenerType listenerType);
 
