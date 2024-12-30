@@ -5,15 +5,33 @@ import ac.grim.grimac.api.common.BasicReloadable;
 import ac.grim.grimac.api.config.ConfigReloadable;
 
 public interface AbstractProcessor extends BasicReloadable, ConfigReloadable {
-    // name of the check
+    /**
+     * Get the name of the processor
+     * @return
+     */
     String getConfigName();
-    // listener type of the check
+
+    /**
+     * Get the listener type of the processor
+     * @return
+     */
     ListenerType getListenerType();
-    // if the player supports the check
+    /**
+     * Check if the processor is supported
+     * @return If the processor is supported
+     */
     boolean isSupported();
-    // how many listeners
+
+    /**
+     * Get the listeners of the processor
+     * @return The number of listeners
+     */
     int getListeners();
 
+    /**
+     * Set the listeners of the processor
+     * @param listeners The number of listeners
+     */
     void setListeners(int listeners);
 
 }

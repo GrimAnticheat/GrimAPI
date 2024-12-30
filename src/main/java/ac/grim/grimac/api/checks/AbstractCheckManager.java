@@ -34,6 +34,6 @@ public interface AbstractCheckManager {
      * Get all checks
      * @return All checks
      */
-    Collection<? extends AbstractCheck> getChecks();
+    Collection<? extends AbstractCheck> getAllChecks();
 
 }
