@@ -6,13 +6,13 @@ import ac.grim.grimac.api.debug.Debuggable;
 public interface AbstractProcessor extends BasicReloadable, ConfigReloadable, Debuggable {
     /**
      * Get the name of the processor
-     * @return
+     * @return Config name
      */
     String getConfigName();
 
     /**
      * Get the group type of the processor
-     * @return
+     * @return Group type
      */
     String getGroupType();
 

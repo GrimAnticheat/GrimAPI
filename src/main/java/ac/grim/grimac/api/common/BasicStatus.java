@@ -4,13 +4,12 @@ public interface BasicStatus {
 
     /**
      * If the object is enabled.
-     * @return
+     * @return If the object is enabled
      */
     boolean isEnabled();
 
     /**
      * Sets the object to enabled or disabled.
-     * @param enabled
      */
     void setEnabled(boolean enabled);
 
