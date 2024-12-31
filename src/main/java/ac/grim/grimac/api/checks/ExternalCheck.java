@@ -1,24 +1,26 @@
 package ac.grim.grimac.api.checks;
 
 import ac.grim.grimac.api.AbstractCheck;
-import ac.grim.grimac.api.GrimAbstractAPI;
 import ac.grim.grimac.api.GrimUser;
 import ac.grim.grimac.api.config.ConfigManager;
 import lombok.Getter;
-import lombok.RequiredArgsConstructor;
 import lombok.Setter;
 
 import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
 
-@RequiredArgsConstructor
 @Getter
 public class ExternalCheck implements AbstractCheck {
 
-    final GrimAbstractAPI api;
     final GrimUser player;
     final String checkName;
-    final String groupType;
+    private final String listenerGroup;
+
+    public ExternalCheck(GrimUser player, String checkName, ListenerGroup listenerGroup) {
+        this.player = player;
+        this.checkName = checkName;
+        this.listenerGroup = listenerGroup.getName();
+    }
 
     boolean supported = false;
     @Setter boolean enabled = true;
@@ -51,7 +53,7 @@ public class ExternalCheck implements AbstractCheck {
 
     @Override
     public final void reload() {
-        reload(api.getConfigManager());
+        reload(player.getConfigManager());
     }
 
     @Override

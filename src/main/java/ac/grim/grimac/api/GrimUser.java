@@ -2,6 +2,7 @@ package ac.grim.grimac.api;
 
 import ac.grim.grimac.api.checks.AbstractCheckManager;
 import ac.grim.grimac.api.common.BasicReloadable;
+import ac.grim.grimac.api.config.ConfigManager;
 import ac.grim.grimac.api.config.ConfigReloadable;
 import ac.grim.grimac.api.debug.AbstractDebugManager;
 
@@ -32,6 +33,8 @@ public interface GrimUser extends ConfigReloadable, BasicReloadable {
     AbstractCheckManager getCheckManager();
 
     AbstractDebugManager getDebugManager();
+
+    ConfigManager getConfigManager();
 
     /**
      * Runs the runnable on the player's netty thread. This may need to be used

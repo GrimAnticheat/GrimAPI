@@ -21,14 +21,6 @@ public interface GrimAbstractAPI extends ConfigReloadable, BasicReloadable {
     GrimUser getGrimUser(Player player);
 
     /**
-     * This is specifically for setting the server's name in grim's discord messages.
-     * Use {@link GrimAbstractAPI#registerVariable(String, String)} instead.
-     * @param name
-     */
-    @Deprecated
-    void setServerName(String name);
-
-    /**
      * Used to create or replace variables, such as %player%. This only works
      * for player related messages.
      * @param variable

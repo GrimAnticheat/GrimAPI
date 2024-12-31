@@ -69,6 +69,5 @@ shadowJar {
     relocate("io.github.retrooper.packetevents", "ac.grim.grimac.shaded.io.packetevents")
     relocate("com.github.retrooper.packetevents", "ac.grim.grimac.shaded.com.packetevents")
     relocate("org.intellij", "ac.grim.grimac.shaded.intellij")
-    relocate("org.jetbrains", "ac.grim.grimac.shaded.jetbrains")
     relocate("net.kyori", "ac.grim.grimac.shaded.kyori")
 }

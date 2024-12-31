@@ -11,10 +11,18 @@ public interface AbstractProcessor extends BasicReloadable, ConfigReloadable, De
     String getConfigName();
 
     /**
-     * Get the group type of the processor
-     * @return Group type
+     * Get the listener group of the processor
+     * @return Listener group
      */
-    String getGroupType();
+    String getListenerGroup();
+
+    /**
+     * Get the priority of the processor
+     * @return Priority
+     */
+    default int priority() {
+        return 0;
+    }
 
     /**
      * Check if the processor is supported

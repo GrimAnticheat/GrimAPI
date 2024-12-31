@@ -1,9 +1,9 @@
 package ac.grim.grimac.api.examples;
 
-import ac.grim.grimac.api.GrimAbstractAPI;
 import ac.grim.grimac.api.GrimUser;
 import ac.grim.grimac.api.checks.ExternalCheck;
-import ac.grim.grimac.api.checks.type.PacketReceiveListener;
+import ac.grim.grimac.api.checks.ListenerGroup;
+import ac.grim.grimac.api.checks.listeners.PacketReceiveListener;
 import ac.grim.grimac.api.events.GrimUserJoinEvent;
 import com.github.retrooper.packetevents.event.PacketReceiveEvent;
 import com.github.retrooper.packetevents.protocol.packettype.PacketType;
@@ -15,30 +15,26 @@ import org.bukkit.plugin.java.JavaPlugin;
 
 public class RegisterCheckExample implements Listener {
 
-    private final GrimAbstractAPI api;
-
-    public RegisterCheckExample(JavaPlugin plugin, GrimAbstractAPI api) {
-        this.api = api;
+    // register the listener
+    public RegisterCheckExample(JavaPlugin plugin) {
         plugin.getServer().getPluginManager().registerEvents(this, plugin);
-    }
-
-    private void addChecks(GrimUser user) {
-        // register checks
-        user.getCheckManager().registerProcessor(ExampleCheckA.class, new ExampleCheckA(api, user));
-        // we need to reload the user to apply all the changes
-        user.reload();
     }
 
     // listen to when a grim user joins, this will run on the player's netty thread
     @EventHandler
     public void onUserJoin(GrimUserJoinEvent event) {
         GrimUser user = event.getUser();
-        addChecks(user);
+        // register checks
+        user.getCheckManager().registerProcessor(ExampleCheckA.class, new ExampleCheckA(user));
+        // we need to reload the user to apply all the changes
+        user.reload();
     }
 
+    // example check implementation
     private static class ExampleCheckA extends ExternalCheck implements PacketReceiveListener {
-        public ExampleCheckA(GrimAbstractAPI api, GrimUser user) {
-            super(api, user, "ExampleCheckA", "packet");
+
+        public ExampleCheckA(GrimUser user) {
+            super(user, "ExampleCheckA", ListenerGroup.PACKET);
         }
 
         private Location location = null;
