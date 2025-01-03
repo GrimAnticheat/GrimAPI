@@ -7,14 +7,23 @@ import ac.grim.grimac.api.config.ConfigReloadable;
 import org.bukkit.entity.Player;
 import org.jetbrains.annotations.Nullable;
 
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Function;
 
 public interface GrimAbstractAPI extends ConfigReloadable, BasicReloadable {
 
     /**
-     * Retrieves a GrimUser reference from the player.
-     * @param player
+     * Retrieves a GrimUser reference from a player's UUID.
+     * @param uniqueId The player's UUID
+     * @return GrimUser
+     */
+    @Nullable
+    GrimUser getGrimUser(UUID uniqueId);
+
+    /**
+     * Retrieves a GrimUser reference from a player.
+     * @param player Bukkit player reference
      * @return GrimUser
      */
     @Nullable
@@ -35,6 +44,10 @@ public interface GrimAbstractAPI extends ConfigReloadable, BasicReloadable {
      */
     void registerVariable(String variable, @Nullable String replacement);
 
+    /**
+     * Retrieves Grim's version.
+     * @return version
+     */
     String getGrimVersion();
 
     /**
@@ -80,4 +93,5 @@ public interface GrimAbstractAPI extends ConfigReloadable, BasicReloadable {
      * @return boolean
      */
     boolean hasStarted();
+
 }

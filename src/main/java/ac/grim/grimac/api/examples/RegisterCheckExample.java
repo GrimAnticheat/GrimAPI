@@ -1,7 +1,7 @@
 package ac.grim.grimac.api.examples;
 
 import ac.grim.grimac.api.GrimUser;
-import ac.grim.grimac.api.checks.ExternalCheck;
+import ac.grim.grimac.api.checks.CustomCheck;
 import ac.grim.grimac.api.checks.ListenerGroup;
 import ac.grim.grimac.api.checks.listeners.PacketReceiveListener;
 import ac.grim.grimac.api.events.GrimUserJoinEvent;
@@ -25,13 +25,13 @@ public class RegisterCheckExample implements Listener {
     public void onUserJoin(GrimUserJoinEvent event) {
         GrimUser user = event.getUser();
         // register checks
-        user.getCheckManager().registerProcessor(ExampleCheckA.class, new ExampleCheckA(user));
+        user.getCheckManager().addCustomCheck(ExampleCheckA.class, new ExampleCheckA(user));
         // we need to reload the user to apply all the changes
         user.reload();
     }
 
     // example check implementation
-    private static class ExampleCheckA extends ExternalCheck implements PacketReceiveListener {
+    private static class ExampleCheckA extends CustomCheck implements PacketReceiveListener {
 
         public ExampleCheckA(GrimUser user) {
             super(user, "ExampleCheckA", ListenerGroup.PACKET);
@@ -47,8 +47,6 @@ public class RegisterCheckExample implements Listener {
                 location = wrapper.getLocation();
                 if (lastLocation == null) return;
                 final double deltaY = location.getY() - lastLocation.getY();
-                if (deltaY == 0) return;
-                debug(() -> "dy=" + deltaY + " vl=" + getViolations() + " supported=" + isSupported() + " disabled=" + isDisabled());
                 if (deltaY > 0.4) flag("dy=" + deltaY);
             }
         }
