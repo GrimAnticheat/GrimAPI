@@ -7,6 +7,7 @@ import ac.grim.grimac.api.config.ConfigReloadable;
 import org.bukkit.entity.Player;
 import org.jetbrains.annotations.Nullable;
 
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Function;
 
@@ -14,11 +15,18 @@ public interface GrimAbstractAPI extends ConfigReloadable, BasicReloadable {
 
     /**
      * Retrieves a GrimUser reference from the player.
-     * @param player
+     * @param player Bukkit player reference
      * @return GrimUser
      */
     @Nullable
     GrimUser getGrimUser(Player player);
+
+    /**
+     * Retrieves a GrimUser reference from the player's UUID.
+     * @param uuid UUID of the player
+     * @return GrimUser
+     */
+    @Nullable GrimUser getGrimUser(UUID uuid);
 
     /**
      * This is specifically for setting the server's name in grim's discord messages.
@@ -88,5 +96,11 @@ public interface GrimAbstractAPI extends ConfigReloadable, BasicReloadable {
      * @return boolean
      */
     boolean hasStarted();
+
+    /**
+     * Retrieves the current tick of the server.
+     * @return int
+     */
+    int getCurrentTick();
 
 }

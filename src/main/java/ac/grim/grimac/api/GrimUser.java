@@ -2,6 +2,7 @@ package ac.grim.grimac.api;
 
 import ac.grim.grimac.api.common.BasicReloadable;
 import ac.grim.grimac.api.config.ConfigReloadable;
+import org.jetbrains.annotations.Nullable;
 
 import java.util.Collection;
 import java.util.UUID;
@@ -13,6 +14,10 @@ public interface GrimUser extends ConfigReloadable, BasicReloadable {
     UUID getUniqueId();
 
     String getBrand();
+
+    @Nullable String getWorldName();
+
+    @Nullable UUID getWorldUID();
 
     int getTransactionPing();
 
@@ -37,4 +42,31 @@ public interface GrimUser extends ConfigReloadable, BasicReloadable {
      * @param runnable
      */
     void runSafely(Runnable runnable);
+
+    /**
+     * Retrieves the last transaction received by the player.
+     */
+    int getLastTransactionReceived();
+
+    /**
+     * Retrieves the last transaction sent by the player.
+     */
+    int getLastTransactionSent();
+
+    /**
+     * Schedules a task to run based on the player's transaction.
+     * This needs to be executed on the player's netty thread. You can use {@link GrimUser#runSafely(Runnable)} to ensure this.
+     * @param transaction If the player's transaction is greater than or equal to this, the task will run
+     * @param runnable The task that should run
+     */
+    void addRealTimeTask(int transaction, Runnable runnable);
+
+    default void addRealTimeTaskNow(Runnable runnable) {
+        addRealTimeTask(getLastTransactionSent(), runnable);
+    }
+
+    default void addRealTimeTaskNext(Runnable runnable) {
+        addRealTimeTask(getLastTransactionSent() + 1, runnable);
+    }
+
 }

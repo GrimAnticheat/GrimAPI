@@ -2,23 +2,18 @@ package ac.grim.grimac.api.events;
 
 import ac.grim.grimac.api.AbstractCheck;
 import ac.grim.grimac.api.GrimUser;
+import lombok.Getter;
 import org.bukkit.event.HandlerList;
 import org.jetbrains.annotations.NotNull;
 
 public class CommandExecuteEvent extends FlagEvent {
 
     private static final HandlerList handlers = new HandlerList();
-    private final AbstractCheck check;
-    private final String command;
+    @Getter private final String command;
 
-    public CommandExecuteEvent(GrimUser player, AbstractCheck check, String command) {
-        super(player, check); // Async!
-        this.check = check;
+    public CommandExecuteEvent(GrimUser player, AbstractCheck check, String verbose, String command) {
+        super(player, check, verbose); // Async!
         this.command = command;
-    }
-
-    public AbstractCheck getCheck() {
-        return check;
     }
 
     public static HandlerList getHandlerList() {
@@ -29,10 +24,6 @@ public class CommandExecuteEvent extends FlagEvent {
     @Override
     public HandlerList getHandlers() {
         return handlers;
-    }
-
-    public String getCommand() {
-        return command;
     }
 
 }
