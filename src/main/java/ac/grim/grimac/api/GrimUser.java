@@ -2,12 +2,14 @@ package ac.grim.grimac.api;
 
 import ac.grim.grimac.api.common.BasicReloadable;
 import ac.grim.grimac.api.config.ConfigReloadable;
+import ac.grim.grimac.api.feature.FeatureManager;
+import ac.grim.grimac.api.handler.UserHandlerHolder;
 import org.jetbrains.annotations.Nullable;
 
 import java.util.Collection;
 import java.util.UUID;
 
-public interface GrimUser extends ConfigReloadable, BasicReloadable {
+public interface GrimUser extends ConfigReloadable, BasicReloadable, UserHandlerHolder {
 
     String getName();
 
@@ -68,5 +70,10 @@ public interface GrimUser extends ConfigReloadable, BasicReloadable {
     default void addRealTimeTaskNext(Runnable runnable) {
         addRealTimeTask(getLastTransactionSent() + 1, runnable);
     }
+
+    /**
+     * An easier way to manage per player features that's persistent between reloads.
+     */
+    FeatureManager getFeatureManager();
 
 }
