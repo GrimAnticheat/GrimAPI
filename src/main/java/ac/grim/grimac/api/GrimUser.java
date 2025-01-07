@@ -41,6 +41,7 @@ public interface GrimUser extends ConfigReloadable, BasicReloadable, UserHandler
      * Runs the runnable on the player's netty thread. This may need to be used
      * to access parts of the API safely. This might be removed in future for
      * simplicity.
+     *
      * @param runnable
      */
     void runSafely(Runnable runnable);
@@ -58,8 +59,9 @@ public interface GrimUser extends ConfigReloadable, BasicReloadable, UserHandler
     /**
      * Schedules a task to run based on the player's transaction.
      * This needs to be executed on the player's netty thread. You can use {@link GrimUser#runSafely(Runnable)} to ensure this.
+     *
      * @param transaction If the player's transaction is greater than or equal to this, the task will run
-     * @param runnable The task that should run
+     * @param runnable    The task that should run
      */
     void addRealTimeTask(int transaction, Runnable runnable);
 
@@ -75,5 +77,11 @@ public interface GrimUser extends ConfigReloadable, BasicReloadable, UserHandler
      * An easier way to manage per player features that's persistent between reloads.
      */
     FeatureManager getFeatureManager();
+
+    /**
+     * Sends a message to the player.
+     * @param message Message to send
+     */
+    void sendMessage(String message);
 
 }
