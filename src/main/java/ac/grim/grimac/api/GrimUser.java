@@ -9,11 +9,9 @@ import org.jetbrains.annotations.Nullable;
 import java.util.Collection;
 import java.util.UUID;
 
-public interface GrimUser extends ConfigReloadable, BasicReloadable, UserHandlerHolder {
+public interface GrimUser extends ConfigReloadable, BasicReloadable, UserHandlerHolder, GrimIdentity {
 
     String getName();
-
-    UUID getUniqueId();
 
     String getBrand();
 
