@@ -5,6 +5,8 @@ import ac.grim.grimac.api.GrimUser;
 import ac.grim.grimac.api.event.Cancellable;
 import ac.grim.grimac.api.event.GrimEvent;
 
+import java.util.HashMap;
+
 public class FlagEvent extends GrimEvent implements GrimUserEvent, Cancellable {
     private final GrimUser user;
     private final AbstractCheck check;
