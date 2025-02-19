@@ -1,6 +1,6 @@
 package ac.grim.grimac.api.alerts;
 
-import org.bukkit.entity.Player;
+import ac.grim.grimac.api.GrimUser;
 
 public interface AlertManager {
 
@@ -9,25 +9,25 @@ public interface AlertManager {
      * @param player
      * @return boolean
      */
-    boolean hasAlertsEnabled(Player player);
+    boolean hasAlertsEnabled(GrimUser player);
 
     /**
      * Toggles alerts for the player.
      * @param player
      */
-    void toggleAlerts(Player player);
+    void toggleAlerts(GrimUser player);
 
     /**
      * Checks if the player has verbose enabled.
      * @param player
      * @return boolean
      */
-    boolean hasVerboseEnabled(Player player);
+    boolean hasVerboseEnabled(GrimUser player);
 
     /**
      * Toggles verbose for the player.
      * @param player
      */
-    void toggleVerbose(Player player);
+    void toggleVerbose(GrimUser player);
 
 }
