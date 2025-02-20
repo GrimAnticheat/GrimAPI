@@ -82,4 +82,5 @@ public interface GrimUser extends ConfigReloadable, BasicReloadable, UserHandler
      */
     void sendMessage(String message);
 
+    boolean hasPermission(String permission);
 }
