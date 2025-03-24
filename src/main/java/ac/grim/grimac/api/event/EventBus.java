@@ -1,6 +1,6 @@
 package ac.grim.grimac.api.event;
 
-import ac.grim.grimac.api.GrimPlugin;
+import ac.grim.grimac.api.plugin.GrimPlugin;
 
 /**
  * Event bus for registering and dispatching Grim events.

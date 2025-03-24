@@ -1,9 +1,9 @@
 package ac.grim.grimac.api.event;
 
-import lombok.Setter;
+import lombok.Getter;
 
 public abstract class GrimEvent {
-    private boolean cancelled = false;
+    private @Getter boolean cancelled = false;
     private final boolean async;
 
     protected GrimEvent() {
@@ -14,19 +14,11 @@ public abstract class GrimEvent {
         this.async = async;
     }
 
-    public boolean isCancelled() {
-        return cancelled;
-    }
-
     public void setCancelled(boolean cancelled) {
         if (!isCancellable()) {
             throw new IllegalStateException("Event " + getEventName() + " is not cancellable");
         }
         this.cancelled = cancelled;
-    }
-
-    public boolean isAsync() {
-        return async;
     }
 
     public boolean isCancellable() {

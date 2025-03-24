@@ -1,6 +1,6 @@
 package ac.grim.grimac.api.event;
 
-import ac.grim.grimac.api.GrimPlugin;
+import ac.grim.grimac.api.plugin.GrimPlugin;
 
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
@@ -109,12 +109,6 @@ public class OptimizedEventBus implements EventBus {
 
     @Override
     public void post(GrimEvent event) {
-//        if (event.isAsync() && isMainThread()) {
-//            throw new IllegalStateException(event.getEventName() + " is async but called on main thread");
-//        } else if (!event.isAsync() && !isMainThread()) {
-//            throw new IllegalStateException(event.getEventName() + " is sync but called on async thread");
-//        }
-
         // Post to the event and its parent classes
         Class<?> currentEventType = event.getClass();
         while (GrimEvent.class.isAssignableFrom(currentEventType)) {
