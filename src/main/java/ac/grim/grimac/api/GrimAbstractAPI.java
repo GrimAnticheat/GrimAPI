@@ -4,6 +4,8 @@ import ac.grim.grimac.api.alerts.AlertManager;
 import ac.grim.grimac.api.common.BasicReloadable;
 import ac.grim.grimac.api.config.ConfigManager;
 import ac.grim.grimac.api.config.ConfigReloadable;
+import ac.grim.grimac.api.event.EventBus;
+import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 import java.util.UUID;
@@ -11,6 +13,11 @@ import java.util.concurrent.CompletableFuture;
 import java.util.function.Function;
 
 public interface GrimAbstractAPI extends ConfigReloadable, BasicReloadable {
+    /**
+     * Returns EventBus instanced used to register events and listen to Grim events
+     * @return {@link EventBus}
+     */
+    @NotNull EventBus getEventBus();
 
     /**
      * Retrieves a GrimUser reference from the player's UUID.
