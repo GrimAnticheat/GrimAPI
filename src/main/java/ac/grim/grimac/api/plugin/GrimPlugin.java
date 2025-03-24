@@ -1,4 +1,4 @@
-package ac.grim.grimac.api;
+package ac.grim.grimac.api.plugin;
 
 import java.io.File;
 import java.util.logging.Logger;
