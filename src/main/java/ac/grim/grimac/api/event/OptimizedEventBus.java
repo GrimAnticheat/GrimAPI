@@ -1,32 +1,60 @@
 package ac.grim.grimac.api.event;
 
+import ac.grim.grimac.api.event.events.*;
 import ac.grim.grimac.api.plugin.GrimPlugin;
+import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
 
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
-import java.util.List;
+import java.util.Arrays;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Predicate;
 
 public class OptimizedEventBus implements EventBus {
     private final MethodHandles.Lookup lookup = MethodHandles.lookup();
-    // ordinarily this would just be a hashmap since we don't modify it on different threads, but Folia forces us to make it concurrent
-    private final Map<GrimPlugin, Map<Class<? extends GrimEvent>, List<OptimizedListener>>> listenerMap = new ConcurrentHashMap<>();
+    // Store all listeners together by event type
+    private final Map<Class<? extends GrimEvent>, AtomicReference<OptimizedListener[]>> listenerMap = new ConcurrentHashMap<>();
+
+    public OptimizedEventBus() {
+        prefillKnownEventTypes(listenerMap);
+    }
+
+    /**
+     * Minor optimization to prefill the listenerMap for known existing events so that they don't have to be computed later
+     * When registering an event of the type for the first time
+     * @param map
+     */
+    private void prefillKnownEventTypes(Map<Class<? extends GrimEvent>, AtomicReference<OptimizedListener[]>> map) {
+        // Add all your known event types here
+        map.put(GrimReloadEvent.class, new AtomicReference<>(new OptimizedListener[0]));
+        map.put(GrimQuitEvent.class, new AtomicReference<>(new OptimizedListener[0]));
+        map.put(GrimJoinEvent.class, new AtomicReference<>(new OptimizedListener[0]));
+
+        map.put(FlagEvent.class, new AtomicReference<>(new OptimizedListener[0]));
+        map.put(CommandExecuteEvent.class, new AtomicReference<>(new OptimizedListener[0]));
+        map.put(CompletePredictionEvent.class, new AtomicReference<>(new OptimizedListener[0]));
+
+        // Base event type
+        map.put(GrimEvent.class, new AtomicReference<>(new OptimizedListener[0]));
+    }
+
 
     @Override
-    public void registerAnnotatedListeners(GrimPlugin plugin, Object listener) {
+    public void registerAnnotatedListeners(GrimPlugin plugin, @NotNull Object listener) {
         registerMethods(plugin, listener, listener.getClass());
     }
 
     @Override
-    public void registerStaticAnnotatedListeners(GrimPlugin plugin, Class<?> clazz) {
+    public void registerStaticAnnotatedListeners(GrimPlugin plugin, @NotNull Class<?> clazz) {
         registerMethods(plugin, null, clazz);
     }
 
-    private void registerMethods(GrimPlugin plugin, Object instance, Class<?> clazz) {
+    private void registerMethods(GrimPlugin plugin, @Nullable Object instance, @NotNull Class<?> clazz) {
         for (Method method : clazz.getDeclaredMethods()) {
             GrimEventHandler annotation = method.getAnnotation(GrimEventHandler.class);
             if (annotation != null && method.getParameterCount() == 1) {
@@ -37,11 +65,9 @@ public class OptimizedEventBus implements EventBus {
                             continue;
                         }
 
-                        // Ensure method is accessible
                         method.setAccessible(true);
                         MethodHandle handle = lookup.unreflect(method);
 
-                        // Wrap MethodHandle in a lambda with proper type safety
                         GrimEventListener<GrimEvent> listener = event -> {
                             try {
                                 if (instance != null) {
@@ -54,13 +80,14 @@ public class OptimizedEventBus implements EventBus {
                             }
                         };
 
-                        // Register for the event and its parent classes
                         Class<?> currentEventType = eventType;
                         while (GrimEvent.class.isAssignableFrom(currentEventType)) {
-                            OptimizedListener optimizedListener = new OptimizedListener(listener, annotation.priority(), annotation.ignoreCancelled(), method.getDeclaringClass(), instance);
-                            listenerMap.computeIfAbsent(plugin, k -> new ConcurrentHashMap<>())
-                                    .computeIfAbsent((Class<? extends GrimEvent>) currentEventType, k -> new CopyOnWriteArrayList<>())
-                                    .add(optimizedListener);
+                            OptimizedListener optimizedListener = new OptimizedListener(
+                                    plugin, listener, annotation.priority(),
+                                    annotation.ignoreCancelled(), method.getDeclaringClass(), instance
+                            );
+
+                            addListener((Class<? extends GrimEvent>) currentEventType, optimizedListener);
                             currentEventType = currentEventType.getSuperclass();
                         }
                     } catch (IllegalAccessException e) {
@@ -70,63 +97,147 @@ public class OptimizedEventBus implements EventBus {
                 }
             }
         }
-        // Sort listeners by priority (descending)
-        listenerMap.getOrDefault(plugin, new ConcurrentHashMap<>())
-                .values().forEach(list -> list.sort((a, b) -> Integer.compare(b.priority, a.priority)));
+    }
+
+    private void addListener(Class<? extends GrimEvent> eventType, OptimizedListener newListener) {
+        AtomicReference<OptimizedListener[]> ref = listenerMap.computeIfAbsent(
+                eventType, k -> new AtomicReference<>(new OptimizedListener[0])
+        );
+
+        while (true) {
+            OptimizedListener[] oldArray = ref.get();
+
+            // Find insertion point using Arrays.binarySearch
+            // We use a comparator for descending order (higher priorities first)
+            int insertionPoint = Arrays.binarySearch(oldArray, newListener,
+                    (a, b) -> Integer.compare(b.priority, a.priority));
+
+            // If negative, convert to insertion point
+            if (insertionPoint < 0) {
+                insertionPoint = -(insertionPoint + 1);
+            } else {
+                // If we found an exact match, insert after the last equal priority element
+                // to maintain stable ordering
+                while (insertionPoint < oldArray.length - 1 &&
+                        oldArray[insertionPoint + 1].priority == newListener.priority) {
+                    insertionPoint++;
+                }
+                insertionPoint++; // Insert after the last equal priority element
+            }
+
+            OptimizedListener[] newArray = new OptimizedListener[oldArray.length + 1];
+
+            // Copy elements before insertion point
+            System.arraycopy(oldArray, 0, newArray, 0, insertionPoint);
+
+            // Insert the new listener
+            newArray[insertionPoint] = newListener;
+
+            // Copy remaining elements, shifted by one
+            System.arraycopy(oldArray, insertionPoint, newArray, insertionPoint + 1,
+                    oldArray.length - insertionPoint);
+
+            if (ref.compareAndSet(oldArray, newArray)) {
+                break;
+            }
+            // If CAS failed, loop and try again
+        }
     }
 
     @Override
-    public void unregisterListeners(GrimPlugin plugin, Object listener) {
-        Map<Class<? extends GrimEvent>, List<OptimizedListener>> pluginListeners = listenerMap.get(plugin);
-        if (pluginListeners != null) {
-            pluginListeners.values().forEach(list -> list.removeIf(l -> l.instance != null && l.instance.equals(listener)));
-            cleanupEmptyEntries(plugin);
+    public void unregisterListeners(GrimPlugin plugin, Object instance) {
+        for (Map.Entry<Class<? extends GrimEvent>, AtomicReference<OptimizedListener[]>> entry : listenerMap.entrySet()) {
+            removeListeners(entry.getKey(), entry.getValue(),
+                    listener -> listener.plugin.equals(plugin) &&
+                            listener.instance != null &&
+                            listener.instance.equals(instance));
         }
     }
 
     @Override
     public void unregisterStaticListeners(GrimPlugin plugin, Class<?> clazz) {
-        Map<Class<? extends GrimEvent>, List<OptimizedListener>> pluginListeners = listenerMap.get(plugin);
-        if (pluginListeners != null) {
-            pluginListeners.values().forEach(list -> list.removeIf(l -> l.instance == null && l.declaringClass.equals(clazz)));
-            cleanupEmptyEntries(plugin);
+        for (Map.Entry<Class<? extends GrimEvent>, AtomicReference<OptimizedListener[]>> entry : listenerMap.entrySet()) {
+            removeListeners(entry.getKey(), entry.getValue(),
+                    listener -> listener.plugin.equals(plugin) &&
+                            listener.instance == null &&
+                            listener.declaringClass.equals(clazz));
         }
     }
 
     @Override
     public void unregisterAllListeners(GrimPlugin plugin) {
-        listenerMap.remove(plugin);
-    }
-
-    @Override
-    public void unregisterListener(GrimPlugin plugin, GrimEventListener<?> listener) {
-        Map<Class<? extends GrimEvent>, List<OptimizedListener>> pluginListeners = listenerMap.get(plugin);
-        if (pluginListeners != null) {
-            pluginListeners.values().forEach(list -> list.removeIf(l -> l.listener.equals(listener)));
-            cleanupEmptyEntries(plugin);
+        for (Map.Entry<Class<? extends GrimEvent>, AtomicReference<OptimizedListener[]>> entry : listenerMap.entrySet()) {
+            removeListeners(entry.getKey(), entry.getValue(),
+                    listener -> listener.plugin.equals(plugin));
         }
     }
 
     @Override
-    public void post(GrimEvent event) {
-        // Post to the event and its parent classes
+    public void unregisterListener(GrimPlugin plugin, GrimEventListener<?> eventListener) {
+        for (Map.Entry<Class<? extends GrimEvent>, AtomicReference<OptimizedListener[]>> entry : listenerMap.entrySet()) {
+            removeListeners(entry.getKey(), entry.getValue(),
+                    listener -> listener.plugin.equals(plugin) &&
+                            listener.listener.equals(eventListener));
+        }
+    }
+
+    private void removeListeners(Class<? extends GrimEvent> eventType,
+                                 AtomicReference<OptimizedListener[]> ref,
+                                 Predicate<OptimizedListener> filter) {
+        while (true) {
+            OptimizedListener[] oldArray = ref.get();
+
+            // Count how many listeners will remain after filtering
+            int remaining = 0;
+            for (OptimizedListener listener : oldArray) {
+                if (!filter.test(listener)) {
+                    remaining++;
+                }
+            }
+
+            // If no change, return early
+            if (remaining == oldArray.length) {
+                return;
+            }
+
+            // Create new array with filtered listeners
+            OptimizedListener[] newArray = new OptimizedListener[remaining];
+            int index = 0;
+            for (OptimizedListener listener : oldArray) {
+                if (!filter.test(listener)) {
+                    newArray[index++] = listener;
+                }
+            }
+
+            // Try to update the array
+            if (ref.compareAndSet(oldArray, newArray)) {
+                // If array is empty, remove the event type entry
+                if (newArray.length == 0) {
+                    listenerMap.remove(eventType);
+                }
+                break;
+            }
+            // If CAS failed, retry
+        }
+    }
+
+    @Override
+    public void post(@NotNull GrimEvent event) {
         Class<?> currentEventType = event.getClass();
         while (GrimEvent.class.isAssignableFrom(currentEventType)) {
-            for (Map<Class<? extends GrimEvent>, List<OptimizedListener>> pluginListeners : listenerMap.values()) {
-                List<OptimizedListener> listeners = pluginListeners.get(currentEventType);
-                if (listeners != null) {
-                    for (OptimizedListener listener : listeners) {
-                        try {
-                            if (event.isCancelled() && !listener.ignoreCancelled) {
-                                continue;
-                            }
-
-                            GrimEventListener<GrimEvent> eventListener = listener.listener;
-                            eventListener.handle(event);
-                        } catch (Throwable throwable) {
-                            System.err.println("Error handling event " + event.getEventName() + ": " + throwable.getMessage());
-                            throwable.printStackTrace();
+            AtomicReference<OptimizedListener[]> ref = listenerMap.get(currentEventType);
+            if (ref != null) {
+                // Get current array - no locking needed for reads
+                OptimizedListener[] listeners = ref.get();
+                for (OptimizedListener listener : listeners) {
+                    try {
+                        if (event.isCancelled() && !listener.ignoreCancelled) {
+                            continue;
                         }
+                        listener.listener.handle(event);
+                    } catch (Throwable throwable) {
+                        System.err.println("Error handling event " + event.getEventName() + ": " + throwable.getMessage());
+                        throwable.printStackTrace();
                     }
                 }
             }
@@ -135,35 +246,31 @@ public class OptimizedEventBus implements EventBus {
     }
 
     @Override
-    public <T extends GrimEvent> void subscribe(GrimPlugin plugin, Class<T> eventType, GrimEventListener<T> listener, int priority, boolean ignoreCancelled, Class<?> declaringClass) {
-        OptimizedListener optimizedListener = new OptimizedListener(listener, priority, ignoreCancelled, declaringClass, null);
-        listenerMap.computeIfAbsent(plugin, k -> new ConcurrentHashMap<>())
-                .computeIfAbsent(eventType, k -> new CopyOnWriteArrayList<>())
-                .add(optimizedListener);
-        // Sort listeners by priority (descending)
-        listenerMap.get(plugin).get(eventType).sort((a, b) -> Integer.compare(b.priority, a.priority));
-    }
+    public <T extends GrimEvent> void subscribe(GrimPlugin plugin, @NotNull Class<T> eventType,
+                                                @NotNull GrimEventListener<T> listener, int priority,
+                                                boolean ignoreCancelled, @NotNull Class<?> declaringClass) {
+        @SuppressWarnings("unchecked")
+        OptimizedListener optimizedListener = new OptimizedListener(
+                plugin, (GrimEventListener<GrimEvent>)listener, priority,
+                ignoreCancelled, declaringClass, null
+        );
 
-    private void cleanupEmptyEntries(GrimPlugin plugin) {
-        Map<Class<? extends GrimEvent>, List<OptimizedListener>> pluginListeners = listenerMap.get(plugin);
-        if (pluginListeners != null) {
-            pluginListeners.entrySet().removeIf(entry -> entry.getValue().isEmpty());
-            if (pluginListeners.isEmpty()) {
-                listenerMap.remove(plugin);
-            }
-        }
+        addListener(eventType, optimizedListener);
     }
 
     private static class OptimizedListener {
+        final GrimPlugin plugin;
         final GrimEventListener<GrimEvent> listener;
         final int priority;
         final boolean ignoreCancelled;
         final Class<?> declaringClass;
         final Object instance;
 
-        @SuppressWarnings("unchecked")
-        OptimizedListener(GrimEventListener<?> listener, int priority, boolean ignoreCancelled, Class<?> declaringClass, Object instance) {
-            this.listener = (GrimEventListener<GrimEvent>) listener;
+        OptimizedListener(GrimPlugin plugin, GrimEventListener<GrimEvent> listener,
+                          int priority, boolean ignoreCancelled,
+                          Class<?> declaringClass, Object instance) {
+            this.plugin = plugin;
+            this.listener = listener;
             this.priority = priority;
             this.ignoreCancelled = ignoreCancelled;
             this.declaringClass = declaringClass;
