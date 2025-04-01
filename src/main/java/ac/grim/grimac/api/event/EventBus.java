@@ -1,6 +1,7 @@
 package ac.grim.grimac.api.event;
 
 import ac.grim.grimac.api.plugin.GrimPlugin;
+import org.jetbrains.annotations.NotNull;
 
 /**
  * Event bus for registering and dispatching Grim events.
@@ -32,7 +33,7 @@ public interface EventBus {
      * @param plugin   The plugin registering the listener
      * @param listener The listener instance containing annotated methods
      */
-    void registerAnnotatedListeners(GrimPlugin plugin, Object listener);
+    void registerAnnotatedListeners(GrimPlugin plugin, @NotNull Object listener);
 
     /**
      * Registers static methods annotated with {@link GrimEventHandler} as event listeners.
@@ -51,7 +52,7 @@ public interface EventBus {
      * @param plugin The plugin registering the listener
      * @param clazz  The class containing static annotated methods
      */
-    void registerStaticAnnotatedListeners(GrimPlugin plugin, Class<?> clazz);
+    void registerStaticAnnotatedListeners(GrimPlugin plugin, @NotNull Class<?> clazz);
 
     /**
      * Unregisters all instance listeners associated with the plugin and listener instance.
@@ -89,7 +90,7 @@ public interface EventBus {
      *
      * @param event The event to post
      */
-    void post(GrimEvent event);
+    void post(@NotNull GrimEvent event);
 
     /**
      * Subscribes an explicit listener to the specified event type.
@@ -111,7 +112,7 @@ public interface EventBus {
      * @param declaringClass  The class declaring the listener (for unregistration)
      * @param <T>             The event type
      */
-    <T extends GrimEvent> void subscribe(GrimPlugin plugin, Class<T> eventType, GrimEventListener<T> listener, int priority, boolean ignoreCancelled, Class<?> declaringClass);
+    <T extends GrimEvent> void subscribe(GrimPlugin plugin, @NotNull Class<T> eventType, @NotNull GrimEventListener<T> listener, int priority, boolean ignoreCancelled, @NotNull Class<?> declaringClass);
 
     /**
      * Subscribes an explicit listener with default declaring class.
@@ -123,7 +124,7 @@ public interface EventBus {
      * @param ignoreCancelled Whether to ignore cancelled events
      * @param <T>             The event type
      */
-    default <T extends GrimEvent> void subscribe(GrimPlugin plugin, Class<T> eventType, GrimEventListener<T> listener, int priority, boolean ignoreCancelled) {
+    default <T extends GrimEvent> void subscribe(GrimPlugin plugin, @NotNull Class<T> eventType, @NotNull GrimEventListener<T> listener, int priority, boolean ignoreCancelled) {
         subscribe(plugin, eventType, listener, priority, ignoreCancelled, plugin.getClass());
     }
 
@@ -135,7 +136,7 @@ public interface EventBus {
      * @param listener  The listener to handle the event
      * @param <T>       The event type
      */
-    default <T extends GrimEvent> void subscribe(GrimPlugin plugin, Class<T> eventType, GrimEventListener<T> listener) {
+    default <T extends GrimEvent> void subscribe(GrimPlugin plugin, @NotNull Class<T> eventType, @NotNull GrimEventListener<T> listener) {
         subscribe(plugin, eventType, listener, 0, false);
     }
 }
