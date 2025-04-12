@@ -18,6 +18,13 @@ public interface AlertManager {
     void toggleAlerts(Player player);
 
     /**
+     * Toggles alerts for the player.
+     * @param player
+     * @param enabled
+     */
+    void toggleAlerts(Player player, boolean enabled);
+
+    /**
      * Checks if the player has verbose enabled.
      * @param player
      * @return boolean
@@ -30,4 +37,10 @@ public interface AlertManager {
      */
     void toggleVerbose(Player player);
 
+    /**
+     * Toggles verbose for the player.
+     * @param player
+     * @param enabled
+     */
+    void toggleVerbose(Player player, boolean enabled);
 }
