@@ -1,35 +1,36 @@
 # GrimAPI
 A work in progress API for [Grim Anticheat](https://github.com/GrimAnticheat/Grim)
 
-You can find the latest version here: https://jitpack.io/#GrimAnticheat/GrimAPI
+You can find the latest version here: https://repo.grim.ac/#/
 
 Gradle:
 ```gradle
 repositories {
-    maven("https://jitpack.io/") { // Grim API
-        content {
-            includeGroup("com.github.grimanticheat")
-        }
+    maven {
+        name = "grimacSnapshots"
+        url = uri("https://repo.grim.ac/snapshots")
     }
 }
 
 dependencies {
-    compileOnly 'com.github.grimanticheat:grimapi:VERSION'
+    // replace <VERSION> with api version
+    compileOnly 'ac.grim.grimac:GrimAPI:<VERSION>'
 }
 ```
 
 Maven:
 ```xml
 <repository>
-   <id>jitpack.io</id>
-   <url>https://jitpack.io</url>
+    <id>grimac-snapshots</id>
+    <name>GrimAC Repository</name>
+    <url>https://repo.grim.ac/snapshots</url>
 </repository>
-  
+
+<!-- replace <VERSION> with api version -->
 <dependency>
-   <groupId>com.github.grimanticheat</groupId>
-   <artifactId>GrimAPI</artifactId>
-   <version>VERSION</version>
-   <scope>provided</scope>
+    <groupId>ac.grim.grimac</groupId>
+    <artifactId>GrimAPI</artifactId>
+    <version>VERSION</version>
 </dependency>
 ```
 
