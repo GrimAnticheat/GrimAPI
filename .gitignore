@@ -9,6 +9,7 @@
 *.ear
 *.nar
 hs_err_pid*
+.env
 
 ##############################
 ## Gradle
@@ -16,6 +17,7 @@ hs_err_pid*
 bin/
 build/
 .gradle
+gradle.properties
 .gradletasknamecache
 gradle-app.setting
 !gradle-wrapper.jar
