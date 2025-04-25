@@ -16,14 +16,53 @@ public interface AlertManager {
 
     /**
      * Toggles alerts for the player.
-     * If alerts are currently disabled, they will be enabled.
-     * If alerts are currently enabled, they will be disabled.
+     * Sends a message to the player indicating the new state.
      *
      * @param player The GrimUser to toggle alerts for
      * @return true if alerts are now enabled, false if alerts are now disabled
      * @throws NullPointerException if player is null
      */
-    boolean toggleAlerts(@NonNull GrimUser player);
+    default boolean toggleAlerts(@NonNull GrimUser player) {
+        return toggleAlerts(player, false);
+    }
+
+    /**
+     * Toggles alerts for the player silently or with a message.
+     *
+     * @param player The GrimUser to toggle alerts for
+     * @param silent true to suppress any messages to the player, false to notify
+     * @return true if alerts are now enabled, false if alerts are now disabled
+     * @throws NullPointerException if player is null
+     */
+    default boolean toggleAlerts(@NonNull GrimUser player, boolean silent) {
+        boolean newState = !hasAlertsEnabled(player);
+        setAlertsEnabled(player, newState, silent);
+        return newState;
+    }
+
+    /**
+     * Sets the alert state for the player.
+     * Sends a message to the player indicating the new state.
+     *
+     * @param player The GrimUser to set alerts for
+     * @param enabled true to enable alerts, false to disable
+     * @throws NullPointerException if player is null
+     */
+    default void setAlertsEnabled(@NonNull GrimUser player, boolean enabled) {
+        setAlertsEnabled(player, enabled, false);
+    }
+
+    /**
+     * Sets the alert state for the player silently or with a message.
+     *
+     * @param player The GrimUser to set alerts for
+     * @param enabled true to enable alerts, false to disable
+     * @param silent true to suppress any messages to the player, false to notify
+     * @throws NullPointerException if player is null
+     */
+    void setAlertsEnabled(@NonNull GrimUser player, boolean enabled, boolean silent);
+
+    // ------------------- VERBOSE -------------------
 
     /**
      * Checks if the player has verbose enabled.
@@ -36,14 +75,53 @@ public interface AlertManager {
 
     /**
      * Toggles verbose for the player.
-     * If verbose is currently disabled, it will be enabled.
-     * If verbose is currently enabled, it will be disabled.
+     * Sends a message to the player indicating the new state.
      *
      * @param player The GrimUser to toggle verbose for
      * @return true if verbose is now enabled, false if verbose is now disabled
      * @throws NullPointerException if player is null
      */
-    boolean toggleVerbose(@NonNull GrimUser player);
+    default boolean toggleVerbose(@NonNull GrimUser player) {
+        return toggleVerbose(player, false);
+    }
+
+    /**
+     * Toggles verbose for the player silently or with a message.
+     *
+     * @param player The GrimUser to toggle verbose for
+     * @param silent true to suppress any messages to the player, false to notify
+     * @return true if verbose is now enabled, false if verbose is now disabled
+     * @throws NullPointerException if player is null
+     */
+    default boolean toggleVerbose(@NonNull GrimUser player, boolean silent) {
+        boolean newState = !hasVerboseEnabled(player);
+        setVerboseEnabled(player, newState, silent);
+        return newState;
+    }
+
+    /**
+     * Sets the verbose state for the player.
+     * Sends a message to the player indicating the new state.
+     *
+     * @param player The GrimUser to set verbose for
+     * @param enabled true to enable verbose, false to disable
+     * @throws NullPointerException if player is null
+     */
+    default void setVerboseEnabled(@NonNull GrimUser player, boolean enabled) {
+        setVerboseEnabled(player, enabled, false);
+    }
+
+    /**
+     * Sets the verbose state for the player silently or with a message.
+     *
+     * @param player The GrimUser to set verbose for
+     * @param enabled true to enable verbose, false to disable
+     * @param silent true to suppress any messages to the player, false to notify
+     * @throws NullPointerException if player is null
+     */
+    void setVerboseEnabled(@NonNull GrimUser player, boolean enabled, boolean silent);
+
+    // ------------------- BRANDS -------------------
 
     /**
      * Checks if the player has brand notifications enabled.
@@ -57,12 +135,49 @@ public interface AlertManager {
 
     /**
      * Toggles brand notifications for the player.
-     * If brand notifications are currently disabled, they will be enabled.
-     * If brand notifications are currently enabled, they will be disabled.
+     * Sends a message to the player indicating the new state.
      *
      * @param player The GrimUser to toggle brand notifications for
      * @return true if brand notifications are now enabled, false if brand notifications are now disabled
      * @throws NullPointerException if player is null
      */
-    boolean toggleBrands(@NonNull GrimUser player);
+    default boolean toggleBrands(@NonNull GrimUser player) {
+        return toggleBrands(player, false);
+    }
+
+    /**
+     * Toggles brand notifications for the player silently or with a message.
+     *
+     * @param player The GrimUser to toggle brand notifications for
+     * @param silent true to suppress any messages to the player, false to notify
+     * @return true if brand notifications are now enabled, false if brand notifications are now disabled
+     * @throws NullPointerException if player is null
+     */
+    default boolean toggleBrands(@NonNull GrimUser player, boolean silent) {
+        boolean newState = !hasBrandsEnabled(player);
+        setBrandsEnabled(player, newState, silent);
+        return newState;
+    }
+
+    /**
+     * Sets the brand notification state for the player.
+     * Sends a message to the player indicating the new state.
+     *
+     * @param player The GrimUser to set brand notifications for
+     * @param enabled true to enable brand notifications, false to disable
+     * @throws NullPointerException if player is null
+     */
+    default void setBrandsEnabled(@NonNull GrimUser player, boolean enabled) {
+        setBrandsEnabled(player, enabled, false);
+    }
+
+    /**
+     * Sets the brand notification state for the player silently or with a message.
+     *
+     * @param player The GrimUser to set brand notifications for
+     * @param enabled true to enable brand notifications, false to disable
+     * @param silent true to suppress any messages to the player, false to notify
+     * @throws NullPointerException if player is null
+     */
+    void setBrandsEnabled(@NonNull GrimUser player, boolean enabled, boolean silent);
 }
