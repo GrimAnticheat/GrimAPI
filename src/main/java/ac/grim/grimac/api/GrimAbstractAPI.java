@@ -4,7 +4,8 @@ import ac.grim.grimac.api.alerts.AlertManager;
 import ac.grim.grimac.api.common.BasicReloadable;
 import ac.grim.grimac.api.config.ConfigManager;
 import ac.grim.grimac.api.config.ConfigReloadable;
-import org.bukkit.entity.Player;
+import ac.grim.grimac.api.event.EventBus;
+import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 import java.util.UUID;
@@ -12,14 +13,11 @@ import java.util.concurrent.CompletableFuture;
 import java.util.function.Function;
 
 public interface GrimAbstractAPI extends ConfigReloadable, BasicReloadable {
-
     /**
-     * Retrieves a GrimUser reference from the player.
-     * @param player Bukkit player reference
-     * @return GrimUser
+     * Returns EventBus instanced used to register events and listen to Grim events
+     * @return {@link EventBus}
      */
-    @Nullable
-    GrimUser getGrimUser(Player player);
+    @NotNull EventBus getEventBus();
 
     /**
      * Retrieves a GrimUser reference from the player's UUID.

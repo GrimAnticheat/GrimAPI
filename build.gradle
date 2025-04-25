@@ -4,9 +4,9 @@ plugins {
     id 'net.kyori.indra.git' version '3.1.3'
 }
 
-group = 'ac.grim.grimac'
-version = '1.0'
-description = 'GrimAPI'
+group 'ac.grim.grimac'
+version '1.0'
+description 'GrimAPI'
 
 java {
     sourceCompatibility = JavaVersion.VERSION_1_8
@@ -51,7 +51,7 @@ publishing {
     }
     publications {
         maven(MavenPublication) {
-            def commitName = indraGit.commit()?.name()?.substring(0, 10)
+            def commitName = "any-" + indraGit.commit()?.name()?.substring(0, 10)
             version = commitName
             from(components.java)
         }
@@ -68,7 +68,6 @@ repositories {
 }
 
 dependencies {
-    compileOnly 'org.spigotmc:spigot-api:1.18-R0.1-SNAPSHOT'
     compileOnly 'org.jetbrains:annotations:24.1.0'
 
     compileOnly 'org.projectlombok:lombok:1.18.36'
