@@ -2,7 +2,7 @@ name: Gradle Publish
 on:
   push:
     branches:
-      - main
+      - master
 
 jobs:
   build:
