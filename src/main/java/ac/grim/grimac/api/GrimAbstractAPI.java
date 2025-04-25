@@ -81,7 +81,7 @@ public interface GrimAbstractAPI extends ConfigReloadable, BasicReloadable {
 
     /**
      * Reloads Grim asynchronously using the config file.
-     * @return CompletableFuture<Boolean>
+     * @return CompletableFuture
      */
     default CompletableFuture<Boolean> reloadAsync() {
         return reloadAsync(getConfigManager());
