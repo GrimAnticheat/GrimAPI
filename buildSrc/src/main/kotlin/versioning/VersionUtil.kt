@@ -4,7 +4,7 @@ import java.io.ByteArrayOutputStream
 
 /**
  * Builds a version string using:
- *   • base semver
+ *   • base epoch versioning
  *   • git branch + short commit (via indra.git)
  *   • BuildFlags.release
  */
