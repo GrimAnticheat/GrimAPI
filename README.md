@@ -33,9 +33,7 @@ The official developer plugin API for GrimAnticheat
 
 ### **Requirements**:
 - Java 17 or higher
-- A supported environment
-
-> More information can be found [here](https://github.com/GrimAnticheat/Grim/wiki/Supported-environments)
+- A supported environment listed [here](https://github.com/GrimAnticheat/Grim/wiki/Supported-environments)
 
 ### **Gradle**:
 ```gradle
