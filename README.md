@@ -1,9 +1,43 @@
-# GrimAPI
-A work in progress API for [Grim Anticheat](https://github.com/GrimAnticheat/Grim)
+<div align="center">
+ <h1>GrimAPI</h1>
+    
+ <div>
+  <a href="https://github.com/GrimAnticheat/GrimAPI/actions/workflows/gradle-publish.yml">
+   <img alt="Workflow" src="https://github.com/GrimAnticheat/GrimAPI/actions/workflows/gradle-publish.yml/badge.svg" />
+  </a>
+  <a href="https://repo.grim.ac">
+   <img alt="Maven repository" src="https://repo.grim.ac/api/badge/latest/snapshots/ac/grim/grimac/GrimAPI?name=Version&style=flat">
+  </a>
+  <a href="https://discord.grim.ac">
+   <img alt="Discord" src="https://img.shields.io/discord/811396969670901800?style=flat&label=Discord&logo=discord">
+  </a>
+ </div>
+ 
+ <br>
+ <div>
+  <a href="https://grim.ac">Website</a>
+  |
+  <a href="https://github.com/GrimAnticheat/Grim/wiki">Wiki</a>
+  |
+  <a href="https://repo.grim.ac/">Maven</a>
+  |
+  <a href="https://github.com/GrimAnticheat/Grim">GrimAC</a>
+ </div>
 
-You can find the latest version here: https://repo.grim.ac/#/
+ <br>
+ <div>
+The official developer plugin API for GrimAnticheat
+ </div>
 
-Gradle:
+</div>
+
+### **Requirements**:
+- Java 17 or higher
+- A supported environment
+
+> More information can be found [here](https://github.com/GrimAnticheat/Grim/wiki/Supported-environments)
+
+### **Gradle**:
 ```gradle
 repositories {
     maven {
@@ -13,12 +47,12 @@ repositories {
 }
 
 dependencies {
-    // replace <VERSION> with api version
-    compileOnly 'ac.grim.grimac:GrimAPI:<VERSION>'
+    // replace %VERSION% with the latest api version
+    compileOnly 'ac.grim.grimac:GrimAPI:%VERSION%'
 }
 ```
 
-Maven:
+### **Maven**:
 ```xml
 <repository>
     <id>grimac-snapshots</id>
@@ -26,24 +60,29 @@ Maven:
     <url>https://repo.grim.ac/snapshots</url>
 </repository>
 
-<!-- replace <VERSION> with api version -->
+<!-- replace %VERSION% with the latest api version -->
 <dependency>
     <groupId>ac.grim.grimac</groupId>
     <artifactId>GrimAPI</artifactId>
-    <version>VERSION</version>
+    <version>%VERSION%</version>
 </dependency>
 ```
 
-Make sure to depend or softdepend on GrimAC in your plugin's `plugin.yml`:
+### **Plugin usage**:
+
+> *These examples are assuming you are using a bukkit environment*
+
+Configure your plugin to depend or softdepend on `GrimAC` in your plugin's `plugin.yml`:
 ```yml
 softdepend: [GrimAC]
 ```
 
-Obtaining an instance of the API:
+Example of obtaining an instance of the API:
 ```java
-RegisteredServiceProvider<GrimAbstractAPI> provider = Bukkit.getServicesManager().getRegistration(GrimAbstractAPI.class);
-if (provider != null) {
-    GrimAbstractAPI api = provider.getProvider();
-}
+        if (Bukkit.getPluginManager().isPluginEnabled("GrimAC")) {
+            RegisteredServiceProvider<GrimAbstractAPI> provider = Bukkit.getServicesManager().getRegistration(GrimAbstractAPI.class);
+            if (provider != null) {
+                GrimAbstractAPI api = provider.getProvider();
+            }
+        }
 ```
-
