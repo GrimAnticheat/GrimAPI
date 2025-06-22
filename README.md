@@ -63,6 +63,7 @@ dependencies {
     <groupId>ac.grim.grimac</groupId>
     <artifactId>GrimAPI</artifactId>
     <version>%VERSION%</version>
+    <scope>provided</scope>
 </dependency>
 ```
 
