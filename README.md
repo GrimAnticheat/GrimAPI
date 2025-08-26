@@ -76,12 +76,34 @@ Configure your plugin to depend or softdepend on `GrimAC` in your plugin's `plug
 softdepend: [GrimAC]
 ```
 
-Example of obtaining an instance of the API:
+Example of obtaining an instance of the API via bukkit and subscribing to an event:
 ```java
+public class TestPlugin extends JavaPlugin {
+
+    @Override
+    public void onEnable() {
+        // check if GrimAC is loaded
         if (Bukkit.getPluginManager().isPluginEnabled("GrimAC")) {
+            // create a GrimPlugin instance from this plugin
+            GrimPlugin plugin = new BasicGrimPlugin(
+                    this.getLogger(),
+                    this.getDataFolder(),
+                    this.getDescription().getVersion(),
+                    this.getDescription().getDescription(),
+                    this.getDescription().getAuthors()
+            );
+            // get the provider
             RegisteredServiceProvider<GrimAbstractAPI> provider = Bukkit.getServicesManager().getRegistration(GrimAbstractAPI.class);
             if (provider != null) {
                 GrimAbstractAPI api = provider.getProvider();
+                // use the event bus to subscribe to FlagEvent
+                api.getEventBus().subscribe(plugin, FlagEvent.class, event -> {
+                    // broadcast to all players when a player flags a check
+                    Bukkit.broadcast(Component.text(
+                            event.getPlayer().getName() + " flagged " + event.getCheck().getCheckName()));
+                });
             }
         }
+    }
+}
 ```
