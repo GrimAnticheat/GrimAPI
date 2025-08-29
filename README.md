@@ -17,7 +17,7 @@
  <div>
   <a href="https://grim.ac">Website</a>
   |
-  <a href="https://github.com/GrimAnticheat/Grim/wiki">Wiki</a>
+  <a href="https://github.com/GrimAnticheat/Grim/wiki/Developer-API">Wiki</a>
   |
   <a href="https://repo.grim.ac/">Maven</a>
   |
@@ -35,17 +35,20 @@ The official developer plugin API for GrimAnticheat
 - Java 17 or higher
 - A supported environment listed [here](https://github.com/GrimAnticheat/Grim/wiki/Supported-environments)
 
+
+### Wiki
+You can find more documentation and examples of how to use the API on the [wiki](https://github.com/GrimAnticheat/Grim/wiki/Developer-API).
+
 ### **Gradle**:
-```gradle
+```kt
 repositories {
     maven {
         name = "grimacSnapshots"
         url = uri("https://repo.grim.ac/snapshots")
     }
 }
-
 dependencies {
-    // replace %VERSION% with the latest api version
+    // replace %VERSION% with the latest API version
     compileOnly 'ac.grim.grimac:GrimAPI:%VERSION%'
 }
 ```
@@ -53,57 +56,15 @@ dependencies {
 ### **Maven**:
 ```xml
 <repository>
-    <id>grimac-snapshots</id>
-    <name>GrimAC Repository</name>
-    <url>https://repo.grim.ac/snapshots</url>
+  <id>grimac-snapshots</id>
+  <name>GrimAC's Maven Repository</name>
+  <url>https://repo.grim.ac/snapshots</url>
 </repository>
-
-<!-- replace %VERSION% with the latest api version -->
+<!-- replace %VERSION% with the latest API version -->
 <dependency>
-    <groupId>ac.grim.grimac</groupId>
-    <artifactId>GrimAPI</artifactId>
-    <version>%VERSION%</version>
-    <scope>provided</scope>
+  <groupId>ac.grim.grimac</groupId>
+  <artifactId>GrimAPI</artifactId>
+  <version>%VERSION%</version>
+  <scope>provided</scope>
 </dependency>
-```
-
-### **Plugin usage**:
-
-> *These examples are assuming you are using a bukkit environment*
-
-Configure your plugin to depend or softdepend on `GrimAC` in your plugin's `plugin.yml`:
-```yml
-softdepend: [GrimAC]
-```
-
-Example of obtaining an instance of the API via bukkit and subscribing to an event:
-```java
-public class TestPlugin extends JavaPlugin {
-
-    @Override
-    public void onEnable() {
-        // check if GrimAC is loaded
-        if (Bukkit.getPluginManager().isPluginEnabled("GrimAC")) {
-            // create a GrimPlugin instance from this plugin
-            GrimPlugin plugin = new BasicGrimPlugin(
-                    this.getLogger(),
-                    this.getDataFolder(),
-                    this.getDescription().getVersion(),
-                    this.getDescription().getDescription(),
-                    this.getDescription().getAuthors()
-            );
-            // get the provider
-            RegisteredServiceProvider<GrimAbstractAPI> provider = Bukkit.getServicesManager().getRegistration(GrimAbstractAPI.class);
-            if (provider != null) {
-                GrimAbstractAPI api = provider.getProvider();
-                // use the event bus to subscribe to FlagEvent
-                api.getEventBus().subscribe(plugin, FlagEvent.class, event -> {
-                    // broadcast to all players when a player flags a check
-                    Bukkit.broadcast(Component.text(
-                            event.getPlayer().getName() + " flagged " + event.getCheck().getCheckName()));
-                });
-            }
-        }
-    }
-}
 ```
