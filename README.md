@@ -49,7 +49,7 @@ repositories {
 }
 dependencies {
     // replace %VERSION% with the latest API version
-    compileOnly 'ac.grim.grimac:GrimAPI:%VERSION%'
+    compileOnly("ac.grim.grimac:GrimAPI:%VERSION%")
 }
 ```
 
