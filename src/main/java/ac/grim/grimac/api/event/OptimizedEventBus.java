@@ -68,17 +68,7 @@ public class OptimizedEventBus implements EventBus {
                         method.setAccessible(true);
                         MethodHandle handle = lookup.unreflect(method);
 
-                        GrimEventListener<GrimEvent> listener = event -> {
-                            try {
-                                if (instance != null) {
-                                    handle.invoke(instance, event);
-                                } else {
-                                    handle.invoke(event);
-                                }
-                            } catch (Throwable throwable) {
-                                throw new RuntimeException("Failed to invoke listener for " + eventType.getName(), throwable);
-                            }
-                        };
+                        final GrimEventListener<GrimEvent> listener = getGrimEventListener(instance, handle, eventType);
 
                         OptimizedListener optimizedListener = new OptimizedListener(
                                 plugin, listener, annotation.priority(),
@@ -93,6 +83,32 @@ public class OptimizedEventBus implements EventBus {
                 }
             }
         }
+    }
+
+    // Decide which listener to create at registration time to avoid the runtime 'if' check.
+    private @NotNull GrimEventListener<GrimEvent> getGrimEventListener(@Nullable Object instance, MethodHandle handle, Class<?> eventType) {
+        final GrimEventListener<GrimEvent> listener;
+        if (instance != null) {
+            // For instance methods, create a listener that captures the instance.
+            listener = event -> {
+                try {
+                    handle.invoke(instance, event);
+                } catch (Throwable throwable) {
+                    throw new RuntimeException("Failed to invoke listener for " + eventType.getName(), throwable);
+                }
+            };
+        } else {
+            // For static methods, create a listener that does NOT capture an instance.
+            // This is slightly more memory efficient and avoids the null check.
+            listener = event -> {
+                try {
+                    handle.invoke(event);
+                } catch (Throwable throwable) {
+                    throw new RuntimeException("Failed to invoke listener for " + eventType.getName(), throwable);
+                }
+            };
+        }
+        return listener;
     }
 
     private void addListener(Class<? extends GrimEvent> eventType, OptimizedListener newListener) {
