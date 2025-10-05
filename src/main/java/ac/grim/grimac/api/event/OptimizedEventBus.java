@@ -80,16 +80,12 @@ public class OptimizedEventBus implements EventBus {
                             }
                         };
 
-                        Class<?> currentEventType = eventType;
-                        while (GrimEvent.class.isAssignableFrom(currentEventType)) {
-                            OptimizedListener optimizedListener = new OptimizedListener(
-                                    plugin, listener, annotation.priority(),
-                                    annotation.ignoreCancelled(), method.getDeclaringClass(), instance
-                            );
+                        OptimizedListener optimizedListener = new OptimizedListener(
+                                plugin, listener, annotation.priority(),
+                                annotation.ignoreCancelled(), method.getDeclaringClass(), instance
+                        );
 
-                            addListener((Class<? extends GrimEvent>) currentEventType, optimizedListener);
-                            currentEventType = currentEventType.getSuperclass();
-                        }
+                        addListener((Class<? extends GrimEvent>) eventType, optimizedListener);
                     } catch (IllegalAccessException e) {
                         System.err.println("Failed to register listener for " + eventType.getName() + ": " + e.getMessage());
                         e.printStackTrace();
