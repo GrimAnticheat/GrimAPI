@@ -25,7 +25,7 @@ public interface EventBus {
      * It is recommended you use {@link EventBus#subscribe(Object, Class, GrimEventListener)} instead.
      * <p><b>Example (Bukkit Plugin):</b>
      * <pre>{@code
-     * // In your main plugin class that extends JavaPlugin:
+     * // In your main plugin/mod class that extends JavaPlugin or implements ModContainer
      * eventBus.registerAnnotatedListeners(this, new MyListener());
      * }</pre>
      *
