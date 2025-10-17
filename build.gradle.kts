@@ -77,7 +77,7 @@ BuildFlags.init(project) // Initialize your build flags helper
  */
 // --- SET YOUR CURRENT 4-PART EPOCH BASE VERSION HERE ---
 // Format: EPOCH.MAJOR.MINOR.PATCH
-val baseVersion = "1.1.0.0" // Example starting version for Epoch 1
+val baseVersion = "1.2.0.0" // Example starting version for Epoch 1
 
 // --- Standard Project Configuration ---
 group = "ac.grim.grimac" // Or your desired group ID
