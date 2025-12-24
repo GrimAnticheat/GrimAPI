@@ -2,6 +2,7 @@ package ac.grim.grimac.api.alerts;
 
 import ac.grim.grimac.api.GrimUser;
 import lombok.NonNull;
+import org.bukkit.entity.Player;
 
 public interface AlertManager {
 
@@ -180,4 +181,30 @@ public interface AlertManager {
      * @throws NullPointerException if player is null
      */
     void setBrandsEnabled(@NonNull GrimUser player, boolean enabled, boolean silent);
+
+    /**
+     * Checks if the player has alerts enabled.
+     * @param player
+     * @return boolean
+     */
+    @Deprecated boolean hasAlertsEnabled(Player player);
+
+    /**
+     * Toggles alerts for the player.
+     * @param player
+     */
+    @Deprecated void toggleAlerts(Player player);
+    /**
+     * Checks if the player has verbose enabled.
+     * @param player
+     * @return boolean
+     */
+    @Deprecated
+    boolean hasVerboseEnabled(Player player);
+
+    /**
+     * Toggles verbose for the player.
+     * @param player
+     */
+    @Deprecated void toggleVerbose(Player player);
 }

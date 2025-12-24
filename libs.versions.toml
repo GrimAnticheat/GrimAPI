@@ -1,0 +1,14 @@
+[versions]
+java = "17"
+lombok = "1.18.36"
+annotations = "24.1.0"
+spigot = "1.18-R0.1-SNAPSHOT"
+indraGit = "3.1.3"
+
+[libraries]
+lombok = { module = "org.projectlombok:lombok", version.ref = "lombok" }
+annotations = { module = "org.jetbrains:annotations", version.ref = "annotations" }
+spigotApi = { module = "org.spigotmc:spigot-api", version.ref = "spigot" }
+
+[plugins]
+indraGit = { id = "net.kyori.indra.git", version.ref = "indraGit" }

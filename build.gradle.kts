@@ -4,7 +4,7 @@ import org.gradle.api.JavaVersion
 import java.util.Properties
 
 plugins {
-    java
+    `java-library`
     `maven-publish`
     id("net.kyori.indra.git") version "3.1.3" // Keep for Git info access
 }
@@ -75,9 +75,7 @@ BuildFlags.init(project) // Initialize your build flags helper
  *      - Same MAJOR and MINOR, different PATCH indicate backward-compatible fixes.
  *  - Development builds (with -<commit> suffix) offer no stability guarantees.
  */
-// --- SET YOUR CURRENT 4-PART EPOCH BASE VERSION HERE ---
-// Format: EPOCH.MAJOR.MINOR.PATCH
-val baseVersion = "1.2.0.0" // Example starting version for Epoch 1
+val baseVersion = project.findProperty("version") as String
 
 // --- Standard Project Configuration ---
 group = "ac.grim.grimac" // Or your desired group ID
@@ -90,9 +88,8 @@ println("📦 Project version → $version")
 
 // --- Java Configuration ---
 java {
-    sourceCompatibility = JavaVersion.VERSION_1_8
     targetCompatibility = JavaVersion.VERSION_1_8
-    toolchain.languageVersion.set(JavaLanguageVersion.of(17))
+    sourceCompatibility = JavaVersion.VERSION_1_8
     withSourcesJar()
     withJavadocJar()
     // disableAutoTargetJvm() // Keep if needed
@@ -105,26 +102,35 @@ fun getEnvVar(name: String): String? =
     System.getenv(name) ?: envProperties.getProperty(name)
 
 // --- Publishing Configuration ---
-publishing {
-    repositories {
-        mavenLocal()
-        getEnvVar("MAVEN_REPO_URL")?.let { repoUrl ->
-            maven {
-                name = getEnvVar("MAVEN_REPO_NAME") ?: "CustomMaven"
-                url = uri(repoUrl)
-                credentials {
-                    username = getEnvVar("MAVEN_USERNAME") ?: ""
-                    password = getEnvVar("MAVEN_PASSWORD") ?: ""
+allprojects {
+    // Ensure the plugin is applied so we can access the 'publishing' extension
+    apply(plugin = "maven-publish")
+
+    publishing {
+        repositories {
+            mavenLocal()
+            getEnvVar("MAVEN_REPO_URL")?.let { repoUrl ->
+                maven {
+                    name = getEnvVar("MAVEN_REPO_NAME") ?: "CustomMaven"
+                    url = uri(repoUrl)
+                    credentials {
+                        username = getEnvVar("MAVEN_USERNAME") ?: ""
+                        password = getEnvVar("MAVEN_PASSWORD") ?: ""
+                    }
                 }
             }
         }
     }
+}
+
+publishing {
     publications.create<MavenPublication>("maven") {
         // Use the calculated version (EPOCH.MAJOR.MINOR.PATCH + optional metadata)
         version = project.version.toString()
         from(components["java"])
     }
 }
+
 
 // --- Repositories for Dependencies ---
 repositories {
@@ -134,17 +140,16 @@ repositories {
     mavenCentral()
 }
 
-// --- Dependencies ---
 dependencies {
-    compileOnly("org.jetbrains:annotations:24.1.0")
-    compileOnly("org.projectlombok:lombok:1.18.36")
-    annotationProcessor("org.projectlombok:lombok:1.18.36")
-    testCompileOnly("org.projectlombok:lombok:1.18.36")
-    testAnnotationProcessor("org.projectlombok:lombok:1.18.36")
-    // Add test framework if needed
+    compileOnly(libs.annotations)
+    compileOnly(libs.lombok)
+    annotationProcessor(libs.lombok)
+
+    testCompileOnly(libs.lombok)
+    testAnnotationProcessor(libs.lombok)
 }
 
-// --- Test Task Configuration ---
+
 tasks.test {
-    useJUnitPlatform() // If using JUnit 5
+    useJUnitPlatform()
 }
