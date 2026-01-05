@@ -10,6 +10,10 @@ public interface AbstractCheck extends AbstractProcessor, BasicStatus {
         return getCheckName();
     }
 
+    default String getDescription() {
+        return "No description provided";
+    }
+
     double getViolations();
 
     /**
