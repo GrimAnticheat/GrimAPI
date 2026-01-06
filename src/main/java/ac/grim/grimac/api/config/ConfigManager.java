@@ -1,12 +1,20 @@
 package ac.grim.grimac.api.config;
 
 import ac.grim.grimac.api.common.BasicReloadable;
+import ac.grim.grimac.api.config.source.ConfigSource;
+import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 import java.util.List;
 import java.util.Map;
 
 public interface ConfigManager extends BasicReloadable {
+
+    /**
+     * Registers a new configuration source (Platform settings, Extension config, etc).
+     * @param source The source to register.
+     */
+    void registerSource(@NotNull ConfigSource source);
 
     String getStringElse(String key, String otherwise);
 
