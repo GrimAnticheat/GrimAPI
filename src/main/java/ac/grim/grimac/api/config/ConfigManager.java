@@ -1,12 +1,27 @@
 package ac.grim.grimac.api.config;
 
 import ac.grim.grimac.api.common.BasicReloadable;
+import ac.grim.grimac.api.config.source.ConfigSource;
+import ac.grim.grimac.api.config.source.SourceHandler;
+import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 import java.util.List;
 import java.util.Map;
 
 public interface ConfigManager extends BasicReloadable {
+
+    /**
+     * Registers a configuration source.
+     * The Manager looks up the registered Handler for this source type and executes it.
+     */
+    void registerSource(@NotNull ConfigSource source);
+
+    /**
+     * Registers a handler logic for a specific ConfigSource type.
+     * Example: Registering logic for how to handle Redis sources.
+     */
+    <T extends ConfigSource> void registerHandler(@NotNull Class<T> type, @NotNull SourceHandler<T> handler);
 
     String getStringElse(String key, String otherwise);
 
