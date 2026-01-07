@@ -1,33 +1,19 @@
 package ac.grim.grimac.api.config.source;
 
 import ac.grim.grimac.api.config.source.impl.FileConfigSource;
-import org.jetbrains.annotations.ApiStatus;
+import ac.grim.grimac.api.config.source.impl.MemoryConfigSource;
 import org.jetbrains.annotations.NotNull;
 
 import java.io.File;
+import java.util.Map;
 
 /**
  * Represents a source of configuration data.
  */
 public interface ConfigSource {
 
-    /**
-     * @return The unique identifier for this configuration scope.
-     */
     @NotNull
     String getId();
-
-    /**
-     * Loads this source into the provided context.
-     * <p>
-     * Internal use only. This is called by the ConfigManager.
-     *
-     * @param context The context provided by the ConfigManager.
-     */
-    @ApiStatus.Internal
-    void load(@NotNull ConfigContext context);
-
-    // --- STATIC FACTORY METHODS ---
 
     /**
      * Creates a standard file-based configuration source.
@@ -39,5 +25,16 @@ public interface ConfigSource {
      */
     static ConfigSource file(@NotNull String id, @NotNull File file, @NotNull Class<?> resourceOwner) {
         return new FileConfigSource(id, file, resourceOwner);
+    }
+
+    /**
+     * Creates a memory-based source (good for Redis/SQL bridges).
+     *
+     * @param id     The unique ID.
+     * @param values The map of values (e.g. "checks.killaura.enabled" -> true).
+     * @return A new ConfigSource instance.
+     */
+    static ConfigSource memory(@NotNull String id, @NotNull Map<String, Object> values) {
+        return new MemoryConfigSource(id, values);
     }
 }
