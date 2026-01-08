@@ -6,6 +6,7 @@ import ac.grim.grimac.api.config.ConfigManager;
 import ac.grim.grimac.api.config.ConfigReloadable;
 import ac.grim.grimac.api.event.EventBus;
 import ac.grim.grimac.api.plugin.GrimPlugin;
+import org.bukkit.entity.Player;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -19,6 +20,15 @@ public interface GrimAbstractAPI extends ConfigReloadable, BasicReloadable {
      * @return {@link EventBus}
      */
     @NotNull EventBus getEventBus();
+
+    /**
+     * Retrieves a GrimUser reference from the player.
+     * @param player Bukkit player reference
+     * @return GrimUser
+     */
+    @Nullable
+    @Deprecated
+    GrimUser getGrimUser(Player player);
 
     /**
      * Retrieves a GrimUser reference from the player's UUID.
