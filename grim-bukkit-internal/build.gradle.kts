@@ -6,7 +6,7 @@ plugins {
 // Inherit metadata
 group = rootProject.group
 version = rootProject.version
-description = "GrimAPI-Bukkit"
+description = "GrimAPI-Bukkit-Internal"
 
 java {
     sourceCompatibility = JavaVersion.VERSION_1_8
@@ -16,13 +16,11 @@ java {
 }
 
 dependencies {
-    // 1. Inherit the Core API
     api(project(":"))
+    api(project(":grim-internal"))
 
-    // 2. Real Spigot (Supersedes the stubs from root)
     compileOnly(libs.spigotApi)
 
-    // 3. Libs
     compileOnly(libs.annotations)
     compileOnly(libs.lombok)
     annotationProcessor(libs.lombok)
@@ -39,7 +37,7 @@ publishing {
         mavenLocal()
     }
     publications.create<MavenPublication>("maven") {
-        artifactId = "grim-bukkit-api"
+        artifactId = "grim-bukkit-internal"
         version = project.version.toString()
 
         from(components["java"])
@@ -47,6 +45,7 @@ publishing {
 }
 
 repositories {
+    mavenLocal()
     mavenLocal()
     maven("https://hub.spigotmc.org/nexus/content/repositories/snapshots/")
     mavenCentral()
