@@ -8,4 +8,5 @@ dependencyResolutionManagement {
     }
 }
 
-include(":grim-bukkit-api")
+include(":grim-internal")
+include(":grim-bukkit-internal")

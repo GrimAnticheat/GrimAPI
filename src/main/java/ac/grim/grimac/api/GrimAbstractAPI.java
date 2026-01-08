@@ -5,6 +5,7 @@ import ac.grim.grimac.api.common.BasicReloadable;
 import ac.grim.grimac.api.config.ConfigManager;
 import ac.grim.grimac.api.config.ConfigReloadable;
 import ac.grim.grimac.api.event.EventBus;
+import ac.grim.grimac.api.plugin.GrimPlugin;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -96,5 +97,29 @@ public interface GrimAbstractAPI extends ConfigReloadable, BasicReloadable {
      * @return int
      */
     int getCurrentTick();
+
+    /**
+     * Resolves a platform-specific object into a {@link GrimPlugin} wrapper.
+     * <p>
+     * This method is the bridge between platform-specific objects (like a Bukkit {@code JavaPlugin})
+     * and the universal Grim API.
+     * <p>
+     * <b>Supported Context Types:</b>
+     * <ul>
+     *     <li><b>Bukkit:</b> Your {@code JavaPlugin} instance (e.g., {@code this}).</li>
+     *     <li><b>Fabric:</b> Your {@code ModInitializer} instance, {@code ModContainer}, or Mod ID (String).</li>
+     *     <li><b>Universal:</b> Any {@code Class<?>} belonging to your plugin/mod (resolves the providing container).</li>
+     * </ul>
+     * <p>
+     * <b>Performance Note:</b>
+     * While convenience methods in the {@link EventBus} accept generic Objects, they perform this resolution
+     * check every time they are called. If you are performing frequent operations, it is recommended to
+     * call this method once, cache the {@link GrimPlugin} result, and pass that to the API instead.
+     *
+     * @param platformContext The platform-specific context (e.g., {@code this}).
+     * @return The resolved GrimPlugin wrapper.
+     * @throws IllegalArgumentException If the provided context is not a valid plugin, mod, or class known to the platform.
+     */
+    @NotNull GrimPlugin getGrimPlugin(@NotNull Object platformContext);
 
 }
