@@ -46,7 +46,6 @@ publishing {
 
 repositories {
     mavenLocal()
-    mavenLocal()
     maven("https://hub.spigotmc.org/nexus/content/repositories/snapshots/")
     mavenCentral()
 }
