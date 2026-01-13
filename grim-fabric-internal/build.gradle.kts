@@ -18,7 +18,10 @@ java {
 dependencies {
     api(project(":"))
     api(project(":grim-internal"))
-    api(project(":grim-internal-shims"))
+
+    // turns out JVM lazy loading means we're fine on Fabric, and org.bukkit.entity.Player not existing doesn't cause a CNF
+    // Uncomment and include the shim in the future if necessary
+//    api(project(":grim-internal-shims"))
 
     compileOnly(libs.annotations)
     compileOnly(libs.lombok)
