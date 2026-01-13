@@ -48,6 +48,5 @@ publishing {
 
 repositories {
     mavenLocal()
-    mavenLocal()
     mavenCentral()
 }
