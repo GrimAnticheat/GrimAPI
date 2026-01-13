@@ -141,6 +141,7 @@ repositories {
 }
 
 dependencies {
+    compileOnly(project(":grim-internal-shims"))
     compileOnly(libs.annotations)
     compileOnly(libs.lombok)
     annotationProcessor(libs.lombok)

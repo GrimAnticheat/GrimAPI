@@ -1,9 +1,12 @@
 package ac.grim.grimac.internal.platform.bukkit.resolver;
 
+import ac.grim.grimac.api.GrimAPIProvider;
+import ac.grim.grimac.api.GrimAbstractAPI;
 import ac.grim.grimac.api.plugin.BasicGrimPlugin;
 import ac.grim.grimac.api.plugin.GrimPlugin;
 import ac.grim.grimac.internal.plugin.resolver.GrimExtensionManager;
 import org.bukkit.Bukkit;
+import org.bukkit.entity.Player;
 import org.bukkit.plugin.Plugin;
 import org.bukkit.plugin.PluginDescriptionFile;
 import org.bukkit.plugin.java.JavaPlugin;

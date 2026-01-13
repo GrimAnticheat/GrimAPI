@@ -9,4 +9,6 @@ dependencyResolutionManagement {
 }
 
 include(":grim-internal")
+include(":grim-internal-shims")
 include(":grim-bukkit-internal")
+include(":grim-fabric-internal")
