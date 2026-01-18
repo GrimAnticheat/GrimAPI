@@ -20,19 +20,13 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 public final class BukkitResolverRegistrar {
 
-    private final GrimExtensionManager extensionManager;
-
     // Cache to ensure we only create one GrimPlugin wrapper per Bukkit Plugin instance.
     private final Map<Plugin, GrimPlugin> pluginCache = new ConcurrentHashMap<>();
-
-    public BukkitResolverRegistrar(GrimExtensionManager extensionManager) {
-        this.extensionManager = extensionManager;
-    }
 
     /**
      * Registers all the Bukkit-specific resolvers in order of performance (fastest to slowest).
      */
-    public void registerAll() {
+    public void registerAll(GrimExtensionManager extensionManager) {
         extensionManager.setFailureHandler(this::createFailureException);
         extensionManager.registerResolver(this::resolvePluginInstance);
         extensionManager.registerResolver(this::resolveStringName);
