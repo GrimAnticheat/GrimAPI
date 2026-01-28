@@ -13,4 +13,6 @@ public interface PacketWorld {
      * </ul>
      */
     int getBlockStateId(int x, int y, int z);
+
+    boolean isChunkLoaded(int chunkX, int chunkZ);
 }
