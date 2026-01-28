@@ -19,6 +19,8 @@ public interface GrimUser extends ConfigReloadable, BasicReloadable, UserHandler
 
     @Nullable UUID getWorldUID();
 
+    PacketWorld getPacketWorld();
+
     int getTransactionPing();
 
     int getKeepAlivePing();
