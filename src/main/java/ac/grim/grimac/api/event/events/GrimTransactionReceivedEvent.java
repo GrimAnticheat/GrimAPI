@@ -19,14 +19,14 @@ import ac.grim.grimac.api.event.GrimEvent;
 public class GrimTransactionReceivedEvent extends GrimEvent implements GrimUserEvent {
     private final GrimUser user;
     private final int transactionId;
-    private final boolean cancelled;
+    private final boolean packetCancelled;
     private final long timestamp;
 
-    public GrimTransactionReceivedEvent(GrimUser user, int transactionId, boolean cancelled, long timestamp) {
+    public GrimTransactionReceivedEvent(GrimUser user, int transactionId, boolean packetCancelled, long timestamp) {
         super();
         this.user = user;
         this.transactionId = transactionId;
-        this.cancelled = cancelled;
+        this.packetCancelled = packetCancelled;
         this.timestamp = timestamp;
     }
 
@@ -51,8 +51,8 @@ public class GrimTransactionReceivedEvent extends GrimEvent implements GrimUserE
      *
      * @return {@code true} if Grim cancelled the inbound packet
      */
-    public boolean isCancelled() {
-        return cancelled;
+    public boolean isPacketCancelled() {
+        return packetCancelled;
     }
 
     /**
