@@ -64,17 +64,21 @@ public final class WriterLoop {
     private void run() {
         while (!shuttingDown || queue.size() > 0) {
             try {
-                List<WriteEnvelope> batch = queue.drainUpTo(batchSize, flushIntervalMs);
+                // During shutdown, drop the flush timeout so a near-empty queue doesn't stall
+                // the drain for a full flushInterval before loop exit.
+                long pollMs = shuttingDown ? 50 : flushIntervalMs;
+                List<WriteEnvelope> batch = queue.drainUpTo(batchSize, pollMs);
                 if (batch.isEmpty()) continue;
                 long started = System.nanoTime();
                 dispatch(batch);
                 long elapsedMs = (System.nanoTime() - started) / 1_000_000;
                 updateEmaMs(batchLatencyMsEma, elapsedMs);
             } catch (InterruptedException e) {
+                // Only exit on interrupt if we're not in the drain phase; during shutdown
+                // the interrupt is the signal to drop remaining work and bail fast.
                 Thread.currentThread().interrupt();
-                if (!shuttingDown) {
-                    logger.log(Level.WARNING, "[grim-datastore] writer loop interrupted; stopping", e);
-                }
+                if (shuttingDown) break;
+                logger.log(Level.WARNING, "[grim-datastore] writer loop interrupted; stopping", e);
                 break;
             } catch (RuntimeException e) {
                 logger.log(Level.SEVERE, "[grim-datastore] unexpected exception in writer loop; continuing", e);
@@ -130,15 +134,21 @@ public final class WriterLoop {
         shuttingDown = true;
         Thread t = worker;
         if (t == null) return 0;
-        t.interrupt();
-        long deadline = System.currentTimeMillis() + drainTimeoutMs;
+        // Do NOT interrupt immediately — let the loop see shuttingDown and drain queue.size()
+        // down to zero on its own. Interrupt only if we time out waiting.
         try {
-            long wait = Math.max(0, deadline - System.currentTimeMillis());
-            t.join(wait);
+            t.join(Math.max(0, drainTimeoutMs));
         } catch (InterruptedException ie) {
             Thread.currentThread().interrupt();
         }
-        if (t.isAlive()) t.interrupt();
+        if (t.isAlive()) {
+            t.interrupt();
+            try {
+                t.join(200);
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+            }
+        }
         long leftover = queue.size();
         if (leftover > 0) {
             logger.log(Level.WARNING,
