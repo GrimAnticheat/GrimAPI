@@ -300,11 +300,13 @@ public final class SqliteBackend implements Backend {
             ps.setInt(5, q.pageSize() + 1);
             try (ResultSet rs = ps.executeQuery()) {
                 List<SessionRecord> out = new ArrayList<>();
-                while (rs.next() && out.size() < q.pageSize()) {
+                boolean hasMore = false;
+                while (rs.next()) {
+                    if (out.size() >= q.pageSize()) { hasMore = true; break; }
                     out.add(mapSession(rs));
                 }
                 Cursor next = null;
-                if (rs.next()) {
+                if (hasMore && !out.isEmpty()) {
                     SessionRecord last = out.get(out.size() - 1);
                     next = encodeStartedCursor(last.startedEpochMs(), last.sessionId());
                 }
@@ -342,11 +344,13 @@ public final class SqliteBackend implements Backend {
             ps.setInt(5, q.pageSize() + 1);
             try (ResultSet rs = ps.executeQuery()) {
                 List<ViolationRecord> out = new ArrayList<>();
-                while (rs.next() && out.size() < q.pageSize()) {
+                boolean hasMore = false;
+                while (rs.next()) {
+                    if (out.size() >= q.pageSize()) { hasMore = true; break; }
                     out.add(mapViolation(rs));
                 }
                 Cursor next = null;
-                if (rs.next()) {
+                if (hasMore && !out.isEmpty()) {
                     ViolationRecord last = out.get(out.size() - 1);
                     next = encodeViolationCursor(last.occurredEpochMs(), last.id());
                 }
