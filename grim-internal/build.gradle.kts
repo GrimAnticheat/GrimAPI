@@ -9,8 +9,8 @@ version = rootProject.version
 description = "GrimAPI-Internal"
 
 java {
-    sourceCompatibility = JavaVersion.VERSION_1_8
-    targetCompatibility = JavaVersion.VERSION_1_8
+    sourceCompatibility = JavaVersion.VERSION_17
+    targetCompatibility = JavaVersion.VERSION_17
     withSourcesJar()
     withJavadocJar()
 }
@@ -21,11 +21,23 @@ dependencies {
     compileOnly(libs.annotations)
     compileOnly(libs.lombok)
     annotationProcessor(libs.lombok)
+
+    // SQLite reference backend (Layer 2).
+    compileOnly(libs.sqliteJdbc)
+
+    // Test framework (JUnit 5).
+    testImplementation(libs.junitJupiter)
+    testImplementation(libs.sqliteJdbc)
+    testRuntimeOnly(libs.junitPlatformLauncher)
 }
 
 tasks.withType<JavaCompile>().configureEach {
     options.release.set(17)
     options.encoding = "UTF-8"
+}
+
+tasks.named<Test>("test") {
+    useJUnitPlatform()
 }
 
 // Publishing for the Legacy Module
