@@ -30,8 +30,8 @@ import java.util.logging.Logger;
  * Legacy v0 → v1 migrator. Reads the old {@code grim_history_*} tables in ascending
  * {@code (player_uuid, created_at, id)} order, feeds them through
  * {@link SessionReconstructor} to bucket by time-gap, and writes v1 records directly
- * through {@link SqliteBackend#writeBatch} (bypassing the async WriterLoop — this runs
- * synchronously at startup before accept-players per §13).
+ * through {@link SqliteBackend#writeRecordsDirect} (bypassing the Disruptor rings —
+ * this runs synchronously at startup before accept-players per §13).
  * <p>
  * Resumable via the {@code grim_migration_state} singleton row on the v1 store: the
  * last-migrated v0 violation id is updated after each batch commit. Restart picks up
@@ -108,7 +108,7 @@ public final class LegacyMigrator {
             SessionReconstructor.Emit emit = (session, violations) -> {
                 try {
                     // Write session first, then its violations.
-                    v1.writeBatch(Categories.SESSION, List.of(session));
+                    v1.writeRecordsDirect(Categories.SESSION, List.of(session));
                     if (!violations.isEmpty()) {
                         List<ViolationRecord> rows = new ArrayList<>(violations.size());
                         for (SessionReconstructor.ReconstructedViolation v : violations) {
@@ -124,7 +124,7 @@ public final class LegacyMigrator {
                             long legacyId = v.legacyId();
                             if (legacyId > lastViolationLegacyId.get()) lastViolationLegacyId.set(legacyId);
                         }
-                        v1.writeBatch(Categories.VIOLATION, rows);
+                        v1.writeRecordsDirect(Categories.VIOLATION, rows);
                     }
                     sessionsEmitted.incrementAndGet();
                     violationsEmitted.addAndGet(violations.size());
@@ -162,7 +162,7 @@ public final class LegacyMigrator {
                 for (Map.Entry<UUID, long[]> e : identityAcc.entrySet()) {
                     idRows.add(new PlayerIdentity(e.getKey(), null, e.getValue()[0], e.getValue()[1]));
                 }
-                v1.writeBatch(Categories.PLAYER_IDENTITY, idRows);
+                v1.writeRecordsDirect(Categories.PLAYER_IDENTITY, idRows);
             }
 
             writeState(lastViolationLegacyId.get(), "COMPLETE",

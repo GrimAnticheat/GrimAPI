@@ -12,6 +12,8 @@ import org.jetbrains.annotations.NotNull;
 import java.util.EnumSet;
 import java.util.Optional;
 import java.util.concurrent.CompletionStage;
+import java.util.function.Consumer;
+import java.util.function.Supplier;
 
 /**
  * Scoped handle an extension receives instead of the raw {@code DataStore}.
@@ -23,17 +25,24 @@ public interface ExtensionDataStoreHandle {
 
     @NotNull String extensionId();
 
-    @NotNull <R> Category<R> declareCategory(
+    /**
+     * Declare a new extension-namespaced category. Extensions provide a mutable
+     * event type for the hot path and an immutable result type for reads; the
+     * shape mirrors the Layer 1 {@link Category} contract.
+     */
+    @NotNull <E> Category<E> declareCategory(
             @NotNull String localId,
-            @NotNull Class<R> type,
+            @NotNull Class<E> eventType,
+            @NotNull Supplier<E> eventFactory,
+            @NotNull Class<?> queryResultType,
             @NotNull AccessPattern ap,
             @NotNull EnumSet<Capability> required);
 
-    <R> void submit(@NotNull Category<R> cat, @NotNull R record);
+    <E> void submit(@NotNull Category<E> cat, @NotNull Consumer<E> configurer);
 
-    @NotNull <R> CompletionStage<Page<R>> query(@NotNull Category<R> cat, @NotNull Query<R> q);
+    @NotNull <R> CompletionStage<Page<R>> query(@NotNull Category<?> cat, @NotNull Query<R> q);
 
-    @NotNull <R> CompletionStage<Void> delete(@NotNull Category<R> cat, @NotNull DeleteCriteria c);
+    @NotNull <E> CompletionStage<Void> delete(@NotNull Category<E> cat, @NotNull DeleteCriteria c);
 
     void putSetting(@NotNull String key, byte @NotNull [] value);
 

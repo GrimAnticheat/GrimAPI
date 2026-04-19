@@ -27,7 +27,7 @@ public final class CategoryRouter {
         this.backendsById = Collections.unmodifiableMap(byId);
     }
 
-    public <R> Backend backendFor(Category<R> cat) {
+    public Backend backendFor(Category<?> cat) {
         Backend b = routing.get(cat);
         if (b == null) {
             throw new IllegalArgumentException(
@@ -38,6 +38,10 @@ public final class CategoryRouter {
 
     public Set<Backend> allBackends() {
         return new LinkedHashSet<>(backendsById.values());
+    }
+
+    public Set<Category<?>> routedCategories() {
+        return routing.keySet();
     }
 
     public Map<Category<?>, Backend> routing() {

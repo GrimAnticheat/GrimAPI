@@ -4,13 +4,14 @@ import ac.grim.grimac.api.storage.backend.Backend;
 import ac.grim.grimac.api.storage.category.Categories;
 import ac.grim.grimac.api.storage.category.Category;
 import ac.grim.grimac.api.storage.config.WritePathConfig;
+import ac.grim.grimac.api.storage.event.SessionEvent;
+import ac.grim.grimac.api.storage.event.ViolationEvent;
 import ac.grim.grimac.api.storage.history.CheckBucket;
 import ac.grim.grimac.api.storage.history.SessionDetail;
 import ac.grim.grimac.api.storage.history.SessionSummary;
 import ac.grim.grimac.api.storage.history.ViolationEntry;
 import ac.grim.grimac.api.storage.model.SessionRecord;
 import ac.grim.grimac.api.storage.model.VerboseFormat;
-import ac.grim.grimac.api.storage.model.ViolationRecord;
 import ac.grim.grimac.api.storage.query.Page;
 import ac.grim.grimac.internal.storage.backend.memory.InMemoryBackend;
 import ac.grim.grimac.internal.storage.checks.CheckRegistry;
@@ -26,6 +27,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
 import java.util.logging.Logger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -61,7 +63,7 @@ final class HistoryServiceImplTest {
 
     @AfterEach
     void teardown() {
-        store.flushAndClose(500);
+        store.flushAndClose(2_000);
     }
 
     @Test
@@ -76,13 +78,13 @@ final class HistoryServiceImplTest {
     @Test
     void sessionListReturnsOrdinalsAndCounts() throws Exception {
         UUID player = UUID.randomUUID();
-        SessionRecord s1 = session(player, 1_000_000L, 1_030_000L);
-        SessionRecord s2 = session(player, 2_000_000L, 2_050_000L);
-        store.submit(Categories.SESSION, s1);
-        store.submit(Categories.SESSION, s2);
-        store.submit(Categories.VIOLATION, violation(s1.sessionId(), player, reachId, 1_001_000L));
-        store.submit(Categories.VIOLATION, violation(s1.sessionId(), player, timerId, 1_005_000L));
-        store.submit(Categories.VIOLATION, violation(s2.sessionId(), player, reachId, 2_010_000L));
+        UUID s1Id = UUID.randomUUID();
+        UUID s2Id = UUID.randomUUID();
+        submitSession(s1Id, player, 1_000_000L, 1_030_000L);
+        submitSession(s2Id, player, 2_000_000L, 2_050_000L);
+        submitViolation(s1Id, player, reachId, 1_001_000L);
+        submitViolation(s1Id, player, timerId, 1_005_000L);
+        submitViolation(s2Id, player, reachId, 2_010_000L);
         awaitEmpty();
 
         Page<SessionSummary> page = service.listSessions(player, null, 10)
@@ -93,10 +95,10 @@ final class HistoryServiceImplTest {
         SessionSummary newest = page.items().get(0);
         SessionSummary oldest = page.items().get(1);
         assertEquals(2, newest.pageOrdinal());
-        assertEquals(s2.sessionId(), newest.sessionId());
+        assertEquals(s2Id, newest.sessionId());
         assertEquals(1L, newest.violationCount());
         assertEquals(1, oldest.pageOrdinal());
-        assertEquals(s1.sessionId(), oldest.sessionId());
+        assertEquals(s1Id, oldest.sessionId());
         assertEquals(2L, oldest.violationCount());
     }
 
@@ -104,16 +106,13 @@ final class HistoryServiceImplTest {
     void sessionDetailBucketsByInterval() throws Exception {
         UUID player = UUID.randomUUID();
         UUID sid = UUID.randomUUID();
-        SessionRecord s = new SessionRecord(sid, player, "Prison",
-                1_000_000L, 1_090_000L,
-                "3.1.0", "vanilla", "1.21.1", "Paper", List.of());
-        store.submit(Categories.SESSION, s);
+        submitSession(sid, player, 1_000_000L, 1_090_000L);
         // Bucket 0 (0-29s): two Reach, one Timer
-        store.submit(Categories.VIOLATION, violation(sid, player, reachId, 1_000_000L));
-        store.submit(Categories.VIOLATION, violation(sid, player, reachId, 1_010_000L));
-        store.submit(Categories.VIOLATION, violation(sid, player, timerId, 1_020_000L));
+        submitViolation(sid, player, reachId, 1_000_000L);
+        submitViolation(sid, player, reachId, 1_010_000L);
+        submitViolation(sid, player, timerId, 1_020_000L);
         // Bucket 1 (30-59s): one Reach
-        store.submit(Categories.VIOLATION, violation(sid, player, reachId, 1_040_000L));
+        submitViolation(sid, player, reachId, 1_040_000L);
         awaitEmpty();
 
         SessionDetail detail = service.getSessionDetail(player, sid)
@@ -136,10 +135,9 @@ final class HistoryServiceImplTest {
     void violationEntriesCarryResolvedNamesAndOffsets() throws Exception {
         UUID player = UUID.randomUUID();
         UUID sid = UUID.randomUUID();
-        store.submit(Categories.SESSION, new SessionRecord(sid, player, "Prison",
-                0L, 1_000L, "3.1.0", "vanilla", "1.21.1", "Paper", List.of()));
-        store.submit(Categories.VIOLATION, violation(sid, player, reachId, 500L));
-        store.submit(Categories.VIOLATION, violation(sid, player, timerId, 600L));
+        submitSession(sid, player, 0L, 1_000L);
+        submitViolation(sid, player, reachId, 500L);
+        submitViolation(sid, player, timerId, 600L);
         awaitEmpty();
 
         SessionDetail detail = service.getSessionDetail(player, sid)
@@ -166,21 +164,39 @@ final class HistoryServiceImplTest {
         UUID alice = UUID.randomUUID();
         UUID bob = UUID.randomUUID();
         UUID sid = UUID.randomUUID();
-        store.submit(Categories.SESSION, new SessionRecord(sid, alice, "Prison",
-                0L, 1_000L, "3.1.0", "vanilla", "1.21.1", "Paper", List.of()));
+        submitSession(sid, alice, 0L, 1_000L);
         awaitEmpty();
         SessionDetail detail = service.getSessionDetail(bob, sid)
                 .toCompletableFuture().get(2, TimeUnit.SECONDS);
         assertNull(detail);
     }
 
-    private SessionRecord session(UUID player, long start, long end) {
-        return new SessionRecord(UUID.randomUUID(), player, "Prison", start, end,
-                "3.1.0", "vanilla", "1.21.1", "Paper", List.of());
+    private void submitSession(UUID sid, UUID player, long start, long end) {
+        store.submit(Categories.SESSION, populateSession(new SessionRecord(
+                sid, player, "Prison", start, end,
+                "3.1.0", "vanilla", "1.21.1", "Paper", List.of())));
     }
 
-    private ViolationRecord violation(UUID sid, UUID player, int checkId, long time) {
-        return new ViolationRecord(0, sid, player, checkId, 1.0, time, "v", VerboseFormat.TEXT);
+    private void submitViolation(UUID sid, UUID player, int checkId, long time) {
+        store.submit(Categories.VIOLATION, e -> e
+                .sessionId(sid).playerUuid(player).checkId(checkId)
+                .vl(1.0).occurredEpochMs(time).verbose("v").verboseFormat(VerboseFormat.TEXT));
+    }
+
+    private static Consumer<SessionEvent> populateSession(SessionRecord r) {
+        return e -> e
+                .sessionId(r.sessionId()).playerUuid(r.playerUuid()).serverName(r.serverName())
+                .startedEpochMs(r.startedEpochMs()).lastActivityEpochMs(r.lastActivityEpochMs())
+                .grimVersion(r.grimVersion()).clientBrand(r.clientBrand())
+                .clientVersionString(r.clientVersionString()).serverVersionString(r.serverVersionString())
+                .replaceReplayClips(r.replayClips());
+    }
+
+    @SuppressWarnings("unused")
+    private static Consumer<ViolationEvent> populateViolation(UUID sid, UUID player, int checkId, long time) {
+        return e -> e
+                .sessionId(sid).playerUuid(player).checkId(checkId)
+                .vl(1.0).occurredEpochMs(time).verbose("v").verboseFormat(VerboseFormat.TEXT);
     }
 
     private void awaitEmpty() throws InterruptedException {
@@ -188,6 +204,9 @@ final class HistoryServiceImplTest {
         while (store.metrics().queuedCount() > 0 && System.currentTimeMillis() < deadline) {
             Thread.sleep(10);
         }
+        // Ring queued count can hit 0 before the consumer finishes processing the final
+        // batch — give the consumer a short grace window so reads see the committed rows.
+        Thread.sleep(50);
     }
 
     private static final class InMemoryPersistence implements CheckRegistry.CheckPersistence {

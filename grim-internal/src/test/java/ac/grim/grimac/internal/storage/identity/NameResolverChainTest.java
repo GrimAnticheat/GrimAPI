@@ -51,7 +51,7 @@ final class NameResolverChainTest {
     @Test
     void localCacheLinkResolvesObservedIdentity() throws Exception {
         UUID player = UUID.randomUUID();
-        backend.writeBatch(Categories.PLAYER_IDENTITY, List.of(new PlayerIdentity(player, "Alice", 1, 2)));
+        backend.writeRecordsDirect(Categories.PLAYER_IDENTITY, List.of(new PlayerIdentity(player, "Alice", 1, 2)));
         LocalCacheLink link = new LocalCacheLink(store);
         Optional<UUID> byName = link.resolveByName("Alice").toCompletableFuture().get(2, TimeUnit.SECONDS);
         assertEquals(Optional.of(player), byName);

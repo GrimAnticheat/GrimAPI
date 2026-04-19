@@ -55,7 +55,7 @@ final class RetentionSweeperTest {
         SessionRecord recent = new SessionRecord(UUID.randomUUID(), player, "Prison",
                 now - (5L * 24 * 60 * 60 * 1000), now - (5L * 24 * 60 * 60 * 1000),
                 "3.1.0", "vanilla", "1.21.1", "Paper", List.of());
-        backend.writeBatch(Categories.SESSION, List.of(old, recent));
+        backend.writeRecordsDirect(Categories.SESSION, List.of(old, recent));
 
         RetentionSweeper sweeper = new RetentionSweeper(store,
                 Map.of(Categories.SESSION, new RetentionRule(true, 90)), Logger.getLogger("rs"));
@@ -73,7 +73,7 @@ final class RetentionSweeperTest {
         SessionRecord old = new SessionRecord(UUID.randomUUID(), player, "Prison",
                 now - (1000L * 24 * 60 * 60 * 1000), now - (1000L * 24 * 60 * 60 * 1000),
                 "3.1.0", "vanilla", "1.21.1", "Paper", List.of());
-        backend.writeBatch(Categories.SESSION, List.of(old));
+        backend.writeRecordsDirect(Categories.SESSION, List.of(old));
 
         RetentionSweeper sweeper = new RetentionSweeper(store,
                 Map.of(Categories.SESSION, RetentionRule.DISABLED), Logger.getLogger("rs"));

@@ -2,12 +2,16 @@ package ac.grim.grimac.internal.storage.backend.sqlite;
 
 import ac.grim.grimac.api.storage.backend.ApiVersion;
 import ac.grim.grimac.api.storage.backend.Backend;
-import ac.grim.grimac.api.storage.backend.BackendConfig;
 import ac.grim.grimac.api.storage.backend.BackendContext;
 import ac.grim.grimac.api.storage.backend.BackendException;
+import ac.grim.grimac.api.storage.backend.StorageEventHandler;
 import ac.grim.grimac.api.storage.category.Capability;
 import ac.grim.grimac.api.storage.category.Categories;
 import ac.grim.grimac.api.storage.category.Category;
+import ac.grim.grimac.api.storage.event.PlayerIdentityEvent;
+import ac.grim.grimac.api.storage.event.SessionEvent;
+import ac.grim.grimac.api.storage.event.SettingEvent;
+import ac.grim.grimac.api.storage.event.ViolationEvent;
 import ac.grim.grimac.api.storage.model.PlayerIdentity;
 import ac.grim.grimac.api.storage.model.SessionRecord;
 import ac.grim.grimac.api.storage.model.SettingRecord;
@@ -20,6 +24,7 @@ import ac.grim.grimac.api.storage.query.Page;
 import ac.grim.grimac.api.storage.query.Queries;
 import ac.grim.grimac.api.storage.query.Query;
 import org.jetbrains.annotations.ApiStatus;
+import org.jetbrains.annotations.NotNull;
 
 import java.nio.file.Path;
 import java.sql.Connection;
@@ -36,16 +41,57 @@ import java.util.Set;
 import java.util.UUID;
 
 /**
- * Phase-1 SQLite reference backend. Single writer connection (owned by the WriterLoop
- * thread that calls writeBatch / delete). Reads open a fresh connection per call —
- * WAL mode permits concurrent readers alongside the writer.
+ * Phase-1 SQLite reference backend. Each {@link StorageEventHandler} owns its own
+ * write connection in autoCommit=false mode, so cross-category commits never tread
+ * on each other's in-flight transactions. SQLite's file-level locking serializes
+ * the actual writes; the per-handler isolation just keeps transaction boundaries
+ * clean. Reads open a fresh connection per call — WAL mode permits concurrent
+ * readers alongside the writers.
+ * <p>
+ * {@link #writeRecordsDirect(Category, List)} is a record-taking bulk-load escape
+ * hatch for one-shot importers (e.g. LegacyMigrator) that want to bypass the
+ * ring; it uses the backend's shared {@code writeConn} under {@code writeMutex}.
  */
 @ApiStatus.Internal
 public final class SqliteBackend implements Backend {
 
     public static final String ID = "sqlite";
 
+    private static final String INSERT_VIOLATIONS =
+            "INSERT INTO grim_violations(session_id, player_uuid, check_id, vl, occurred_at, verbose, verbose_format) "
+                    + "VALUES (?, ?, ?, ?, ?, ?, ?)";
+
+    private static final String UPSERT_SESSIONS =
+            "INSERT INTO grim_sessions(session_id, player_uuid, server_name, started_at, last_activity, "
+                    + "grim_version, client_brand, client_version, server_version, replay_clips_json) "
+                    + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                    + "ON CONFLICT(session_id) DO UPDATE SET "
+                    + "server_name=excluded.server_name, "
+                    + "last_activity=excluded.last_activity, "
+                    + "grim_version=excluded.grim_version, "
+                    + "client_brand=excluded.client_brand, "
+                    + "client_version=excluded.client_version, "
+                    + "server_version=excluded.server_version, "
+                    + "replay_clips_json=excluded.replay_clips_json";
+
+    private static final String UPSERT_IDENTITIES =
+            "INSERT INTO grim_players(uuid, current_name, first_seen, last_seen) "
+                    + "VALUES (?, ?, ?, ?) "
+                    + "ON CONFLICT(uuid) DO UPDATE SET "
+                    + "current_name = excluded.current_name, "
+                    + "first_seen = min(first_seen, excluded.first_seen), "
+                    + "last_seen = max(last_seen, excluded.last_seen)";
+
+    private static final String UPSERT_SETTINGS =
+            "INSERT INTO grim_settings(scope, scope_key, key, value, updated_at) "
+                    + "VALUES (?, ?, ?, ?, ?) "
+                    + "ON CONFLICT(scope, scope_key, key) DO UPDATE SET "
+                    + "value = excluded.value, "
+                    + "updated_at = excluded.updated_at";
+
     private final SqliteBackendConfig config;
+    private final Object writeMutex = new Object();
+    private final List<BatchingHandler<?>> handlers = new ArrayList<>();
     private String jdbcUrl;
     private Connection writeConn;
 
@@ -53,18 +99,12 @@ public final class SqliteBackend implements Backend {
         this.config = config;
     }
 
-    @Override
-    public String id() {
-        return ID;
-    }
+    @Override public @NotNull String id() { return ID; }
+
+    @Override public @NotNull ApiVersion getApiVersion() { return ApiVersion.CURRENT; }
 
     @Override
-    public ApiVersion getApiVersion() {
-        return ApiVersion.CURRENT;
-    }
-
-    @Override
-    public EnumSet<Capability> capabilities() {
+    public @NotNull EnumSet<Capability> capabilities() {
         return EnumSet.of(
                 Capability.INDEXED_KV,
                 Capability.TIMESERIES_APPEND,
@@ -75,7 +115,7 @@ public final class SqliteBackend implements Backend {
     }
 
     @Override
-    public Set<Category<?>> supportedCategories() {
+    public @NotNull Set<Category<?>> supportedCategories() {
         return Set.of(
                 Categories.VIOLATION,
                 Categories.SESSION,
@@ -84,7 +124,7 @@ public final class SqliteBackend implements Backend {
     }
 
     @Override
-    public synchronized void init(BackendContext ctx) throws BackendException {
+    public void init(@NotNull BackendContext ctx) throws BackendException {
         Path dataDir = ctx.dataDirectory();
         Path dbFile = Path.of(config.path()).isAbsolute()
                 ? Path.of(config.path())
@@ -96,22 +136,25 @@ public final class SqliteBackend implements Backend {
         }
         this.jdbcUrl = "jdbc:sqlite:" + dbFile.toAbsolutePath();
         try {
-            // Load driver explicitly — shaded deployments sometimes need this.
             Class.forName("org.sqlite.JDBC");
         } catch (ClassNotFoundException cnf) {
             throw new BackendException("sqlite-jdbc not on the classpath", cnf);
         }
-        try {
-            this.writeConn = openConnection();
-            try (Statement s = writeConn.createStatement()) {
-                s.execute("PRAGMA journal_mode=" + config.journalMode());
-                s.execute("PRAGMA synchronous=" + config.synchronousMode());
-                s.execute("PRAGMA busy_timeout=" + config.busyTimeoutMs());
-                s.execute("PRAGMA cache_size=" + config.cachePages());
+        synchronized (writeMutex) {
+            try {
+                this.writeConn = openConnection();
+                try (Statement s = writeConn.createStatement()) {
+                    s.execute("PRAGMA journal_mode=" + config.journalMode());
+                    s.execute("PRAGMA synchronous=" + config.synchronousMode());
+                    s.execute("PRAGMA busy_timeout=" + config.busyTimeoutMs());
+                    s.execute("PRAGMA cache_size=" + config.cachePages());
+                }
+                SqliteSchema.ensureInitialized(writeConn, "phase1");
+                // writeConn stays in autoCommit=true; write ops that batch wrap their own
+                // setAutoCommit(false) / commit cycle.
+            } catch (SQLException e) {
+                throw new BackendException("failed to initialise SQLite backend", e);
             }
-            SqliteSchema.ensureInitialized(writeConn, "phase1");
-        } catch (SQLException e) {
-            throw new BackendException("failed to initialise SQLite backend", e);
         }
     }
 
@@ -124,46 +167,200 @@ public final class SqliteBackend implements Backend {
     }
 
     @Override
-    public synchronized void flush() {
-        // WAL mode commits on each transaction; nothing extra to do here for phase 1.
+    public void flush() throws BackendException {
+        // Handlers commit on endOfBatch; nothing to flush explicitly here. Shutdown
+        // drains the rings, which forces each handler's last batch through before
+        // close() is called.
     }
 
     @Override
-    public synchronized void close() throws BackendException {
-        try {
-            if (writeConn != null) writeConn.close();
-        } catch (SQLException e) {
-            throw new BackendException("close failed", e);
-        } finally {
-            writeConn = null;
+    public void close() throws BackendException {
+        synchronized (handlers) {
+            for (BatchingHandler<?> h : handlers) h.shutDown();
+            handlers.clear();
+        }
+        synchronized (writeMutex) {
+            try {
+                if (writeConn != null) writeConn.close();
+            } catch (SQLException e) {
+                throw new BackendException("close failed", e);
+            } finally {
+                writeConn = null;
+            }
         }
     }
 
     @Override
     @SuppressWarnings("unchecked")
-    public synchronized <R> void writeBatch(Category<R> cat, List<R> records) throws BackendException {
-        if (records.isEmpty()) return;
-        if (writeConn == null) throw new BackendException("backend not initialised");
-        try {
-            writeConn.setAutoCommit(false);
-            if (cat == Categories.VIOLATION) writeViolations((List<ViolationRecord>) records);
-            else if (cat == Categories.SESSION) writeSessions((List<SessionRecord>) records);
-            else if (cat == Categories.PLAYER_IDENTITY) writeIdentities((List<PlayerIdentity>) records);
-            else if (cat == Categories.SETTING) writeSettings((List<SettingRecord>) records);
-            else throw new BackendException("unsupported category: " + cat.id());
-            writeConn.commit();
-        } catch (SQLException e) {
-            try { writeConn.rollback(); } catch (SQLException ignore) {}
-            throw new BackendException("writeBatch failed for " + cat.id(), e);
-        } finally {
-            try { writeConn.setAutoCommit(true); } catch (SQLException ignore) {}
+    public @NotNull <E> StorageEventHandler<E> eventHandlerFor(@NotNull Category<E> cat) throws BackendException {
+        BatchingHandler<?> h;
+        if (cat == Categories.VIOLATION) h = new ViolationHandler();
+        else if (cat == Categories.SESSION) h = new SessionHandler();
+        else if (cat == Categories.PLAYER_IDENTITY) h = new IdentityHandler();
+        else if (cat == Categories.SETTING) h = new SettingHandler();
+        else throw new IllegalArgumentException("unsupported category: " + cat.id());
+        h.start();
+        synchronized (handlers) { handlers.add(h); }
+        return (StorageEventHandler<E>) h;
+    }
+
+    /**
+     * Per-category handler that owns a dedicated write connection. The connection
+     * stays in autoCommit=false mode for the handler's lifetime; {@code flushLocked}
+     * commits and resets the pending count. Per-handler connections keep each
+     * category's transaction timeline independent of sibling categories.
+     */
+    private abstract class BatchingHandler<E> implements StorageEventHandler<E> {
+        private Connection conn;
+        private PreparedStatement stmt;
+        private int pending;
+
+        void start() throws BackendException {
+            try {
+                this.conn = openConnection();
+                conn.setAutoCommit(false);
+            } catch (SQLException e) {
+                throw new BackendException("init failed for " + categoryId(), e);
+            }
+        }
+
+        @Override
+        public synchronized void onEvent(E event, long sequence, boolean endOfBatch) throws BackendException {
+            if (conn == null) return; // closed
+            try {
+                if (stmt == null) stmt = conn.prepareStatement(sql());
+                bind(stmt, event);
+                stmt.addBatch();
+                pending++;
+                if (endOfBatch || pending >= config.batchFlushCap()) flushLocked();
+            } catch (SQLException e) {
+                abortLocked();
+                throw new BackendException(categoryId() + " write failed", e);
+            }
+        }
+
+        private void flushLocked() throws SQLException {
+            if (pending == 0) return;
+            stmt.executeBatch();
+            conn.commit();
+            pending = 0;
+        }
+
+        private void abortLocked() {
+            try { if (conn != null) conn.rollback(); } catch (SQLException ignore) {}
+            try { if (stmt != null) { stmt.close(); stmt = null; } } catch (SQLException ignore) {}
+            pending = 0;
+        }
+
+        synchronized void shutDown() {
+            try { if (pending > 0 && stmt != null) { stmt.executeBatch(); conn.commit(); } }
+            catch (SQLException ignore) {}
+            try { if (stmt != null) stmt.close(); } catch (SQLException ignore) {}
+            try { if (conn != null) conn.close(); } catch (SQLException ignore) {}
+            stmt = null;
+            conn = null;
+            pending = 0;
+        }
+
+        protected abstract String sql();
+        protected abstract String categoryId();
+        protected abstract void bind(PreparedStatement ps, E event) throws SQLException;
+    }
+
+    private final class ViolationHandler extends BatchingHandler<ViolationEvent> {
+        @Override protected String sql() { return INSERT_VIOLATIONS; }
+        @Override protected String categoryId() { return "violation"; }
+        @Override
+        protected void bind(PreparedStatement ps, ViolationEvent v) throws SQLException {
+            ps.setBytes(1, UuidCodec.toBytes(v.sessionId()));
+            ps.setBytes(2, UuidCodec.toBytes(v.playerUuid()));
+            ps.setInt(3, v.checkId());
+            ps.setDouble(4, v.vl());
+            ps.setLong(5, v.occurredEpochMs());
+            ps.setString(6, v.verbose());
+            ps.setString(7, v.verboseFormat().name());
         }
     }
 
-    private void writeViolations(List<ViolationRecord> rows) throws SQLException {
-        try (PreparedStatement ps = writeConn.prepareStatement(
-                "INSERT INTO grim_violations(session_id, player_uuid, check_id, vl, occurred_at, verbose, verbose_format) "
-                        + "VALUES (?, ?, ?, ?, ?, ?, ?)")) {
+    private final class SessionHandler extends BatchingHandler<SessionEvent> {
+        @Override protected String sql() { return UPSERT_SESSIONS; }
+        @Override protected String categoryId() { return "session"; }
+        @Override
+        protected void bind(PreparedStatement ps, SessionEvent s) throws SQLException {
+            ps.setBytes(1, UuidCodec.toBytes(s.sessionId()));
+            ps.setBytes(2, UuidCodec.toBytes(s.playerUuid()));
+            ps.setString(3, s.serverName());
+            ps.setLong(4, s.startedEpochMs());
+            ps.setLong(5, s.lastActivityEpochMs());
+            ps.setString(6, s.grimVersion());
+            ps.setString(7, s.clientBrand());
+            ps.setString(8, s.clientVersionString());
+            ps.setString(9, s.serverVersionString());
+            ps.setString(10, s.replayClips().isEmpty() ? "[]" : serializeReplayClipsShim());
+        }
+    }
+
+    private final class IdentityHandler extends BatchingHandler<PlayerIdentityEvent> {
+        @Override protected String sql() { return UPSERT_IDENTITIES; }
+        @Override protected String categoryId() { return "player-identity"; }
+        @Override
+        protected void bind(PreparedStatement ps, PlayerIdentityEvent e) throws SQLException {
+            ps.setBytes(1, UuidCodec.toBytes(e.uuid()));
+            ps.setString(2, e.currentName());
+            ps.setLong(3, e.firstSeenEpochMs());
+            ps.setLong(4, e.lastSeenEpochMs());
+        }
+    }
+
+    private final class SettingHandler extends BatchingHandler<SettingEvent> {
+        @Override protected String sql() { return UPSERT_SETTINGS; }
+        @Override protected String categoryId() { return "setting"; }
+        @Override
+        protected void bind(PreparedStatement ps, SettingEvent s) throws SQLException {
+            ps.setString(1, s.scope().name());
+            ps.setString(2, s.scopeKey());
+            ps.setString(3, s.key());
+            ps.setBytes(4, s.value());
+            ps.setLong(5, s.updatedEpochMs());
+        }
+    }
+
+    private static String serializeReplayClipsShim() {
+        throw new UnsupportedOperationException(
+                "replay clip serialization is phase-3 scope; phase 1 sessions must have empty replayClips");
+    }
+
+    // --- migration / bulk-load path (bypasses rings, shared writeConn) ------
+
+    /**
+     * Record-taking direct write for {@link ac.grim.grimac.internal.storage.migrate.LegacyMigrator}
+     * and similar one-shot importers. Uses the backend's shared {@code writeConn}
+     * (not a handler conn) so callers can interleave with {@link #writeConnection()}
+     * metadata updates under the same mutex.
+     */
+    public void writeRecordsDirect(Category<?> cat, List<?> records) throws BackendException {
+        if (records.isEmpty()) return;
+        synchronized (writeMutex) {
+            if (writeConn == null) throw new BackendException("backend not initialised");
+            try {
+                writeConn.setAutoCommit(false);
+                if (cat == Categories.VIOLATION) writeViolationRecords((List<ViolationRecord>) records);
+                else if (cat == Categories.SESSION) writeSessionRecords((List<SessionRecord>) records);
+                else if (cat == Categories.PLAYER_IDENTITY) writeIdentityRecords((List<PlayerIdentity>) records);
+                else if (cat == Categories.SETTING) writeSettingRecords((List<SettingRecord>) records);
+                else throw new BackendException("unsupported category: " + cat.id());
+                writeConn.commit();
+            } catch (SQLException e) {
+                try { writeConn.rollback(); } catch (SQLException ignore) {}
+                throw new BackendException("writeRecordsDirect failed for " + cat.id(), e);
+            } finally {
+                try { writeConn.setAutoCommit(true); } catch (SQLException ignore) {}
+            }
+        }
+    }
+
+    private void writeViolationRecords(List<ViolationRecord> rows) throws SQLException {
+        try (PreparedStatement ps = writeConn.prepareStatement(INSERT_VIOLATIONS)) {
             for (ViolationRecord v : rows) {
                 ps.setBytes(1, UuidCodec.toBytes(v.sessionId()));
                 ps.setBytes(2, UuidCodec.toBytes(v.playerUuid()));
@@ -178,19 +375,8 @@ public final class SqliteBackend implements Backend {
         }
     }
 
-    private void writeSessions(List<SessionRecord> rows) throws SQLException {
-        try (PreparedStatement ps = writeConn.prepareStatement(
-                "INSERT INTO grim_sessions(session_id, player_uuid, server_name, started_at, last_activity, "
-                        + "grim_version, client_brand, client_version, server_version, replay_clips_json) "
-                        + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
-                        + "ON CONFLICT(session_id) DO UPDATE SET "
-                        + "server_name=excluded.server_name, "
-                        + "last_activity=excluded.last_activity, "
-                        + "grim_version=excluded.grim_version, "
-                        + "client_brand=excluded.client_brand, "
-                        + "client_version=excluded.client_version, "
-                        + "server_version=excluded.server_version, "
-                        + "replay_clips_json=excluded.replay_clips_json")) {
+    private void writeSessionRecords(List<SessionRecord> rows) throws SQLException {
+        try (PreparedStatement ps = writeConn.prepareStatement(UPSERT_SESSIONS)) {
             for (SessionRecord s : rows) {
                 ps.setBytes(1, UuidCodec.toBytes(s.sessionId()));
                 ps.setBytes(2, UuidCodec.toBytes(s.playerUuid()));
@@ -201,30 +387,15 @@ public final class SqliteBackend implements Backend {
                 ps.setString(7, s.clientBrand());
                 ps.setString(8, s.clientVersionString());
                 ps.setString(9, s.serverVersionString());
-                // Phase 1 stores replay clips as an empty JSON array. Phase 3 replay work
-                // will introduce a proper codec; for now just record the shape.
-                ps.setString(10, s.replayClips().isEmpty() ? "[]" : serializeReplayClipsShim(s));
+                ps.setString(10, s.replayClips().isEmpty() ? "[]" : serializeReplayClipsShim());
                 ps.addBatch();
             }
             ps.executeBatch();
         }
     }
 
-    private static String serializeReplayClipsShim(SessionRecord s) {
-        // Phase 1 never writes clips; this exists only so future non-empty lists hit a
-        // clear "not implemented yet" failure rather than silently losing data.
-        throw new UnsupportedOperationException(
-                "replay clip serialization is phase-3 scope; phase 1 sessions must have empty replayClips");
-    }
-
-    private void writeIdentities(List<PlayerIdentity> rows) throws SQLException {
-        try (PreparedStatement ps = writeConn.prepareStatement(
-                "INSERT INTO grim_players(uuid, current_name, first_seen, last_seen) "
-                        + "VALUES (?, ?, ?, ?) "
-                        + "ON CONFLICT(uuid) DO UPDATE SET "
-                        + "current_name = excluded.current_name, "
-                        + "first_seen = min(first_seen, excluded.first_seen), "
-                        + "last_seen = max(last_seen, excluded.last_seen)")) {
+    private void writeIdentityRecords(List<PlayerIdentity> rows) throws SQLException {
+        try (PreparedStatement ps = writeConn.prepareStatement(UPSERT_IDENTITIES)) {
             for (PlayerIdentity id : rows) {
                 ps.setBytes(1, UuidCodec.toBytes(id.uuid()));
                 ps.setString(2, id.currentName());
@@ -236,13 +407,8 @@ public final class SqliteBackend implements Backend {
         }
     }
 
-    private void writeSettings(List<SettingRecord> rows) throws SQLException {
-        try (PreparedStatement ps = writeConn.prepareStatement(
-                "INSERT INTO grim_settings(scope, scope_key, key, value, updated_at) "
-                        + "VALUES (?, ?, ?, ?, ?) "
-                        + "ON CONFLICT(scope, scope_key, key) DO UPDATE SET "
-                        + "value = excluded.value, "
-                        + "updated_at = excluded.updated_at")) {
+    private void writeSettingRecords(List<SettingRecord> rows) throws SQLException {
+        try (PreparedStatement ps = writeConn.prepareStatement(UPSERT_SETTINGS)) {
             for (SettingRecord s : rows) {
                 ps.setString(1, s.scope().name());
                 ps.setString(2, s.scopeKey());
@@ -255,9 +421,11 @@ public final class SqliteBackend implements Backend {
         }
     }
 
+    // --- read path ----------------------------------------------------------
+
     @Override
     @SuppressWarnings("unchecked")
-    public <R> Page<R> read(Category<R> cat, Query<R> query) throws BackendException {
+    public @NotNull <R> Page<R> read(@NotNull Category<?> cat, @NotNull Query<R> query) throws BackendException {
         try (Connection c = openConnection()) {
             if (query instanceof Queries.ListSessionsByPlayer q) {
                 return (Page<R>) listSessionsByPlayer(c, q);
@@ -440,61 +608,61 @@ public final class SqliteBackend implements Backend {
     }
 
     @Override
-    public synchronized <R> void delete(Category<R> cat, DeleteCriteria criteria) throws BackendException {
-        if (writeConn == null) throw new BackendException("backend not initialised");
-        try {
-            writeConn.setAutoCommit(false);
-            if (criteria instanceof Deletes.ByPlayer d) {
-                byte[] uuid = UuidCodec.toBytes(d.uuid());
-                if (cat == Categories.VIOLATION) execDelete("DELETE FROM grim_violations WHERE player_uuid = ?", uuid);
-                else if (cat == Categories.SESSION) {
-                    // Children first: delete violations belonging to this player's sessions.
-                    execDelete("DELETE FROM grim_violations WHERE player_uuid = ?", uuid);
-                    execDelete("DELETE FROM grim_sessions WHERE player_uuid = ?", uuid);
-                } else if (cat == Categories.PLAYER_IDENTITY) {
-                    execDelete("DELETE FROM grim_players WHERE uuid = ?", uuid);
-                } else if (cat == Categories.SETTING) {
-                    try (PreparedStatement ps = writeConn.prepareStatement(
-                            "DELETE FROM grim_settings WHERE scope = 'PLAYER' AND scope_key = ?")) {
-                        ps.setString(1, d.uuid().toString());
-                        ps.executeUpdate();
+    public <E> void delete(@NotNull Category<E> cat, @NotNull DeleteCriteria criteria) throws BackendException {
+        synchronized (writeMutex) {
+            if (writeConn == null) throw new BackendException("backend not initialised");
+            try {
+                writeConn.setAutoCommit(false);
+                if (criteria instanceof Deletes.ByPlayer d) {
+                    byte[] uuid = UuidCodec.toBytes(d.uuid());
+                    if (cat == Categories.VIOLATION) execDelete("DELETE FROM grim_violations WHERE player_uuid = ?", uuid);
+                    else if (cat == Categories.SESSION) {
+                        execDelete("DELETE FROM grim_violations WHERE player_uuid = ?", uuid);
+                        execDelete("DELETE FROM grim_sessions WHERE player_uuid = ?", uuid);
+                    } else if (cat == Categories.PLAYER_IDENTITY) {
+                        execDelete("DELETE FROM grim_players WHERE uuid = ?", uuid);
+                    } else if (cat == Categories.SETTING) {
+                        try (PreparedStatement ps = writeConn.prepareStatement(
+                                "DELETE FROM grim_settings WHERE scope = 'PLAYER' AND scope_key = ?")) {
+                            ps.setString(1, d.uuid().toString());
+                            ps.executeUpdate();
+                        }
+                    } else {
+                        throw new BackendException("unsupported category for delete: " + cat.id());
+                    }
+                } else if (criteria instanceof Deletes.OlderThan d) {
+                    long cutoff = System.currentTimeMillis() - d.maxAgeMs();
+                    if (cat == Categories.SESSION) {
+                        try (PreparedStatement ps = writeConn.prepareStatement(
+                                "DELETE FROM grim_violations WHERE session_id IN "
+                                        + "(SELECT session_id FROM grim_sessions WHERE started_at < ?)")) {
+                            ps.setLong(1, cutoff);
+                            ps.executeUpdate();
+                        }
+                        try (PreparedStatement ps = writeConn.prepareStatement(
+                                "DELETE FROM grim_sessions WHERE started_at < ?")) {
+                            ps.setLong(1, cutoff);
+                            ps.executeUpdate();
+                        }
+                    } else if (cat == Categories.VIOLATION) {
+                        try (PreparedStatement ps = writeConn.prepareStatement(
+                                "DELETE FROM grim_violations WHERE occurred_at < ?")) {
+                            ps.setLong(1, cutoff);
+                            ps.executeUpdate();
+                        }
+                    } else {
+                        throw new BackendException("unsupported category for retention: " + cat.id());
                     }
                 } else {
-                    throw new BackendException("unsupported category for delete: " + cat.id());
+                    throw new BackendException("unknown DeleteCriteria: " + criteria.getClass().getSimpleName());
                 }
-            } else if (criteria instanceof Deletes.OlderThan d) {
-                long cutoff = System.currentTimeMillis() - d.maxAgeMs();
-                if (cat == Categories.SESSION) {
-                    // Delete violations first to keep things consistent.
-                    try (PreparedStatement ps = writeConn.prepareStatement(
-                            "DELETE FROM grim_violations WHERE session_id IN "
-                                    + "(SELECT session_id FROM grim_sessions WHERE started_at < ?)")) {
-                        ps.setLong(1, cutoff);
-                        ps.executeUpdate();
-                    }
-                    try (PreparedStatement ps = writeConn.prepareStatement(
-                            "DELETE FROM grim_sessions WHERE started_at < ?")) {
-                        ps.setLong(1, cutoff);
-                        ps.executeUpdate();
-                    }
-                } else if (cat == Categories.VIOLATION) {
-                    try (PreparedStatement ps = writeConn.prepareStatement(
-                            "DELETE FROM grim_violations WHERE occurred_at < ?")) {
-                        ps.setLong(1, cutoff);
-                        ps.executeUpdate();
-                    }
-                } else {
-                    throw new BackendException("unsupported category for retention: " + cat.id());
-                }
-            } else {
-                throw new BackendException("unknown DeleteCriteria: " + criteria.getClass().getSimpleName());
+                writeConn.commit();
+            } catch (SQLException e) {
+                try { writeConn.rollback(); } catch (SQLException ignore) {}
+                throw new BackendException("delete failed", e);
+            } finally {
+                try { writeConn.setAutoCommit(true); } catch (SQLException ignore) {}
             }
-            writeConn.commit();
-        } catch (SQLException e) {
-            try { writeConn.rollback(); } catch (SQLException ignore) {}
-            throw new BackendException("delete failed", e);
-        } finally {
-            try { writeConn.setAutoCommit(true); } catch (SQLException ignore) {}
         }
     }
 
@@ -506,7 +674,7 @@ public final class SqliteBackend implements Backend {
     }
 
     @Override
-    public long countViolationsInSession(UUID sessionId) throws BackendException {
+    public long countViolationsInSession(@NotNull UUID sessionId) throws BackendException {
         try (Connection c = openConnection();
              PreparedStatement ps = c.prepareStatement(
                      "SELECT COUNT(*) FROM grim_violations WHERE session_id = ?")) {
@@ -521,8 +689,6 @@ public final class SqliteBackend implements Backend {
     }
 
     // --- cursor helpers ----------------------------------------------------
-    // Session cursor = "<started_at>:<session_id_hex>"
-    // Violation cursor = "v:<occurred_at>:<id>"
 
     private static Cursor encodeStartedCursor(long started, UUID sessionId) {
         return new Cursor(started + ":" + sessionId.toString().replace("-", ""));
@@ -580,8 +746,6 @@ public final class SqliteBackend implements Backend {
         }
     }
 
-    // Exposed for LegacyMigrator / tests — direct connection access for bulk work
-    // that needs to bypass the async queue.
     @ApiStatus.Internal
     public Connection writeConnection() {
         return writeConn;
