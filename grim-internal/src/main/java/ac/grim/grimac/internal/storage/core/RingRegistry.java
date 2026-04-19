@@ -6,6 +6,7 @@ import ac.grim.grimac.api.storage.backend.StorageEventHandler;
 import ac.grim.grimac.api.storage.category.Category;
 import ac.grim.grimac.api.storage.config.WritePathConfig;
 import com.lmax.disruptor.BatchEventProcessor;
+import com.lmax.disruptor.EventTranslatorOneArg;
 import com.lmax.disruptor.RingBuffer;
 import com.lmax.disruptor.dsl.Disruptor;
 import com.lmax.disruptor.dsl.ProducerType;
@@ -68,6 +69,10 @@ public final class RingRegistry {
     /**
      * Claim a slot on the category's ring and pass it to {@code configurer} for
      * population. Drops and accounts on full ring; never blocks.
+     * <p>
+     * Uses Disruptor's {@code EventTranslatorOneArg} form to pass the configurer
+     * through without capturing any local state — the translator instance is a
+     * stateless JIT-cacheable singleton.
      */
     public <E> boolean submit(@NotNull Category<E> cat, @NotNull java.util.function.Consumer<E> configurer) {
         @SuppressWarnings("unchecked")
@@ -75,10 +80,7 @@ public final class RingRegistry {
         if (e == null) {
             throw new IllegalArgumentException("no ring registered for category " + cat.id());
         }
-        boolean ok = e.ring.tryPublishEvent((event, seq) -> {
-            event = resetIfKnown(event);
-            configurer.accept(event);
-        });
+        boolean ok = e.ring.tryPublishEvent(PUBLISH_TRANSLATOR, configurer);
         if (ok) {
             submittedTotal.incrementAndGet();
         } else {
@@ -86,6 +88,12 @@ public final class RingRegistry {
         }
         return ok;
     }
+
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    private static final EventTranslatorOneArg PUBLISH_TRANSLATOR = (event, sequence, cfg) -> {
+        Object slot = resetIfKnown(event);
+        ((java.util.function.Consumer) cfg).accept(slot);
+    };
 
     /**
      * Events stay live between publishes, so before handing the slot back to the
