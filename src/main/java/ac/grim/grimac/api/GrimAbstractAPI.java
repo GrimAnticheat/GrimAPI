@@ -6,6 +6,7 @@ import ac.grim.grimac.api.config.ConfigManager;
 import ac.grim.grimac.api.config.ConfigReloadable;
 import ac.grim.grimac.api.event.EventBus;
 import ac.grim.grimac.api.plugin.GrimPlugin;
+import ac.grim.grimac.api.storage.backend.BackendRegistry;
 import org.bukkit.entity.Player;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
@@ -131,5 +132,16 @@ public interface GrimAbstractAPI extends ConfigReloadable, BasicReloadable {
      * @throws IllegalArgumentException If the provided context is not a valid plugin, mod, or class known to the platform.
      */
     @NotNull GrimPlugin getGrimPlugin(@NotNull Object platformContext);
+
+    /**
+     * Returns the mutable registry of storage {@code BackendProvider}s. External extensions
+     * register their providers here before the data store starts, enabling them to contribute
+     * custom storage engines (e.g. MySQL, Postgres, Redis) without forking the platform.
+     * <p>
+     * Registrations made after the data store has started do not retroactively affect its
+     * already-built routing; register during plugin load, or before the Grim plugin finishes
+     * enabling.
+     */
+    @NotNull BackendRegistry getBackendRegistry();
 
 }
