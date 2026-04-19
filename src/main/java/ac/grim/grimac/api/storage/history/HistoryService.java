@@ -1,32 +1,41 @@
 package ac.grim.grimac.api.storage.history;
 
 import ac.grim.grimac.api.storage.query.Cursor;
+import ac.grim.grimac.api.storage.query.Page;
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
-import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CompletionStage;
 
 /**
- * High-level history facade. Returns {@link RenderedHistoryLine} — platform-neutral
- * structured output that each platform's command layer converts to its chat format.
+ * High-level history facade. Returns pure data records — each platform's command
+ * layer formats these into its own chat component model.
  * <p>
  * Phase-1 surface covers the two {@code /grim history} use cases (list sessions for a
- * player + show detail of one session).
+ * player + show detail of one session). Rendering lives in Layer 3 (e.g. the 2.0
+ * command module's {@code HistoryComponentRenderer}); this interface carries zero
+ * chat-library types on purpose.
  */
 @ApiStatus.Experimental
 public interface HistoryService {
 
-    @NotNull CompletionStage<SessionListResult> renderSessionList(@NotNull UUID player, @Nullable Cursor cursor, int pageSize);
+    /**
+     * Paged listing of a player's sessions, newest first. {@code pageOrdinal} on each
+     * summary is a page-local label — see {@link SessionSummary}.
+     */
+    @NotNull CompletionStage<@NotNull Page<SessionSummary>> listSessions(
+            @NotNull UUID player,
+            @Nullable Cursor cursor,
+            int pageSize);
 
-    @NotNull CompletionStage<List<RenderedHistoryLine>> renderSessionDetail(@NotNull UUID player, @NotNull UUID sessionId, @NotNull RenderOptions opts);
-
-    record SessionListResult(@NotNull List<RenderedHistoryLine> lines, @Nullable Cursor nextCursor, int totalPagesHint) {
-
-        public SessionListResult {
-            lines = lines == null ? List.of() : List.copyOf(lines);
-        }
-    }
+    /**
+     * Detail view for one session. Returns {@code null} when the session does not
+     * exist <em>or</em> belongs to a different player — collapsing those two cases
+     * keeps the surface minimal; commands surface a single "not found" message.
+     */
+    @NotNull CompletionStage<@Nullable SessionDetail> getSessionDetail(
+            @NotNull UUID player,
+            @NotNull UUID sessionId);
 }

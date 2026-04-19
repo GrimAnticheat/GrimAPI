@@ -4,12 +4,14 @@ import ac.grim.grimac.api.storage.backend.Backend;
 import ac.grim.grimac.api.storage.category.Categories;
 import ac.grim.grimac.api.storage.category.Category;
 import ac.grim.grimac.api.storage.config.WritePathConfig;
-import ac.grim.grimac.api.storage.history.HistoryService;
-import ac.grim.grimac.api.storage.history.RenderOptions;
-import ac.grim.grimac.api.storage.history.RenderedHistoryLine;
+import ac.grim.grimac.api.storage.history.CheckBucket;
+import ac.grim.grimac.api.storage.history.SessionDetail;
+import ac.grim.grimac.api.storage.history.SessionSummary;
+import ac.grim.grimac.api.storage.history.ViolationEntry;
 import ac.grim.grimac.api.storage.model.SessionRecord;
 import ac.grim.grimac.api.storage.model.VerboseFormat;
 import ac.grim.grimac.api.storage.model.ViolationRecord;
+import ac.grim.grimac.api.storage.query.Page;
 import ac.grim.grimac.internal.storage.backend.memory.InMemoryBackend;
 import ac.grim.grimac.internal.storage.checks.CheckRegistry;
 import ac.grim.grimac.internal.storage.core.CategoryRouter;
@@ -27,7 +29,8 @@ import java.util.concurrent.TimeUnit;
 import java.util.logging.Logger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class HistoryServiceImplTest {
@@ -62,17 +65,16 @@ final class HistoryServiceImplTest {
     }
 
     @Test
-    void emptyHistoryRendersFriendlyMessage() throws Exception {
+    void emptyHistoryReturnsEmptyPage() throws Exception {
         UUID player = UUID.randomUUID();
-        HistoryService.SessionListResult res = service.renderSessionList(player, null, 0)
+        Page<SessionSummary> page = service.listSessions(player, null, 0)
                 .toCompletableFuture().get(2, TimeUnit.SECONDS);
-        assertEquals(1, res.lines().size());
-        String combined = flatten(res.lines().get(0));
-        assertTrue(combined.contains("No session history"));
+        assertTrue(page.items().isEmpty());
+        assertNull(page.nextCursor());
     }
 
     @Test
-    void sessionListRendersHeaderPlusPerSessionLine() throws Exception {
+    void sessionListReturnsOrdinalsAndCounts() throws Exception {
         UUID player = UUID.randomUUID();
         SessionRecord s1 = session(player, 1_000_000L, 1_030_000L);
         SessionRecord s2 = session(player, 2_000_000L, 2_050_000L);
@@ -83,13 +85,19 @@ final class HistoryServiceImplTest {
         store.submit(Categories.VIOLATION, violation(s2.sessionId(), player, reachId, 2_010_000L));
         awaitEmpty();
 
-        HistoryService.SessionListResult res = service.renderSessionList(player, null, 10)
+        Page<SessionSummary> page = service.listSessions(player, null, 10)
                 .toCompletableFuture().get(2, TimeUnit.SECONDS);
-        assertEquals(3, res.lines().size(), "header + 2 sessions");
-        assertTrue(flatten(res.lines().get(0)).contains("Showing session history"));
-        // Newest session shown first → ordinal N=2 ... oldest = 1.
-        assertTrue(flatten(res.lines().get(1)).contains("Session 2"));
-        assertTrue(flatten(res.lines().get(2)).contains("Session 1"));
+        assertEquals(2, page.items().size());
+
+        // Newest first: s2 (ordinal 2, 1 violation), s1 (ordinal 1, 2 violations).
+        SessionSummary newest = page.items().get(0);
+        SessionSummary oldest = page.items().get(1);
+        assertEquals(2, newest.pageOrdinal());
+        assertEquals(s2.sessionId(), newest.sessionId());
+        assertEquals(1L, newest.violationCount());
+        assertEquals(1, oldest.pageOrdinal());
+        assertEquals(s1.sessionId(), oldest.sessionId());
+        assertEquals(2L, oldest.violationCount());
     }
 
     @Test
@@ -108,17 +116,24 @@ final class HistoryServiceImplTest {
         store.submit(Categories.VIOLATION, violation(sid, player, reachId, 1_040_000L));
         awaitEmpty();
 
-        List<RenderedHistoryLine> lines = service.renderSessionDetail(player, sid,
-                        new RenderOptions(false, 30_000L))
+        SessionDetail detail = service.getSessionDetail(player, sid)
                 .toCompletableFuture().get(2, TimeUnit.SECONDS);
-        // Header lines + violations header + 2 bucket lines
-        assertTrue(lines.stream().anyMatch(l -> flatten(l).contains("session details")));
-        long bucketLines = lines.stream().filter(l -> flatten(l).startsWith("- ")).count();
-        assertEquals(2, bucketLines, "two buckets expected");
+        assertNotNull(detail);
+        assertEquals(30_000L, detail.bucketSizeMs());
+        assertEquals(2, detail.buckets().size());
+
+        CheckBucket first = detail.buckets().get(0);
+        assertEquals(0L, first.bucketStartOffsetMs());
+        assertEquals(2, first.checks().size());
+
+        CheckBucket second = detail.buckets().get(1);
+        assertEquals(30_000L, second.bucketStartOffsetMs());
+        assertEquals(1, second.checks().size());
+        assertEquals("Reach", second.checks().get(0).displayName());
     }
 
     @Test
-    void detailedFlagEmitsPerViolationLines() throws Exception {
+    void violationEntriesCarryResolvedNamesAndOffsets() throws Exception {
         UUID player = UUID.randomUUID();
         UUID sid = UUID.randomUUID();
         store.submit(Categories.SESSION, new SessionRecord(sid, player, "Prison",
@@ -126,34 +141,37 @@ final class HistoryServiceImplTest {
         store.submit(Categories.VIOLATION, violation(sid, player, reachId, 500L));
         store.submit(Categories.VIOLATION, violation(sid, player, timerId, 600L));
         awaitEmpty();
-        List<RenderedHistoryLine> lines = service.renderSessionDetail(player, sid,
-                        new RenderOptions(true, 30_000L))
+
+        SessionDetail detail = service.getSessionDetail(player, sid)
                 .toCompletableFuture().get(2, TimeUnit.SECONDS);
-        boolean anyDetail = lines.stream().anyMatch(l -> flatten(l).startsWith("    "));
-        assertTrue(anyDetail, "detailed mode should produce indented per-violation lines");
+        assertNotNull(detail);
+        assertEquals(2, detail.violations().size());
+
+        ViolationEntry first = detail.violations().get(0);
+        assertEquals("Reach", first.displayName());
+        assertEquals("combat.reach", first.stableKey());
+        assertEquals(500L, first.offsetFromSessionStartMs());
     }
 
     @Test
-    void sessionNotFoundReturnsSingleLine() throws Exception {
+    void sessionNotFoundReturnsNull() throws Exception {
         UUID player = UUID.randomUUID();
-        List<RenderedHistoryLine> lines = service.renderSessionDetail(player, UUID.randomUUID(), null)
+        SessionDetail detail = service.getSessionDetail(player, UUID.randomUUID())
                 .toCompletableFuture().get(2, TimeUnit.SECONDS);
-        assertEquals(1, lines.size());
-        assertTrue(flatten(lines.get(0)).contains("not found"));
+        assertNull(detail);
     }
 
     @Test
-    void sessionBelongingToDifferentPlayerIsRefused() throws Exception {
+    void sessionBelongingToDifferentPlayerReturnsNull() throws Exception {
         UUID alice = UUID.randomUUID();
         UUID bob = UUID.randomUUID();
         UUID sid = UUID.randomUUID();
         store.submit(Categories.SESSION, new SessionRecord(sid, alice, "Prison",
                 0L, 1_000L, "3.1.0", "vanilla", "1.21.1", "Paper", List.of()));
         awaitEmpty();
-        List<RenderedHistoryLine> lines = service.renderSessionDetail(bob, sid, null)
+        SessionDetail detail = service.getSessionDetail(bob, sid)
                 .toCompletableFuture().get(2, TimeUnit.SECONDS);
-        assertFalse(lines.isEmpty());
-        assertTrue(flatten(lines.get(0)).contains("not belong"));
+        assertNull(detail);
     }
 
     private SessionRecord session(UUID player, long start, long end) {
@@ -163,23 +181,6 @@ final class HistoryServiceImplTest {
 
     private ViolationRecord violation(UUID sid, UUID player, int checkId, long time) {
         return new ViolationRecord(0, sid, player, checkId, 1.0, time, "v", VerboseFormat.TEXT);
-    }
-
-    private String flatten(RenderedHistoryLine line) {
-        StringBuilder sb = new StringBuilder();
-        for (RenderedHistoryLine.Segment seg : line.segments()) flatten(seg, sb);
-        return sb.toString();
-    }
-
-    private void flatten(RenderedHistoryLine.Segment seg, StringBuilder sb) {
-        if (seg instanceof RenderedHistoryLine.Segment.Literal l) sb.append(l.text());
-        else if (seg instanceof RenderedHistoryLine.Segment.Styled s) sb.append(s.text());
-        else if (seg instanceof RenderedHistoryLine.Segment.Hover h) flatten(h.visible(), sb);
-        else if (seg instanceof RenderedHistoryLine.Segment.CheckRef c) sb.append(c.displayName());
-        else if (seg instanceof RenderedHistoryLine.Segment.Duration d) sb.append(d.ms()).append("ms");
-        else if (seg instanceof RenderedHistoryLine.Segment.Timestamp t) sb.append("<ts>");
-        else if (seg instanceof RenderedHistoryLine.Segment.PlayerRef p) sb.append("<p:").append(p.uuid()).append(">");
-        else if (seg instanceof RenderedHistoryLine.Segment.ClickCommand c) flatten(c.visible(), sb);
     }
 
     private void awaitEmpty() throws InterruptedException {
