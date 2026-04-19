@@ -28,6 +28,7 @@ dependencies {
     // Test framework (JUnit 5).
     testImplementation(libs.junitJupiter)
     testImplementation(libs.sqliteJdbc)
+    testCompileOnly(libs.annotations)
     testRuntimeOnly(libs.junitPlatformLauncher)
 }
 
