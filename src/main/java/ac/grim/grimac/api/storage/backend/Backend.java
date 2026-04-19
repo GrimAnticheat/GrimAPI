@@ -6,6 +6,7 @@ import ac.grim.grimac.api.storage.query.DeleteCriteria;
 import ac.grim.grimac.api.storage.query.Page;
 import ac.grim.grimac.api.storage.query.Query;
 import org.jetbrains.annotations.ApiStatus;
+import org.jetbrains.annotations.NotNull;
 
 import java.util.EnumSet;
 import java.util.List;
@@ -21,30 +22,30 @@ import java.util.Set;
 @ApiStatus.Experimental
 public interface Backend {
 
-    String id();
+    @NotNull String id();
 
-    ApiVersion getApiVersion();
+    @NotNull ApiVersion getApiVersion();
 
-    EnumSet<Capability> capabilities();
+    @NotNull EnumSet<Capability> capabilities();
 
-    Set<Category<?>> supportedCategories();
+    @NotNull Set<Category<?>> supportedCategories();
 
-    void init(BackendContext ctx) throws BackendException;
+    void init(@NotNull BackendContext ctx) throws BackendException;
 
     void flush() throws BackendException;
 
     void close() throws BackendException;
 
-    <R> void writeBatch(Category<R> cat, List<R> records) throws BackendException;
+    <R> void writeBatch(@NotNull Category<R> cat, @NotNull List<R> records) throws BackendException;
 
-    <R> Page<R> read(Category<R> cat, Query<R> query) throws BackendException;
+    @NotNull <R> Page<R> read(@NotNull Category<R> cat, @NotNull Query<R> query) throws BackendException;
 
-    <R> void delete(Category<R> cat, DeleteCriteria criteria) throws BackendException;
+    <R> void delete(@NotNull Category<R> cat, @NotNull DeleteCriteria criteria) throws BackendException;
 
     /**
      * Count violations in a session. First-class (rather than via a generic count(query))
      * because phase 1 only needs this one aggregate and making it explicit is simpler than
      * a generic count query surface.
      */
-    long countViolationsInSession(java.util.UUID sessionId) throws BackendException;
+    long countViolationsInSession(@NotNull java.util.UUID sessionId) throws BackendException;
 }

@@ -5,6 +5,7 @@ import ac.grim.grimac.api.storage.query.DeleteCriteria;
 import ac.grim.grimac.api.storage.query.Page;
 import ac.grim.grimac.api.storage.query.Query;
 import org.jetbrains.annotations.ApiStatus;
+import org.jetbrains.annotations.NotNull;
 
 import java.util.UUID;
 import java.util.concurrent.CompletionStage;
@@ -21,17 +22,17 @@ public interface DataStore {
      * services instead; direct submit is for less-hot-path writers (e.g. session updates,
      * identity upserts) where the MPSC ceremony is overkill.
      */
-    <R> void submit(Category<R> cat, R record);
+    <R> void submit(@NotNull Category<R> cat, @NotNull R record);
 
-    <R> CompletionStage<Page<R>> query(Category<R> cat, Query<R> query);
+    @NotNull <R> CompletionStage<Page<R>> query(@NotNull Category<R> cat, @NotNull Query<R> query);
 
-    <R> CompletionStage<Void> delete(Category<R> cat, DeleteCriteria criteria);
+    @NotNull <R> CompletionStage<Void> delete(@NotNull Category<R> cat, @NotNull DeleteCriteria criteria);
 
-    CompletionStage<DeletionReport> forgetPlayer(UUID uuid);
+    @NotNull CompletionStage<DeletionReport> forgetPlayer(@NotNull UUID uuid);
 
-    CompletionStage<Long> countViolationsInSession(UUID sessionId);
+    @NotNull CompletionStage<Long> countViolationsInSession(@NotNull UUID sessionId);
 
-    DataStoreMetrics metrics();
+    @NotNull DataStoreMetrics metrics();
 
     /**
      * Blocks until the MPSC queue drains or the timeout elapses. Anything left is dropped
