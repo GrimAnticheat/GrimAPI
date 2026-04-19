@@ -25,9 +25,15 @@ dependencies {
     // SQLite reference backend (Layer 2).
     compileOnly(libs.sqliteJdbc)
 
+    // Disruptor ring buffers drive the Layer 2 write path. `api` so downstream
+    // shadowed plugins pick it up transitively; Layer 3 packaging relocates
+    // com.lmax.* to avoid Log4j collisions on the classpath.
+    api(libs.disruptor)
+
     // Test framework (JUnit 5).
     testImplementation(libs.junitJupiter)
     testImplementation(libs.sqliteJdbc)
+    testImplementation(libs.disruptor)
     testCompileOnly(libs.annotations)
     testRuntimeOnly(libs.junitPlatformLauncher)
 }
