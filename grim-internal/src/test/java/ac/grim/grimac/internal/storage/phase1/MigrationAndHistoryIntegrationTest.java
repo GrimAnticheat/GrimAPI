@@ -7,8 +7,9 @@ import ac.grim.grimac.api.storage.category.Categories;
 import ac.grim.grimac.api.storage.category.Category;
 import ac.grim.grimac.api.storage.config.WritePathConfig;
 import ac.grim.grimac.api.storage.history.HistoryService;
-import ac.grim.grimac.api.storage.history.RenderOptions;
-import ac.grim.grimac.api.storage.history.RenderedHistoryLine;
+import ac.grim.grimac.api.storage.history.SessionDetail;
+import ac.grim.grimac.api.storage.history.SessionSummary;
+import ac.grim.grimac.api.storage.query.Page;
 import ac.grim.grimac.internal.storage.backend.sqlite.SqliteBackend;
 import ac.grim.grimac.internal.storage.backend.sqlite.SqliteBackendConfig;
 import ac.grim.grimac.internal.storage.checks.CheckRegistry;
@@ -27,7 +28,6 @@ import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.PreparedStatement;
 import java.sql.Statement;
-import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
@@ -40,15 +40,15 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Phase-1 exit-criteria integration: build a v0 fixture with many violations,
- * migrate to v1, query through HistoryServiceImpl, confirm structured output
- * rendered from migrated data.
+ * migrate to v1, query through HistoryServiceImpl, confirm structured data
+ * returned for migrated content.
  */
 final class MigrationAndHistoryIntegrationTest {
 
     private static final Logger LOG = Logger.getLogger("Phase1IntegrationTest");
 
     @Test
-    void migrateV0ThenRenderSessionListAndDetail(@TempDir Path tmp) throws Exception {
+    void migrateV0ThenListAndDetailSessions(@TempDir Path tmp) throws Exception {
         Path v0Path = tmp.resolve("violations.sqlite");
         Path v1Path = tmp.resolve("history.v1.db");
 
@@ -81,35 +81,28 @@ final class MigrationAndHistoryIntegrationTest {
             try {
                 HistoryService history = new HistoryServiceImpl(store, registry, 10, 30_000L);
 
-                HistoryService.SessionListResult listing = history
-                        .renderSessionList(alice, null, 10)
+                Page<SessionSummary> listing = history
+                        .listSessions(alice, null, 10)
                         .toCompletableFuture().get(5, TimeUnit.SECONDS);
                 assertNotNull(listing);
-                // Header line + session-summary lines (alice has 2 reconstructed sessions).
-                long sessionSummaryLines = listing.lines().stream()
-                        .filter(l -> flatten(l).contains("Session "))
-                        .count();
-                assertEquals(2, sessionSummaryLines, "alice should have two session summary lines");
+                assertEquals(2, listing.items().size(), "alice should have two session summaries");
+                for (SessionSummary summary : listing.items()) {
+                    assertEquals(alice, summary.playerUuid());
+                    assertTrue(summary.violationCount() > 0);
+                }
 
-                UUID firstSessionId = findSessionId(store, alice);
-                List<RenderedHistoryLine> detail = history.renderSessionDetail(alice, firstSessionId,
-                                new RenderOptions(false, 30_000L))
+                UUID firstSessionId = listing.items().get(0).sessionId();
+                SessionDetail detail = history.getSessionDetail(alice, firstSessionId)
                         .toCompletableFuture().get(5, TimeUnit.SECONDS);
-                assertTrue(detail.stream().anyMatch(l -> flatten(l).contains("session details")));
+                assertNotNull(detail);
+                assertEquals(firstSessionId, detail.sessionId());
+                assertFalse(detail.violations().isEmpty());
             } finally {
                 store.flushAndClose(1_000);
             }
         } finally {
             v1.close();
         }
-    }
-
-    private UUID findSessionId(DataStoreImpl store, UUID player) throws Exception {
-        var page = store.query(Categories.SESSION,
-                ac.grim.grimac.api.storage.query.Queries.listSessionsByPlayer(player, 5, null))
-                .toCompletableFuture().get(2, TimeUnit.SECONDS);
-        assertFalse(page.items().isEmpty());
-        return page.items().get(0).sessionId();
     }
 
     private void buildV0Fixture(Path path, UUID alice, UUID bob) throws Exception {
@@ -169,21 +162,6 @@ final class MigrationAndHistoryIntegrationTest {
         bb.putLong(u.getMostSignificantBits());
         bb.putLong(u.getLeastSignificantBits());
         return bb.array();
-    }
-
-    private static String flatten(RenderedHistoryLine line) {
-        StringBuilder sb = new StringBuilder();
-        for (RenderedHistoryLine.Segment seg : line.segments()) append(sb, seg);
-        return sb.toString();
-    }
-
-    private static void append(StringBuilder sb, RenderedHistoryLine.Segment seg) {
-        if (seg instanceof RenderedHistoryLine.Segment.Literal l) sb.append(l.text());
-        else if (seg instanceof RenderedHistoryLine.Segment.Styled s) sb.append(s.text());
-        else if (seg instanceof RenderedHistoryLine.Segment.CheckRef c) sb.append(c.displayName());
-        else if (seg instanceof RenderedHistoryLine.Segment.Duration d) sb.append(d.ms()).append("ms");
-        else if (seg instanceof RenderedHistoryLine.Segment.PlayerRef p) sb.append("<p>");
-        else if (seg instanceof RenderedHistoryLine.Segment.Timestamp t) sb.append("<ts>");
     }
 
     private record TestContext(BackendConfig config, Logger logger, Path dataDirectory) implements BackendContext {}
