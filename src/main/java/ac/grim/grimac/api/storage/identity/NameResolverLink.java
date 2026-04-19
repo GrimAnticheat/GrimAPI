@@ -1,6 +1,7 @@
 package ac.grim.grimac.api.storage.identity;
 
 import org.jetbrains.annotations.ApiStatus;
+import org.jetbrains.annotations.NotNull;
 
 import java.util.Optional;
 import java.util.UUID;
@@ -13,9 +14,9 @@ import java.util.concurrent.CompletionStage;
 @ApiStatus.Experimental
 public interface NameResolverLink {
 
-    String id();
+    @NotNull String id();
 
-    CompletionStage<Optional<UUID>> resolveByName(String name);
+    @NotNull CompletionStage<Optional<UUID>> resolveByName(@NotNull String name);
 
-    CompletionStage<Optional<String>> resolveByUuid(UUID uuid);
+    @NotNull CompletionStage<Optional<String>> resolveByUuid(@NotNull UUID uuid);
 }

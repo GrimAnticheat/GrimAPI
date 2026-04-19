@@ -2,6 +2,7 @@ package ac.grim.grimac.api.storage.submit;
 
 import ac.grim.grimac.api.storage.model.ViolationRecord;
 import org.jetbrains.annotations.ApiStatus;
+import org.jetbrains.annotations.NotNull;
 
 /**
  * Non-blocking violation submit path for the netty thread. Contract: {@link #record}
@@ -11,5 +12,5 @@ import org.jetbrains.annotations.ApiStatus;
 @ApiStatus.Experimental
 public interface ViolationSink {
 
-    SubmitResult record(ViolationRecord record);
+    @NotNull SubmitResult record(@NotNull ViolationRecord record);
 }

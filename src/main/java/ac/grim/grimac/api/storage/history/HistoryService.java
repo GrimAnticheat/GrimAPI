@@ -2,6 +2,7 @@ package ac.grim.grimac.api.storage.history;
 
 import ac.grim.grimac.api.storage.query.Cursor;
 import org.jetbrains.annotations.ApiStatus;
+import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 import java.util.List;
@@ -18,11 +19,11 @@ import java.util.concurrent.CompletionStage;
 @ApiStatus.Experimental
 public interface HistoryService {
 
-    CompletionStage<SessionListResult> renderSessionList(UUID player, @Nullable Cursor cursor, int pageSize);
+    @NotNull CompletionStage<SessionListResult> renderSessionList(@NotNull UUID player, @Nullable Cursor cursor, int pageSize);
 
-    CompletionStage<List<RenderedHistoryLine>> renderSessionDetail(UUID player, UUID sessionId, RenderOptions opts);
+    @NotNull CompletionStage<List<RenderedHistoryLine>> renderSessionDetail(@NotNull UUID player, @NotNull UUID sessionId, @NotNull RenderOptions opts);
 
-    record SessionListResult(List<RenderedHistoryLine> lines, @Nullable Cursor nextCursor, int totalPagesHint) {
+    record SessionListResult(@NotNull List<RenderedHistoryLine> lines, @Nullable Cursor nextCursor, int totalPagesHint) {
 
         public SessionListResult {
             lines = lines == null ? List.of() : List.copyOf(lines);

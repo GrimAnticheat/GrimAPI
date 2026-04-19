@@ -7,6 +7,7 @@ import ac.grim.grimac.api.storage.query.DeleteCriteria;
 import ac.grim.grimac.api.storage.query.Page;
 import ac.grim.grimac.api.storage.query.Query;
 import org.jetbrains.annotations.ApiStatus;
+import org.jetbrains.annotations.NotNull;
 
 import java.util.EnumSet;
 import java.util.Optional;
@@ -20,23 +21,23 @@ import java.util.concurrent.CompletionStage;
 @ApiStatus.Experimental
 public interface ExtensionDataStoreHandle {
 
-    String extensionId();
+    @NotNull String extensionId();
 
-    <R> Category<R> declareCategory(
-            String localId,
-            Class<R> type,
-            AccessPattern ap,
-            EnumSet<Capability> required);
+    @NotNull <R> Category<R> declareCategory(
+            @NotNull String localId,
+            @NotNull Class<R> type,
+            @NotNull AccessPattern ap,
+            @NotNull EnumSet<Capability> required);
 
-    <R> void submit(Category<R> cat, R record);
+    <R> void submit(@NotNull Category<R> cat, @NotNull R record);
 
-    <R> CompletionStage<Page<R>> query(Category<R> cat, Query<R> q);
+    @NotNull <R> CompletionStage<Page<R>> query(@NotNull Category<R> cat, @NotNull Query<R> q);
 
-    <R> CompletionStage<Void> delete(Category<R> cat, DeleteCriteria c);
+    @NotNull <R> CompletionStage<Void> delete(@NotNull Category<R> cat, @NotNull DeleteCriteria c);
 
-    void putSetting(String key, byte[] value);
+    void putSetting(@NotNull String key, byte @NotNull [] value);
 
-    Optional<byte[]> getSetting(String key);
+    @NotNull Optional<byte[]> getSetting(@NotNull String key);
 
-    BlobStoreHandle blobs();
+    @NotNull BlobStoreHandle blobs();
 }
