@@ -6,10 +6,8 @@ import ac.grim.grimac.api.storage.backend.Backend;
 import ac.grim.grimac.api.storage.category.Categories;
 import ac.grim.grimac.api.storage.category.Category;
 import ac.grim.grimac.api.storage.config.WritePathConfig;
-import ac.grim.grimac.api.storage.model.PlayerIdentity;
 import ac.grim.grimac.api.storage.model.SessionRecord;
 import ac.grim.grimac.api.storage.model.VerboseFormat;
-import ac.grim.grimac.api.storage.model.ViolationRecord;
 import ac.grim.grimac.api.storage.query.Page;
 import ac.grim.grimac.api.storage.query.Queries;
 import ac.grim.grimac.internal.storage.backend.memory.InMemoryBackend;
@@ -49,20 +47,23 @@ final class DataStoreImplTest {
 
     @AfterEach
     void tearDown() {
-        store.flushAndClose(1_000);
+        store.flushAndClose(2_000);
     }
 
     @Test
     void submitThenQueryRoundTrips() throws Exception {
         UUID player = UUID.randomUUID();
-        SessionRecord s = new SessionRecord(UUID.randomUUID(), player, "Prison", 1000, 1500,
-                "3.1.0", "vanilla", "1.21.1", "Paper", List.of());
-        store.submit(Categories.SESSION, s);
-        awaitEmptyQueue();
+        UUID sid = UUID.randomUUID();
+        store.submit(Categories.SESSION, e -> e
+                .sessionId(sid).playerUuid(player).serverName("Prison")
+                .startedEpochMs(1000).lastActivityEpochMs(1500)
+                .grimVersion("3.1.0").clientBrand("vanilla")
+                .clientVersionString("1.21.1").serverVersionString("Paper"));
+        awaitQuiesce();
         Page<SessionRecord> page = store.query(Categories.SESSION, Queries.listSessionsByPlayer(player, 10, null))
                 .toCompletableFuture().get(2, TimeUnit.SECONDS);
         assertEquals(1, page.items().size());
-        assertEquals(s.sessionId(), page.items().get(0).sessionId());
+        assertEquals(sid, page.items().get(0).sessionId());
     }
 
     @Test
@@ -70,10 +71,12 @@ final class DataStoreImplTest {
         UUID session = UUID.randomUUID();
         UUID player = UUID.randomUUID();
         for (int i = 0; i < 42; i++) {
-            store.submit(Categories.VIOLATION,
-                    new ViolationRecord(0, session, player, 1, 1.0, i * 10L, "v", VerboseFormat.TEXT));
+            final long t = i * 10L;
+            store.submit(Categories.VIOLATION, e -> e
+                    .sessionId(session).playerUuid(player).checkId(1).vl(1.0)
+                    .occurredEpochMs(t).verbose("v").verboseFormat(VerboseFormat.TEXT));
         }
-        awaitEmptyQueue();
+        awaitQuiesce();
         long count = store.countViolationsInSession(session).toCompletableFuture().get(2, TimeUnit.SECONDS);
         assertEquals(42, count);
     }
@@ -82,14 +85,20 @@ final class DataStoreImplTest {
     void forgetPlayerReportsDeletionCounts() throws Exception {
         UUID player = UUID.randomUUID();
         UUID session = UUID.randomUUID();
-        store.submit(Categories.SESSION, new SessionRecord(session, player, "Prison",
-                1000, 1000, "3.1.0", "vanilla", "1.21.1", "Paper", List.of()));
-        store.submit(Categories.PLAYER_IDENTITY, new PlayerIdentity(player, "Alice", 1000, 1000));
+        store.submit(Categories.SESSION, e -> e
+                .sessionId(session).playerUuid(player).serverName("Prison")
+                .startedEpochMs(1000).lastActivityEpochMs(1000)
+                .grimVersion("3.1.0").clientBrand("vanilla")
+                .clientVersionString("1.21.1").serverVersionString("Paper"));
+        store.submit(Categories.PLAYER_IDENTITY, e -> e
+                .uuid(player).currentName("Alice").firstSeenEpochMs(1000).lastSeenEpochMs(1000));
         for (int i = 0; i < 7; i++) {
-            store.submit(Categories.VIOLATION,
-                    new ViolationRecord(0, session, player, 1, 1.0, 1000 + i, "v", VerboseFormat.TEXT));
+            final long t = 1000 + i;
+            store.submit(Categories.VIOLATION, e -> e
+                    .sessionId(session).playerUuid(player).checkId(1).vl(1.0)
+                    .occurredEpochMs(t).verbose("v").verboseFormat(VerboseFormat.TEXT));
         }
-        awaitEmptyQueue();
+        awaitQuiesce();
 
         DeletionReport report = ((DataStore) store).forgetPlayer(player)
                 .toCompletableFuture().get(2, TimeUnit.SECONDS);
@@ -109,18 +118,21 @@ final class DataStoreImplTest {
         UUID session = UUID.randomUUID();
         UUID player = UUID.randomUUID();
         for (int i = 0; i < 20; i++) {
-            store.submit(Categories.VIOLATION,
-                    new ViolationRecord(0, session, player, 1, 1.0, i, "v", VerboseFormat.TEXT));
+            final long t = i;
+            store.submit(Categories.VIOLATION, e -> e
+                    .sessionId(session).playerUuid(player).checkId(1).vl(1.0)
+                    .occurredEpochMs(t).verbose("v").verboseFormat(VerboseFormat.TEXT));
         }
-        awaitEmptyQueue();
+        awaitQuiesce();
         assertEquals(20, store.metrics().submittedTotal());
         assertEquals(0, store.metrics().droppedOnOverflowTotal());
     }
 
-    private void awaitEmptyQueue() throws InterruptedException {
+    private void awaitQuiesce() throws InterruptedException {
         long deadline = System.currentTimeMillis() + 3_000;
         while (store.metrics().queuedCount() > 0 && System.currentTimeMillis() < deadline) {
             Thread.sleep(10);
         }
+        Thread.sleep(50);
     }
 }

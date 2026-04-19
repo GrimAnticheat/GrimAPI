@@ -9,9 +9,14 @@ public record SqliteBackendConfig(
         String journalMode,
         String synchronousMode,
         int busyTimeoutMs,
-        int cachePages) implements BackendConfig {
+        int cachePages,
+        int batchFlushCap) implements BackendConfig {
+
+    public SqliteBackendConfig {
+        if (batchFlushCap <= 0) batchFlushCap = 256;
+    }
 
     public static SqliteBackendConfig defaults(String path) {
-        return new SqliteBackendConfig(path, "WAL", "NORMAL", 5000, 10_000);
+        return new SqliteBackendConfig(path, "WAL", "NORMAL", 5000, 10_000, 256);
     }
 }

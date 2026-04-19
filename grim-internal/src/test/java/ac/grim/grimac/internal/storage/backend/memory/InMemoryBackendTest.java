@@ -22,6 +22,11 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+/**
+ * Covers the backend's read/delete surface + the {@code writeRecordsDirect}
+ * bulk-load path used by the migrator. The ring-fed event path has integration
+ * coverage via the DataStoreImpl tests.
+ */
 final class InMemoryBackendTest {
 
     private InMemoryBackend backend;
@@ -37,7 +42,7 @@ final class InMemoryBackendTest {
         SessionRecord s1 = session(player, 1000);
         SessionRecord s2 = session(player, 2000);
         SessionRecord s3 = session(player, 3000);
-        backend.writeBatch(Categories.SESSION, List.of(s1, s2, s3));
+        backend.writeRecordsDirect(Categories.SESSION, List.of(s1, s2, s3));
 
         Page<SessionRecord> page = backend.read(Categories.SESSION, Queries.listSessionsByPlayer(player, 2, null));
         assertEquals(2, page.items().size());
@@ -57,7 +62,7 @@ final class InMemoryBackendTest {
         UUID player = UUID.randomUUID();
         List<ViolationRecord> bunch = new ArrayList<>();
         for (int i = 0; i < 17; i++) bunch.add(violation(session, player, i * 100L));
-        backend.writeBatch(Categories.VIOLATION, bunch);
+        backend.writeRecordsDirect(Categories.VIOLATION, bunch);
         assertEquals(17, backend.countViolationsInSession(session));
     }
 
@@ -65,7 +70,7 @@ final class InMemoryBackendTest {
     void listViolationsInSessionOrderedAscendingTime() throws Exception {
         UUID session = UUID.randomUUID();
         UUID player = UUID.randomUUID();
-        backend.writeBatch(Categories.VIOLATION, List.of(
+        backend.writeRecordsDirect(Categories.VIOLATION, List.of(
                 violation(session, player, 3000),
                 violation(session, player, 1000),
                 violation(session, player, 2000)));
@@ -81,14 +86,14 @@ final class InMemoryBackendTest {
         UUID bob = UUID.randomUUID();
         SessionRecord sA = session(alice, 1000);
         SessionRecord sB = session(bob, 2000);
-        backend.writeBatch(Categories.SESSION, List.of(sA, sB));
-        backend.writeBatch(Categories.VIOLATION, List.of(
+        backend.writeRecordsDirect(Categories.SESSION, List.of(sA, sB));
+        backend.writeRecordsDirect(Categories.VIOLATION, List.of(
                 violation(sA.sessionId(), alice, 1100),
                 violation(sB.sessionId(), bob, 2100)));
-        backend.writeBatch(Categories.PLAYER_IDENTITY, List.of(
+        backend.writeRecordsDirect(Categories.PLAYER_IDENTITY, List.of(
                 new PlayerIdentity(alice, "Alice", 0, 1000),
                 new PlayerIdentity(bob, "Bob", 0, 2000)));
-        backend.writeBatch(Categories.SETTING, List.of(
+        backend.writeRecordsDirect(Categories.SETTING, List.of(
                 new SettingRecord(SettingScope.PLAYER, alice.toString(), "alerts", "true".getBytes(), 1000)));
 
         backend.delete(Categories.VIOLATION, Deletes.byPlayer(alice));
@@ -110,9 +115,9 @@ final class InMemoryBackendTest {
     @Test
     void playerIdentityMergesOnRepeatedWrites() throws Exception {
         UUID player = UUID.randomUUID();
-        backend.writeBatch(Categories.PLAYER_IDENTITY, List.of(
+        backend.writeRecordsDirect(Categories.PLAYER_IDENTITY, List.of(
                 new PlayerIdentity(player, "OldName", 1000, 2000)));
-        backend.writeBatch(Categories.PLAYER_IDENTITY, List.of(
+        backend.writeRecordsDirect(Categories.PLAYER_IDENTITY, List.of(
                 new PlayerIdentity(player, "NewName", 3000, 4000)));
         Page<PlayerIdentity> p = backend.read(Categories.PLAYER_IDENTITY, Queries.getPlayerIdentity(player));
         assertEquals(1, p.items().size());

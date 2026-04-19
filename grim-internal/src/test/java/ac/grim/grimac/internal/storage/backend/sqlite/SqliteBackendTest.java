@@ -60,7 +60,7 @@ final class SqliteBackendTest {
         UUID player = UUID.randomUUID();
         List<SessionRecord> sessions = new ArrayList<>();
         for (int i = 0; i < 5; i++) sessions.add(session(player, (i + 1) * 1000L));
-        backend.writeBatch(Categories.SESSION, sessions);
+        backend.writeRecordsDirect(Categories.SESSION, sessions);
 
         Page<SessionRecord> page = backend.read(Categories.SESSION, Queries.listSessionsByPlayer(player, 3, null));
         assertEquals(3, page.items().size());
@@ -79,7 +79,7 @@ final class SqliteBackendTest {
         UUID session = UUID.randomUUID();
         List<ViolationRecord> v = new ArrayList<>();
         for (int i = 0; i < 25; i++) v.add(violation(session, player, 1000L + i));
-        backend.writeBatch(Categories.VIOLATION, v);
+        backend.writeRecordsDirect(Categories.VIOLATION, v);
         assertEquals(25, backend.countViolationsInSession(session));
         Page<ViolationRecord> p = backend.read(Categories.VIOLATION, Queries.listViolationsInSession(session, 10, null));
         assertEquals(10, p.items().size());
@@ -92,8 +92,8 @@ final class SqliteBackendTest {
         UUID sid = UUID.randomUUID();
         SessionRecord v1 = new SessionRecord(sid, player, "Prison", 1000, 1000, "3.1.0", "vanilla", "1.21.1", "Paper", List.of());
         SessionRecord v2 = new SessionRecord(sid, player, "Prison", 1000, 5000, "3.1.0", "vanilla", "1.21.1", "Paper", List.of());
-        backend.writeBatch(Categories.SESSION, List.of(v1));
-        backend.writeBatch(Categories.SESSION, List.of(v2));
+        backend.writeRecordsDirect(Categories.SESSION, List.of(v1));
+        backend.writeRecordsDirect(Categories.SESSION, List.of(v2));
         Page<SessionRecord> p = backend.read(Categories.SESSION, Queries.getSessionById(sid));
         assertEquals(1, p.items().size());
         assertEquals(5000, p.items().get(0).lastActivityEpochMs());
@@ -102,8 +102,8 @@ final class SqliteBackendTest {
     @Test
     void identityUpsertMergesFirstAndLastSeen() throws Exception {
         UUID player = UUID.randomUUID();
-        backend.writeBatch(Categories.PLAYER_IDENTITY, List.of(new PlayerIdentity(player, "OldName", 2000, 3000)));
-        backend.writeBatch(Categories.PLAYER_IDENTITY, List.of(new PlayerIdentity(player, "NewName", 1000, 5000)));
+        backend.writeRecordsDirect(Categories.PLAYER_IDENTITY, List.of(new PlayerIdentity(player, "OldName", 2000, 3000)));
+        backend.writeRecordsDirect(Categories.PLAYER_IDENTITY, List.of(new PlayerIdentity(player, "NewName", 1000, 5000)));
         Page<PlayerIdentity> p = backend.read(Categories.PLAYER_IDENTITY, Queries.getPlayerIdentity(player));
         assertEquals(1, p.items().size());
         PlayerIdentity id = p.items().get(0);
@@ -115,7 +115,7 @@ final class SqliteBackendTest {
     @Test
     void nameLookupCaseInsensitive() throws Exception {
         UUID player = UUID.randomUUID();
-        backend.writeBatch(Categories.PLAYER_IDENTITY, List.of(new PlayerIdentity(player, "Alice", 1000, 1000)));
+        backend.writeRecordsDirect(Categories.PLAYER_IDENTITY, List.of(new PlayerIdentity(player, "Alice", 1000, 1000)));
         Page<PlayerIdentity> p = backend.read(Categories.PLAYER_IDENTITY, Queries.getPlayerIdentityByName("ALICE"));
         assertEquals(1, p.items().size());
         assertEquals(player, p.items().get(0).uuid());
@@ -125,7 +125,7 @@ final class SqliteBackendTest {
     void settingRoundTrip() throws Exception {
         String key = "alerts";
         UUID player = UUID.randomUUID();
-        backend.writeBatch(Categories.SETTING, List.of(
+        backend.writeRecordsDirect(Categories.SETTING, List.of(
                 new SettingRecord(SettingScope.PLAYER, player.toString(), key, "true".getBytes(), 1000)));
         Page<SettingRecord> p = backend.read(Categories.SETTING,
                 Queries.getSetting(SettingScope.PLAYER, player.toString(), key));
@@ -139,10 +139,10 @@ final class SqliteBackendTest {
         UUID bob = UUID.randomUUID();
         UUID aliceSession = UUID.randomUUID();
         UUID bobSession = UUID.randomUUID();
-        backend.writeBatch(Categories.SESSION, List.of(
+        backend.writeRecordsDirect(Categories.SESSION, List.of(
                 new SessionRecord(aliceSession, alice, "Prison", 1000, 1000, "3.1.0", "vanilla", "1.21.1", "Paper", List.of()),
                 new SessionRecord(bobSession, bob, "Prison", 2000, 2000, "3.1.0", "vanilla", "1.21.1", "Paper", List.of())));
-        backend.writeBatch(Categories.VIOLATION, List.of(
+        backend.writeRecordsDirect(Categories.VIOLATION, List.of(
                 violation(aliceSession, alice, 1100),
                 violation(bobSession, bob, 2100)));
 
@@ -160,7 +160,7 @@ final class SqliteBackendTest {
     void pagedReadPerformance100kViolations() throws Exception {
         UUID player = UUID.randomUUID();
         UUID session = UUID.randomUUID();
-        backend.writeBatch(Categories.SESSION, List.of(
+        backend.writeRecordsDirect(Categories.SESSION, List.of(
                 new SessionRecord(session, player, "Prison", 1000, 1000, "3.1.0", "vanilla", "1.21.1", "Paper", List.of())));
 
         List<ViolationRecord> batch = new ArrayList<>(1000);
@@ -168,11 +168,11 @@ final class SqliteBackendTest {
         for (int i = 0; i < total; i++) {
             batch.add(violation(session, player, 1000L + i));
             if (batch.size() == 1000) {
-                backend.writeBatch(Categories.VIOLATION, batch);
+                backend.writeRecordsDirect(Categories.VIOLATION, batch);
                 batch = new ArrayList<>(1000);
             }
         }
-        if (!batch.isEmpty()) backend.writeBatch(Categories.VIOLATION, batch);
+        if (!batch.isEmpty()) backend.writeRecordsDirect(Categories.VIOLATION, batch);
 
         // First page of 15 should come back fast.
         long start = System.nanoTime();

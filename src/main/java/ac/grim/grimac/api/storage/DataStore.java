@@ -9,6 +9,7 @@ import org.jetbrains.annotations.NotNull;
 
 import java.util.UUID;
 import java.util.concurrent.CompletionStage;
+import java.util.function.Consumer;
 
 /**
  * Top-level storage facade. Built from a {@code DataStoreConfig} by Layer 2 and
@@ -18,15 +19,23 @@ import java.util.concurrent.CompletionStage;
 public interface DataStore {
 
     /**
-     * Non-async write. Most callers use {@code ViolationSink.record} or category-specific
-     * services instead; direct submit is for less-hot-path writers (e.g. session updates,
-     * identity upserts) where the MPSC ceremony is overkill.
+     * Allocation-free hot-path write. The caller receives a pre-allocated mutable
+     * event slot from the ring and populates its fields inside {@code configurer};
+     * the ring publishes the slot as soon as the configurer returns. Do not retain
+     * a reference to the event past the configurer's return — the slot is recycled
+     * for the next publisher.
+     * <p>
+     * On a full ring the record is dropped and counted; producers never block.
      */
-    <R> void submit(@NotNull Category<R> cat, @NotNull R record);
+    <E> void submit(@NotNull Category<E> cat, @NotNull Consumer<E> configurer);
 
-    @NotNull <R> CompletionStage<Page<R>> query(@NotNull Category<R> cat, @NotNull Query<R> query);
+    /**
+     * Asynchronous read. The {@code cat} argument is the routing key for the
+     * storage engine; the record type {@code R} comes from the {@link Query}.
+     */
+    @NotNull <R> CompletionStage<Page<R>> query(@NotNull Category<?> cat, @NotNull Query<R> query);
 
-    @NotNull <R> CompletionStage<Void> delete(@NotNull Category<R> cat, @NotNull DeleteCriteria criteria);
+    @NotNull <E> CompletionStage<Void> delete(@NotNull Category<E> cat, @NotNull DeleteCriteria criteria);
 
     @NotNull CompletionStage<DeletionReport> forgetPlayer(@NotNull UUID uuid);
 
@@ -35,8 +44,8 @@ public interface DataStore {
     @NotNull DataStoreMetrics metrics();
 
     /**
-     * Blocks until the MPSC queue drains or the timeout elapses. Anything left is dropped
-     * with a final warn. Used by Layer 3 shutdown paths.
+     * Blocks until each category's ring drains or the timeout elapses. Anything left
+     * is dropped with a final warn. Used by Layer 3 shutdown paths.
      */
     void flushAndClose(long drainTimeoutMs);
 }

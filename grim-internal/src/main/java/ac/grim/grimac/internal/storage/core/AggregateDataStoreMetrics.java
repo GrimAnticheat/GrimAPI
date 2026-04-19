@@ -3,23 +3,20 @@ package ac.grim.grimac.internal.storage.core;
 import ac.grim.grimac.api.storage.DataStoreMetrics;
 import org.jetbrains.annotations.ApiStatus;
 
-import java.util.List;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * Aggregates per-backend queue counters + per-backend writer-loop counters into the
- * public {@link DataStoreMetrics} view. A single read-only facade.
+ * Aggregates per-category ring counters + adapter counters into the public
+ * {@link DataStoreMetrics} view. Single read-only facade over a {@link RingRegistry}.
  */
 @ApiStatus.Internal
 public final class AggregateDataStoreMetrics implements DataStoreMetrics {
 
-    private final List<BoundedMpscQueue<?>> queues;
-    private final List<WriterLoop> loops;
+    private final RingRegistry rings;
     private final AtomicLong readLatencyMsEma = new AtomicLong();
 
-    public AggregateDataStoreMetrics(List<BoundedMpscQueue<?>> queues, List<WriterLoop> loops) {
-        this.queues = List.copyOf(queues);
-        this.loops = List.copyOf(loops);
+    public AggregateDataStoreMetrics(RingRegistry rings) {
+        this.rings = rings;
     }
 
     public void observeReadLatencyMs(long observed) {
@@ -28,43 +25,10 @@ public final class AggregateDataStoreMetrics implements DataStoreMetrics {
         readLatencyMsEma.lazySet(next);
     }
 
-    @Override
-    public long queuedCount() {
-        long sum = 0;
-        for (BoundedMpscQueue<?> q : queues) sum += q.size();
-        return sum;
-    }
-
-    @Override
-    public long submittedTotal() {
-        long sum = 0;
-        for (BoundedMpscQueue<?> q : queues) sum += q.submittedTotal();
-        return sum;
-    }
-
-    @Override
-    public long droppedOnOverflowTotal() {
-        long sum = 0;
-        for (BoundedMpscQueue<?> q : queues) sum += q.droppedTotal();
-        return sum;
-    }
-
-    @Override
-    public long droppedOnErrorTotal() {
-        long sum = 0;
-        for (WriterLoop l : loops) sum += l.droppedOnErrorTotal();
-        return sum;
-    }
-
-    @Override
-    public long writeBatchLatencyMsEma() {
-        long max = 0;
-        for (WriterLoop l : loops) max = Math.max(max, l.writeBatchLatencyMsEma());
-        return max;
-    }
-
-    @Override
-    public long readLatencyMsEma() {
-        return readLatencyMsEma.get();
-    }
+    @Override public long queuedCount() { return rings.queuedCountTotal(); }
+    @Override public long submittedTotal() { return rings.submittedTotal(); }
+    @Override public long droppedOnOverflowTotal() { return rings.droppedOnOverflowTotal(); }
+    @Override public long droppedOnErrorTotal() { return rings.droppedOnErrorTotal(); }
+    @Override public long writeBatchLatencyMsEma() { return rings.writeBatchLatencyMsEmaMax(); }
+    @Override public long readLatencyMsEma() { return readLatencyMsEma.get(); }
 }

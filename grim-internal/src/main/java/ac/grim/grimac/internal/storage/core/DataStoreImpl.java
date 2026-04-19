@@ -15,11 +15,6 @@ import ac.grim.grimac.api.storage.query.Queries;
 import ac.grim.grimac.api.storage.query.Query;
 import org.jetbrains.annotations.ApiStatus;
 
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
@@ -27,50 +22,32 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Consumer;
 import java.util.logging.Logger;
 
 /**
- * Shared-impl {@link DataStore}. Wires one {@link BoundedMpscQueue} + {@link WriterLoop}
- * per backend, routes submits to the right queue via {@link CategoryRouter}, and runs
- * reads on a small shared executor so the caller thread (e.g. netty or main) doesn't
- * block on backend latency.
+ * Shared-impl {@link DataStore}. Hosts a per-category Disruptor ring via
+ * {@link RingRegistry}, routes submits to the right ring via {@link CategoryRouter},
+ * and runs reads on a small shared executor so the caller thread (e.g. netty or
+ * main) doesn't block on backend latency.
  */
 @ApiStatus.Internal
 public final class DataStoreImpl implements DataStore {
 
     private final CategoryRouter router;
-    private final Map<String, BoundedMpscQueue<WriteEnvelope>> queuesByBackend;
-    private final Map<String, WriterLoop> loopsByBackend;
+    private final RingRegistry rings;
     private final ExecutorService reader;
     private final AggregateDataStoreMetrics metrics;
+    private final long shutdownDrainTimeoutMs;
     private final Logger logger;
     private volatile boolean closed;
 
     public DataStoreImpl(CategoryRouter router, WritePathConfig writePath, Logger logger) {
         this.router = router;
         this.logger = logger;
-        Map<String, BoundedMpscQueue<WriteEnvelope>> queues = new LinkedHashMap<>();
-        Map<String, WriterLoop> loops = new LinkedHashMap<>();
-        List<BoundedMpscQueue<?>> queueList = new ArrayList<>();
-        List<WriterLoop> loopList = new ArrayList<>();
-        for (Backend b : router.allBackends()) {
-            BoundedMpscQueue<WriteEnvelope> q = new BoundedMpscQueue<>(writePath.queueCapacity());
-            WriterLoop loop = new WriterLoop(
-                    "grim-datastore-" + b.id(),
-                    b,
-                    q,
-                    writePath.batchSize(),
-                    writePath.flushIntervalMs(),
-                    writePath.warnRateMs(),
-                    logger);
-            queues.put(b.id(), q);
-            loops.put(b.id(), loop);
-            queueList.add(q);
-            loopList.add(loop);
-        }
-        this.queuesByBackend = queues;
-        this.loopsByBackend = loops;
-        this.metrics = new AggregateDataStoreMetrics(queueList, loopList);
+        this.rings = new RingRegistry(writePath, logger);
+        this.metrics = new AggregateDataStoreMetrics(rings);
+        this.shutdownDrainTimeoutMs = writePath.shutdownDrainTimeoutMs();
         AtomicInteger readerSeq = new AtomicInteger();
         this.reader = Executors.newFixedThreadPool(2, r -> {
             Thread t = new Thread(r, "grim-datastore-reader-" + readerSeq.incrementAndGet());
@@ -79,19 +56,31 @@ public final class DataStoreImpl implements DataStore {
         });
     }
 
+    /**
+     * Wires one ring per routed category. Must be called after {@link CategoryRouter}
+     * is populated and the backends have been {@code init}ed.
+     */
     public void start() {
-        for (WriterLoop l : loopsByBackend.values()) l.start();
+        try {
+            for (Category<?> cat : router.routedCategories()) registerRingFor(cat);
+        } catch (BackendException e) {
+            throw new RuntimeException("failed to start DataStore ring", e);
+        }
     }
 
-    @Override
-    public <R> void submit(Category<R> cat, R record) {
+    private <E> void registerRingFor(Category<E> cat) throws BackendException {
         Backend b = router.backendFor(cat);
-        BoundedMpscQueue<WriteEnvelope> q = queuesByBackend.get(b.id());
-        q.offer(new WriteEnvelope(cat, record));
+        rings.register(cat, b);
     }
 
     @Override
-    public <R> CompletionStage<Page<R>> query(Category<R> cat, Query<R> query) {
+    public <E> void submit(Category<E> cat, Consumer<E> configurer) {
+        if (closed) return;
+        rings.submit(cat, configurer);
+    }
+
+    @Override
+    public <R> CompletionStage<Page<R>> query(Category<?> cat, Query<R> query) {
         Backend b = router.backendFor(cat);
         return CompletableFuture.supplyAsync(() -> {
             long start = System.nanoTime();
@@ -106,7 +95,7 @@ public final class DataStoreImpl implements DataStore {
     }
 
     @Override
-    public <R> CompletionStage<Void> delete(Category<R> cat, DeleteCriteria criteria) {
+    public <E> CompletionStage<Void> delete(Category<E> cat, DeleteCriteria criteria) {
         Backend b = router.backendFor(cat);
         return CompletableFuture.runAsync(() -> {
             try {
@@ -120,7 +109,7 @@ public final class DataStoreImpl implements DataStore {
     @Override
     public CompletionStage<DeletionReport> forgetPlayer(UUID uuid) {
         return CompletableFuture.supplyAsync(() -> {
-            int sessions = 0, violations = 0, settings = 0, identities = 0;
+            int sessions, violations, identities;
             Backend sessionBackend = router.backendFor(Categories.SESSION);
             Backend violationBackend = router.backendFor(Categories.VIOLATION);
             Backend identityBackend = router.backendFor(Categories.PLAYER_IDENTITY);
@@ -130,7 +119,6 @@ public final class DataStoreImpl implements DataStore {
                 sessions = (int) countSessions(sessionBackend, uuid);
                 violations = (int) countViolationsByPlayer(violationBackend, sessionBackend, uuid);
                 identities = (int) countIdentities(identityBackend, uuid);
-                settings = 0; // settings not tracked-per-player in phase 1 beyond the delete
 
                 violationBackend.delete(Categories.VIOLATION, Deletes.byPlayer(uuid));
                 sessionBackend.delete(Categories.SESSION, Deletes.byPlayer(uuid));
@@ -139,7 +127,7 @@ public final class DataStoreImpl implements DataStore {
             } catch (BackendException e) {
                 throw new RuntimeException("forgetPlayer failed", e);
             }
-            return new DeletionReport(sessions, violations, settings, identities, 0);
+            return new DeletionReport(sessions, violations, 0, identities, 0);
         }, reader);
     }
 
@@ -184,10 +172,8 @@ public final class DataStoreImpl implements DataStore {
     public synchronized void flushAndClose(long drainTimeoutMs) {
         if (closed) return;
         closed = true;
-        long leftoverTotal = 0;
-        for (WriterLoop l : loopsByBackend.values()) {
-            leftoverTotal += l.stopAndDrain(drainTimeoutMs);
-        }
+        long effective = drainTimeoutMs > 0 ? drainTimeoutMs : shutdownDrainTimeoutMs;
+        long leftover = rings.shutdown(effective);
         for (Backend b : router.allBackends()) {
             try {
                 b.flush();
@@ -209,9 +195,9 @@ public final class DataStoreImpl implements DataStore {
             Thread.currentThread().interrupt();
             reader.shutdownNow();
         }
-        if (leftoverTotal > 0) {
+        if (leftover > 0) {
             logger.log(java.util.logging.Level.WARNING,
-                    "[grim-datastore] shutdown dropped " + leftoverTotal + " unwritten records total");
+                    "[grim-datastore] shutdown dropped " + leftover + " unwritten records total");
         }
     }
 
@@ -223,11 +209,5 @@ public final class DataStoreImpl implements DataStore {
     /** Reader executor for services that need to hop off the caller thread themselves. */
     public ExecutorService readerExecutor() {
         return reader;
-    }
-
-    // visible for debug
-    @SuppressWarnings("unused")
-    Map<String, WriterLoop> writerLoops() {
-        return new HashMap<>(loopsByBackend);
     }
 }

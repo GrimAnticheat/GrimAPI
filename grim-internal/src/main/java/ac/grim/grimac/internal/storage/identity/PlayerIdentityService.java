@@ -2,7 +2,6 @@ package ac.grim.grimac.internal.storage.identity;
 
 import ac.grim.grimac.api.storage.DataStore;
 import ac.grim.grimac.api.storage.category.Categories;
-import ac.grim.grimac.api.storage.model.PlayerIdentity;
 import org.jetbrains.annotations.ApiStatus;
 
 import java.util.UUID;
@@ -22,6 +21,10 @@ public final class PlayerIdentityService {
     }
 
     public void observe(UUID uuid, String name, long epochMs) {
-        store.submit(Categories.PLAYER_IDENTITY, new PlayerIdentity(uuid, name, epochMs, epochMs));
+        store.submit(Categories.PLAYER_IDENTITY, e -> e
+                .uuid(uuid)
+                .currentName(name)
+                .firstSeenEpochMs(epochMs)
+                .lastSeenEpochMs(epochMs));
     }
 }

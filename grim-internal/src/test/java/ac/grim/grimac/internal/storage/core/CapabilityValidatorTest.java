@@ -3,6 +3,7 @@ package ac.grim.grimac.internal.storage.core;
 import ac.grim.grimac.api.storage.backend.ApiVersion;
 import ac.grim.grimac.api.storage.backend.Backend;
 import ac.grim.grimac.api.storage.backend.BackendContext;
+import ac.grim.grimac.api.storage.backend.StorageEventHandler;
 import ac.grim.grimac.api.storage.category.Capability;
 import ac.grim.grimac.api.storage.category.Categories;
 import ac.grim.grimac.api.storage.category.Category;
@@ -13,7 +14,6 @@ import ac.grim.grimac.internal.storage.backend.memory.InMemoryBackend;
 import org.junit.jupiter.api.Test;
 
 import java.util.EnumSet;
-import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
@@ -75,9 +75,11 @@ final class CapabilityValidatorTest {
         @Override public void init(BackendContext ctx) {}
         @Override public void flush() {}
         @Override public void close() {}
-        @Override public <R> void writeBatch(Category<R> c, List<R> r) {}
-        @Override public <R> Page<R> read(Category<R> c, Query<R> q) { return Page.empty(); }
-        @Override public <R> void delete(Category<R> c, DeleteCriteria criteria) {}
+        @Override public <E> StorageEventHandler<E> eventHandlerFor(Category<E> cat) {
+            return (event, seq, endOfBatch) -> {};
+        }
+        @Override public <R> Page<R> read(Category<?> c, Query<R> q) { return Page.empty(); }
+        @Override public <E> void delete(Category<E> c, DeleteCriteria criteria) {}
         @Override public long countViolationsInSession(UUID s) { return 0; }
     }
 
@@ -95,9 +97,11 @@ final class CapabilityValidatorTest {
         @Override public void init(BackendContext ctx) {}
         @Override public void flush() {}
         @Override public void close() {}
-        @Override public <R> void writeBatch(Category<R> c, List<R> r) {}
-        @Override public <R> Page<R> read(Category<R> c, Query<R> q) { return Page.empty(); }
-        @Override public <R> void delete(Category<R> c, DeleteCriteria criteria) {}
+        @Override public <E> StorageEventHandler<E> eventHandlerFor(Category<E> cat) {
+            return (event, seq, endOfBatch) -> {};
+        }
+        @Override public <R> Page<R> read(Category<?> c, Query<R> q) { return Page.empty(); }
+        @Override public <E> void delete(Category<E> c, DeleteCriteria criteria) {}
         @Override public long countViolationsInSession(UUID s) { return 0; }
     }
 }
