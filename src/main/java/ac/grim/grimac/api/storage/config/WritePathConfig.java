@@ -7,7 +7,7 @@ import org.jetbrains.annotations.NotNull;
  * Write-path tunables, applied per category ring.
  * <p>
  * {@code queueCapacity} <strong>must be a positive power of two</strong> — required
- * by the Disruptor ring buffer. {@link DataStoreYamlLoader} validates this at load
+ * by the Disruptor ring buffer. Layer 3 config loaders should validate this at load
  * time; the record's canonical constructor also enforces it.
  * <p>
  * {@code batchSize} caps how many events a single handler invocation commits at
