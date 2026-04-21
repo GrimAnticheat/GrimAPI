@@ -9,6 +9,7 @@ import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
 
 import java.util.EnumSet;
+import java.util.List;
 import java.util.Set;
 
 /**
@@ -63,6 +64,28 @@ public interface Backend {
     @NotNull <R> Page<R> read(@NotNull Category<?> cat, @NotNull Query<R> query) throws BackendException;
 
     <E> void delete(@NotNull Category<E> cat, @NotNull DeleteCriteria criteria) throws BackendException;
+
+    /**
+     * Synchronous bulk-import escape hatch. Writes a batch of immutable record
+     * objects (not events) for the given category outside the Disruptor ring.
+     * Used by startup-time importers (e.g. legacy v0 → v1 migration) that
+     * require the records to be visible before {@link #eventHandlerFor} begins
+     * accepting live traffic.
+     * <p>
+     * Callers must pass records whose runtime type matches
+     * {@code cat.queryResultType()}; implementations cast internally and throw
+     * on mismatch. Synchronous, blocks until committed. Not intended for the
+     * hot path — live writes go through the ring.
+     * <p>
+     * Implementations added after phase 1 that want to support being a
+     * migration target must implement this; the default throws
+     * {@link UnsupportedOperationException} so read-only-ish backends fail
+     * clearly.
+     */
+    default <R> void bulkImport(@NotNull Category<?> cat, @NotNull List<R> records) throws BackendException {
+        throw new UnsupportedOperationException(
+                "backend " + id() + " does not support bulkImport; cannot be used as a migration target");
+    }
 
     /**
      * Count violations in a session. First-class (rather than via a generic count(query))

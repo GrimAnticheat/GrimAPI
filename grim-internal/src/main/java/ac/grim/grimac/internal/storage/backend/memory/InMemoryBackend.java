@@ -158,6 +158,11 @@ public final class InMemoryBackend implements Backend {
 
     // --- direct write paths used by LegacyMigrator / tests only -------------
 
+    @Override
+    public <R> void bulkImport(@NotNull Category<?> cat, @NotNull List<R> records) throws BackendException {
+        writeRecordsDirect(cat, records);
+    }
+
     /** Package-private: bypass-ring record write for migration. */
     public synchronized void writeRecordsDirect(Category<?> cat, List<?> records) throws BackendException {
         synchronized (writeMutex) {
