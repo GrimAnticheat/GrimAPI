@@ -98,6 +98,34 @@ public final class InMemoryBackend implements Backend {
         }
     }
 
+    /**
+     * Copier-only hatch: snapshot of player UUIDs this backend knows about
+     * (from identity rows). Used by {@code BackendToBackendCopier} to enumerate
+     * players for the session/violation walk.
+     */
+    @ApiStatus.Internal
+    public java.util.Set<UUID> knownPlayerUuids() {
+        synchronized (writeMutex) {
+            return new java.util.LinkedHashSet<>(identities.keySet());
+        }
+    }
+
+    /**
+     * Copier-only hatch: drop all v1 data while keeping the backend live.
+     * Used by {@code --delete} after a successful copy to empty the source.
+     */
+    @ApiStatus.Internal
+    public void wipeAllForCopier() {
+        synchronized (writeMutex) {
+            violationsBySession.clear();
+            violationsByPlayer.clear();
+            sessions.clear();
+            sessionsByPlayer.clear();
+            identities.clear();
+            identityByName.clear();
+        }
+    }
+
     @Override
     @SuppressWarnings("unchecked")
     public @NotNull <E> StorageEventHandler<E> eventHandlerFor(@NotNull Category<E> cat) {
