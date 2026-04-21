@@ -332,6 +332,11 @@ public final class SqliteBackend implements Backend {
 
     // --- migration / bulk-load path (bypasses rings, shared writeConn) ------
 
+    @Override
+    public <R> void bulkImport(@NotNull Category<?> cat, @NotNull List<R> records) throws BackendException {
+        writeRecordsDirect(cat, records);
+    }
+
     /**
      * Record-taking direct write for {@link ac.grim.grimac.internal.storage.migrate.LegacyMigrator}
      * and similar one-shot importers. Uses the backend's shared {@code writeConn}

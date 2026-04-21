@@ -119,13 +119,17 @@ final class LegacyMigratorTest {
                 .close();
 
         SqliteBackend v1 = initV1(v1Path);
-        // Pre-seed grim_migration_state: pretend we already migrated v0 ids 1 and 2.
+        // Pre-seed migration state: pretend we already migrated v0 ids 1 and 2.
+        // State lives in grim_settings as of schema v2 — pipe-delimited UTF-8 bytes.
         // Use a fresh connection (WAL mode supports concurrent writers on SQLite here
         // because the backend's write connection is idle).
         try (Connection c = DriverManager.getConnection(v1.jdbcUrl());
-             Statement s = c.createStatement()) {
-            s.executeUpdate("INSERT INTO grim_migration_state(id, last_migrated_violation_id, state, started_at, completed_at) "
-                    + "VALUES (0, 2, 'IN_PROGRESS', 0, 0)");
+             java.sql.PreparedStatement ps = c.prepareStatement(
+                     "INSERT OR REPLACE INTO grim_settings(scope, scope_key, key, value, updated_at) "
+                             + "VALUES ('SERVER', 'grim-core', 'legacy_v0_migration_state', ?, ?)")) {
+            ps.setBytes(1, "2|IN_PROGRESS|0|0".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            ps.setLong(2, System.currentTimeMillis());
+            ps.executeUpdate();
         }
         CheckRegistry registry = new CheckRegistry(new SqliteCheckPersistence(v1.jdbcUrl()));
         registry.reload();

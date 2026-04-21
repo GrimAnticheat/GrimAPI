@@ -12,12 +12,13 @@ import java.sql.Statement;
  * Initial v1 schema for the SQLite backend. Creates tables + indexes + the grim_meta
  * singleton row on first touch. Idempotent: safe to re-invoke on an initialized DB.
  * <p>
- * Future v2+ migrations live in sibling classes and are dispatched by schema_version.
+ * Schema evolution is linear and inline — versions are numbered, each {@code applyV<N>}
+ * runs in sequence when a pre-N db is opened by post-N code.
  */
 @ApiStatus.Internal
 public final class SqliteSchema {
 
-    public static final int CURRENT_VERSION = 1;
+    public static final int CURRENT_VERSION = 2;
 
     private SqliteSchema() {}
 
@@ -35,6 +36,7 @@ public final class SqliteSchema {
         int existing = readSchemaVersion(c);
         if (existing < 0) {
             applyV1(c);
+            applyV2(c);
             long now = System.currentTimeMillis();
             try (PreparedStatement ps = c.prepareStatement(
                     "INSERT INTO grim_meta(id, schema_version, grim_core_version, initialized_at, last_migration_at) "
@@ -45,16 +47,24 @@ public final class SqliteSchema {
                 ps.setLong(4, now);
                 ps.executeUpdate();
             }
-        } else if (existing > CURRENT_VERSION) {
+            return;
+        }
+
+        if (existing > CURRENT_VERSION) {
             throw new SQLException("[grim-datastore] SQLite schema is version " + existing
                     + " but this core supports up to " + CURRENT_VERSION
                     + "; refusing to downgrade. Roll Grim forward.");
-        } else if (existing < CURRENT_VERSION) {
-            // phase 1: no mid-version migrations. First write that bumps the version
-            // beyond 1 adds them here.
-            throw new SQLException("[grim-datastore] SQLite schema is version " + existing
-                    + " which needs migration to " + CURRENT_VERSION
-                    + "; phase 1 ships only version 1.");
+        }
+
+        if (existing < 2) {
+            applyV2(c);
+            try (PreparedStatement ps = c.prepareStatement(
+                    "UPDATE grim_meta SET schema_version=?, last_migration_at=?, grim_core_version=? WHERE id=0")) {
+                ps.setInt(1, CURRENT_VERSION);
+                ps.setLong(2, System.currentTimeMillis());
+                ps.setString(3, grimCoreVersion);
+                ps.executeUpdate();
+            }
         }
     }
 
@@ -131,6 +141,48 @@ public final class SqliteSchema {
                     + "started_at INTEGER, "
                     + "completed_at INTEGER"
                     + ")");
+        }
+    }
+
+    /**
+     * v2: promote migration state from its dedicated one-row SQLite table into
+     * {@code grim_settings} so backends without native support for that table
+     * (future MySQL / Postgres impls) can be migration targets too. Ports any
+     * existing row losslessly.
+     */
+    private static void applyV2(Connection c) throws SQLException {
+        // Test for table presence — fresh DBs that ran v1 via this code still
+        // have it; upgrades from earlier snapshots also have it.
+        boolean hadLegacyTable;
+        try (Statement s = c.createStatement();
+             ResultSet rs = s.executeQuery(
+                     "SELECT name FROM sqlite_master WHERE type='table' AND name='grim_migration_state'")) {
+            hadLegacyTable = rs.next();
+        }
+        if (hadLegacyTable) {
+            try (PreparedStatement ps = c.prepareStatement(
+                    "SELECT last_migrated_violation_id, state, started_at, completed_at "
+                            + "FROM grim_migration_state WHERE id=0");
+                 ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) {
+                    long lastId = rs.getLong(1);
+                    String state = rs.getString(2);
+                    long startedAt = rs.getLong(3);
+                    long completedAt = rs.getLong(4);
+                    String packed = lastId + "|" + (state == null ? "PENDING" : state)
+                            + "|" + startedAt + "|" + completedAt;
+                    try (PreparedStatement ins = c.prepareStatement(
+                            "INSERT OR REPLACE INTO grim_settings(scope, scope_key, key, value, updated_at) "
+                                    + "VALUES ('SERVER', 'grim-core', 'legacy_v0_migration_state', ?, ?)")) {
+                        ins.setBytes(1, packed.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                        ins.setLong(2, System.currentTimeMillis());
+                        ins.executeUpdate();
+                    }
+                }
+            }
+            try (Statement s = c.createStatement()) {
+                s.executeUpdate("DROP TABLE grim_migration_state");
+            }
         }
     }
 }

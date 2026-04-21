@@ -1,21 +1,21 @@
 package ac.grim.grimac.internal.storage.migrate;
 
+import ac.grim.grimac.api.storage.backend.Backend;
 import ac.grim.grimac.api.storage.backend.BackendException;
 import ac.grim.grimac.api.storage.category.Categories;
 import ac.grim.grimac.api.storage.model.PlayerIdentity;
-import ac.grim.grimac.api.storage.model.SessionRecord;
+import ac.grim.grimac.api.storage.model.SettingRecord;
+import ac.grim.grimac.api.storage.model.SettingScope;
 import ac.grim.grimac.api.storage.model.VerboseFormat;
 import ac.grim.grimac.api.storage.model.ViolationRecord;
-import ac.grim.grimac.internal.storage.backend.sqlite.SqliteBackend;
+import ac.grim.grimac.api.storage.query.Page;
+import ac.grim.grimac.api.storage.query.Queries;
 import ac.grim.grimac.internal.storage.checks.CheckRegistry;
 import ac.grim.grimac.internal.storage.checks.StableKeyMapping;
 import org.jetbrains.annotations.ApiStatus;
 
-import java.sql.Connection;
-import java.sql.PreparedStatement;
-import java.sql.ResultSet;
+import java.nio.charset.StandardCharsets;
 import java.sql.SQLException;
-import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -29,31 +29,37 @@ import java.util.logging.Logger;
 /**
  * Legacy v0 → v1 migrator. Reads the old {@code grim_history_*} tables in ascending
  * {@code (player_uuid, created_at, id)} order, feeds them through
- * {@link SessionReconstructor} to bucket by time-gap, and writes v1 records directly
- * through {@link SqliteBackend#writeRecordsDirect} (bypassing the Disruptor rings —
- * this runs synchronously at startup before accept-players per §13).
+ * {@link SessionReconstructor} to bucket by time-gap, and writes v1 records
+ * synchronously via {@link Backend#bulkImport} (bypassing the Disruptor rings —
+ * runs at startup before accept-players per §13).
  * <p>
- * Resumable via the {@code grim_migration_state} singleton row on the v1 store: the
- * last-migrated v0 violation id is updated after each batch commit. Restart picks up
- * where the crash left off.
+ * Target-agnostic — works with any {@link Backend} that implements
+ * {@code bulkImport}. Migration state lives in {@code grim_settings} under
+ * (SERVER, grim-core, legacy_v0_migration_state), so resumability works on
+ * backends that have no native migration-state table. Format is a pipe-delimited
+ * UTF-8 string: {@code "<lastId>|<state>|<startedAt>|<completedAt>"}.
  */
 @ApiStatus.Internal
 public final class LegacyMigrator {
 
+    private static final SettingScope STATE_SCOPE = SettingScope.SERVER;
+    private static final String STATE_SCOPE_KEY = "grim-core";
+    private static final String STATE_KEY = "legacy_v0_migration_state";
+
     public record Result(int sessionsWritten, int violationsWritten, long elapsedMs, boolean resumed) {}
 
     private final V0Reader v0;
-    private final SqliteBackend v1;
+    private final Backend v1;
     private final CheckRegistry checks;
     private final long sessionGapMs;
     private final Logger logger;
     private final int chunkSize;
 
-    public LegacyMigrator(V0Reader v0, SqliteBackend v1, CheckRegistry checks, long sessionGapMs, Logger logger) {
+    public LegacyMigrator(V0Reader v0, Backend v1, CheckRegistry checks, long sessionGapMs, Logger logger) {
         this(v0, v1, checks, sessionGapMs, logger, 1000);
     }
 
-    public LegacyMigrator(V0Reader v0, SqliteBackend v1, CheckRegistry checks, long sessionGapMs,
+    public LegacyMigrator(V0Reader v0, Backend v1, CheckRegistry checks, long sessionGapMs,
                           Logger logger, int chunkSize) {
         this.v0 = v0;
         this.v1 = v1;
@@ -83,6 +89,11 @@ public final class LegacyMigrator {
 
         MigrationState state = readState();
         boolean resumed = state.lastMigratedViolationId > 0;
+        if ("COMPLETE".equals(state.state) && state.lastMigratedViolationId >= totalLegacyViolations) {
+            logger.info("[grim-datastore] legacy migration already complete (v0 id "
+                    + state.lastMigratedViolationId + "); skipping");
+            return new Result(0, 0, System.currentTimeMillis() - start, true);
+        }
         if (resumed) {
             logger.info("[grim-datastore] resuming legacy migration from v0 id " + state.lastMigratedViolationId);
         } else {
@@ -107,8 +118,7 @@ public final class LegacyMigrator {
 
             SessionReconstructor.Emit emit = (session, violations) -> {
                 try {
-                    // Write session first, then its violations.
-                    v1.writeRecordsDirect(Categories.SESSION, List.of(session));
+                    v1.bulkImport(Categories.SESSION, List.of(session));
                     if (!violations.isEmpty()) {
                         List<ViolationRecord> rows = new ArrayList<>(violations.size());
                         for (SessionReconstructor.ReconstructedViolation v : violations) {
@@ -124,7 +134,7 @@ public final class LegacyMigrator {
                             long legacyId = v.legacyId();
                             if (legacyId > lastViolationLegacyId.get()) lastViolationLegacyId.set(legacyId);
                         }
-                        v1.writeRecordsDirect(Categories.VIOLATION, rows);
+                        v1.bulkImport(Categories.VIOLATION, rows);
                     }
                     sessionsEmitted.incrementAndGet();
                     violationsEmitted.addAndGet(violations.size());
@@ -132,7 +142,6 @@ public final class LegacyMigrator {
                     writeState(lastViolationLegacyId.get(), "IN_PROGRESS",
                             state.startedAt > 0 ? state.startedAt : System.currentTimeMillis(), 0);
                     progress.accept(violationsEmitted.get());
-                    // Track identity window
                     long firstSeen = session.startedEpochMs();
                     long lastSeen = session.lastActivityEpochMs();
                     identityAcc.compute(session.playerUuid(), (k, curr) -> {
@@ -162,7 +171,7 @@ public final class LegacyMigrator {
                 for (Map.Entry<UUID, long[]> e : identityAcc.entrySet()) {
                     idRows.add(new PlayerIdentity(e.getKey(), null, e.getValue()[0], e.getValue()[1]));
                 }
-                v1.writeRecordsDirect(Categories.PLAYER_IDENTITY, idRows);
+                v1.bulkImport(Categories.PLAYER_IDENTITY, idRows);
             }
 
             writeState(lastViolationLegacyId.get(), "COMPLETE",
@@ -194,51 +203,37 @@ public final class LegacyMigrator {
     }
 
     private MigrationState readState() throws BackendException {
-        Connection c = v1.writeConnection();
-        if (c == null) throw new BackendException("v1 backend not initialised");
+        Page<SettingRecord> page = v1.read(
+                Categories.SETTING,
+                Queries.getSetting(STATE_SCOPE, STATE_SCOPE_KEY, STATE_KEY));
+        if (page.items().isEmpty()) return new MigrationState(0L, "PENDING", 0L, 0L);
+        byte[] value = page.items().get(0).value();
+        if (value == null || value.length == 0) return new MigrationState(0L, "PENDING", 0L, 0L);
+        String raw = new String(value, StandardCharsets.UTF_8);
+        String[] parts = raw.split("\\|", -1);
+        if (parts.length < 4) return new MigrationState(0L, "PENDING", 0L, 0L);
         try {
-            try (Statement s = c.createStatement()) {
-                // Already created in SqliteSchema — but defensive in case an older db
-                // predates that init.
-                s.executeUpdate("CREATE TABLE IF NOT EXISTS grim_migration_state ("
-                        + "id INTEGER PRIMARY KEY CHECK (id = 0), "
-                        + "last_migrated_violation_id INTEGER NOT NULL DEFAULT 0, "
-                        + "state TEXT NOT NULL DEFAULT 'PENDING', "
-                        + "started_at INTEGER, "
-                        + "completed_at INTEGER)");
-            }
-            try (PreparedStatement ps = c.prepareStatement(
-                    "SELECT last_migrated_violation_id, state, started_at, completed_at FROM grim_migration_state WHERE id=0");
-                 ResultSet rs = ps.executeQuery()) {
-                if (rs.next()) {
-                    return new MigrationState(rs.getLong(1), rs.getString(2), rs.getLong(3), rs.getLong(4));
-                }
-            }
+            return new MigrationState(
+                    Long.parseLong(parts[0]),
+                    parts[1],
+                    Long.parseLong(parts[2]),
+                    Long.parseLong(parts[3]));
+        } catch (NumberFormatException e) {
             return new MigrationState(0L, "PENDING", 0L, 0L);
-        } catch (SQLException e) {
-            throw new BackendException("failed to read migration state", e);
         }
     }
 
     private void writeState(long lastId, String state, long startedAt, long completedAt) {
-        Connection c = v1.writeConnection();
-        if (c == null) return;
-        try (PreparedStatement ps = c.prepareStatement(
-                "INSERT INTO grim_migration_state(id, last_migrated_violation_id, state, started_at, completed_at) "
-                        + "VALUES (0, ?, ?, ?, ?) "
-                        + "ON CONFLICT(id) DO UPDATE SET "
-                        + "last_migrated_violation_id=excluded.last_migrated_violation_id, "
-                        + "state=excluded.state, "
-                        + "started_at=COALESCE(grim_migration_state.started_at, excluded.started_at), "
-                        + "completed_at=CASE WHEN excluded.completed_at>0 THEN excluded.completed_at "
-                        + "                   ELSE grim_migration_state.completed_at END")) {
-            ps.setLong(1, lastId);
-            ps.setString(2, state);
-            ps.setLong(3, startedAt);
-            ps.setLong(4, completedAt);
-            ps.executeUpdate();
-        } catch (SQLException e) {
-            logger.log(Level.WARNING, "[grim-datastore] failed to update migration state", e);
+        String packed = lastId + "|" + state + "|" + startedAt + "|" + completedAt;
+        SettingRecord rec = new SettingRecord(
+                STATE_SCOPE, STATE_SCOPE_KEY, STATE_KEY,
+                packed.getBytes(StandardCharsets.UTF_8),
+                System.currentTimeMillis());
+        try {
+            v1.bulkImport(Categories.SETTING, List.of(rec));
+        } catch (BackendException e) {
+            logger.log(Level.WARNING,
+                    "[grim-datastore] failed to update migration state", e);
         }
     }
 
