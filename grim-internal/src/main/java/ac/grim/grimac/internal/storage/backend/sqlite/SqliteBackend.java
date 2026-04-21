@@ -760,4 +760,15 @@ public final class SqliteBackend implements Backend {
     public String jdbcUrl() {
         return jdbcUrl;
     }
+
+    /**
+     * Copier-only hatch: shares the backend's write mutex so cross-cutting
+     * bulk operations (delete-all, drop tables) don't race handler commits.
+     * Do not hold while the backend is serving live ring traffic — callers
+     * should quiesce rings first.
+     */
+    @ApiStatus.Internal
+    public Object writeMutexForCopier() {
+        return writeMutex;
+    }
 }
