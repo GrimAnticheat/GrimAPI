@@ -16,6 +16,11 @@ import java.util.UUID;
  * the event for every heartbeat on a session. Immutable read counterpart is
  * {@link SessionRecord}.
  * <p>
+ * {@code clientVersion} is a PacketEvents protocol-version number (PVN). Producers
+ * pass {@code user.getClientVersion().getProtocolVersion()}; use {@code -1} for
+ * unresolved / unknown. Keeping Layer 1 PE-free means this is a plain int with
+ * no enum leak — Layer 3 resolves back to display names via PE at render time.
+ * <p>
  * {@code replayClips} is an internally mutable list held on the event. It is
  * cleared on {@link #reset()}; producers append via {@link #addReplayClip(ReplayClip)}
  * or {@link #replaceReplayClips(List)}. Phase-1 SQLite storage does not persist
@@ -31,7 +36,7 @@ public final class SessionEvent {
     private long lastActivityEpochMs;
     private @Nullable String grimVersion;
     private @Nullable String clientBrand;
-    private @Nullable String clientVersionString;
+    private int clientVersion = -1;
     private @Nullable String serverVersionString;
     private final List<ReplayClip> replayClips = new ArrayList<>();
 
@@ -56,8 +61,8 @@ public final class SessionEvent {
     public @Nullable String clientBrand() { return clientBrand; }
     public @NotNull SessionEvent clientBrand(@Nullable String v) { this.clientBrand = v; return this; }
 
-    public @Nullable String clientVersionString() { return clientVersionString; }
-    public @NotNull SessionEvent clientVersionString(@Nullable String v) { this.clientVersionString = v; return this; }
+    public int clientVersion() { return clientVersion; }
+    public @NotNull SessionEvent clientVersion(int v) { this.clientVersion = v; return this; }
 
     public @Nullable String serverVersionString() { return serverVersionString; }
     public @NotNull SessionEvent serverVersionString(@Nullable String v) { this.serverVersionString = v; return this; }
@@ -83,7 +88,7 @@ public final class SessionEvent {
         lastActivityEpochMs = 0L;
         grimVersion = null;
         clientBrand = null;
-        clientVersionString = null;
+        clientVersion = -1;
         serverVersionString = null;
         replayClips.clear();
     }

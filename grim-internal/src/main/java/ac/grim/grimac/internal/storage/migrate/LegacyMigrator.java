@@ -51,19 +51,32 @@ public final class LegacyMigrator {
     private final V0Reader v0;
     private final Backend v1;
     private final CheckRegistry checks;
+    private final SessionReconstructor.ClientVersionResolver clientVersionResolver;
     private final long sessionGapMs;
     private final Logger logger;
     private final int chunkSize;
 
+    /**
+     * Convenience ctor for callers (tests) that don't care about mapping the
+     * legacy client-version string; every session ends up with {@code -1}.
+     */
     public LegacyMigrator(V0Reader v0, Backend v1, CheckRegistry checks, long sessionGapMs, Logger logger) {
-        this(v0, v1, checks, sessionGapMs, logger, 1000);
+        this(v0, v1, checks, s -> -1, sessionGapMs, logger, 1000);
     }
 
-    public LegacyMigrator(V0Reader v0, Backend v1, CheckRegistry checks, long sessionGapMs,
-                          Logger logger, int chunkSize) {
+    public LegacyMigrator(V0Reader v0, Backend v1, CheckRegistry checks,
+                          SessionReconstructor.ClientVersionResolver clientVersionResolver,
+                          long sessionGapMs, Logger logger) {
+        this(v0, v1, checks, clientVersionResolver, sessionGapMs, logger, 1000);
+    }
+
+    public LegacyMigrator(V0Reader v0, Backend v1, CheckRegistry checks,
+                          SessionReconstructor.ClientVersionResolver clientVersionResolver,
+                          long sessionGapMs, Logger logger, int chunkSize) {
         this.v0 = v0;
         this.v1 = v1;
         this.checks = checks;
+        this.clientVersionResolver = clientVersionResolver;
         this.sessionGapMs = sessionGapMs;
         this.logger = logger;
         this.chunkSize = chunkSize;
@@ -153,7 +166,8 @@ public final class LegacyMigrator {
                 }
             };
 
-            SessionReconstructor reconstructor = new SessionReconstructor(sessionGapMs, lens, resolver, emit);
+            SessionReconstructor reconstructor = new SessionReconstructor(
+                    sessionGapMs, lens, resolver, clientVersionResolver, emit);
 
             long afterId = state.lastMigratedViolationId;
             while (true) {

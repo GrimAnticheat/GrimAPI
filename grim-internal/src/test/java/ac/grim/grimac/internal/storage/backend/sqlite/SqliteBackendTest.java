@@ -90,8 +90,8 @@ final class SqliteBackendTest {
     void upsertSession() throws Exception {
         UUID player = UUID.randomUUID();
         UUID sid = UUID.randomUUID();
-        SessionRecord v1 = new SessionRecord(sid, player, "Prison", 1000, 1000, "3.1.0", "vanilla", "1.21.1", "Paper", List.of());
-        SessionRecord v2 = new SessionRecord(sid, player, "Prison", 1000, 5000, "3.1.0", "vanilla", "1.21.1", "Paper", List.of());
+        SessionRecord v1 = new SessionRecord(sid, player, "Prison", 1000, 1000, "3.1.0", "vanilla", 767, "Paper", List.of());
+        SessionRecord v2 = new SessionRecord(sid, player, "Prison", 1000, 5000, "3.1.0", "vanilla", 767, "Paper", List.of());
         backend.writeRecordsDirect(Categories.SESSION, List.of(v1));
         backend.writeRecordsDirect(Categories.SESSION, List.of(v2));
         Page<SessionRecord> p = backend.read(Categories.SESSION, Queries.getSessionById(sid));
@@ -140,8 +140,8 @@ final class SqliteBackendTest {
         UUID aliceSession = UUID.randomUUID();
         UUID bobSession = UUID.randomUUID();
         backend.writeRecordsDirect(Categories.SESSION, List.of(
-                new SessionRecord(aliceSession, alice, "Prison", 1000, 1000, "3.1.0", "vanilla", "1.21.1", "Paper", List.of()),
-                new SessionRecord(bobSession, bob, "Prison", 2000, 2000, "3.1.0", "vanilla", "1.21.1", "Paper", List.of())));
+                new SessionRecord(aliceSession, alice, "Prison", 1000, 1000, "3.1.0", "vanilla", 767, "Paper", List.of()),
+                new SessionRecord(bobSession, bob, "Prison", 2000, 2000, "3.1.0", "vanilla", 767, "Paper", List.of())));
         backend.writeRecordsDirect(Categories.VIOLATION, List.of(
                 violation(aliceSession, alice, 1100),
                 violation(bobSession, bob, 2100)));
@@ -161,7 +161,7 @@ final class SqliteBackendTest {
         UUID player = UUID.randomUUID();
         UUID session = UUID.randomUUID();
         backend.writeRecordsDirect(Categories.SESSION, List.of(
-                new SessionRecord(session, player, "Prison", 1000, 1000, "3.1.0", "vanilla", "1.21.1", "Paper", List.of())));
+                new SessionRecord(session, player, "Prison", 1000, 1000, "3.1.0", "vanilla", 767, "Paper", List.of())));
 
         List<ViolationRecord> batch = new ArrayList<>(1000);
         int total = 100_000;
@@ -185,7 +185,7 @@ final class SqliteBackendTest {
 
     private static SessionRecord session(UUID player, long started) {
         return new SessionRecord(UUID.randomUUID(), player, "Prison", started, started,
-                "3.1.0", "vanilla", "1.21.1", "Paper", List.of());
+                "3.1.0", "vanilla", 767, "Paper", List.of());
     }
 
     private static ViolationRecord violation(UUID sessionId, UUID player, long time) {
