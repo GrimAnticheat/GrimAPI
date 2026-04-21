@@ -130,7 +130,7 @@ final class InMemoryBackendTest {
     private static SessionRecord session(UUID player, long started) {
         return new SessionRecord(
                 UUID.randomUUID(), player, "Prison", started, started,
-                "3.1.0", "vanilla", "1.21.1", "Paper/1.21.1", List.of());
+                "3.1.0", "vanilla", 767, "Paper/1.21.1", List.of());
     }
 
     private static ViolationRecord violation(UUID sessionId, UUID player, long time) {

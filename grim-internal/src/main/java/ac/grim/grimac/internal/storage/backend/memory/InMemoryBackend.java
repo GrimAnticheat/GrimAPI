@@ -123,7 +123,7 @@ public final class InMemoryBackend implements Backend {
         SessionRecord s = new SessionRecord(
                 e.sessionId(), e.playerUuid(), e.serverName(),
                 e.startedEpochMs(), e.lastActivityEpochMs(),
-                e.grimVersion(), e.clientBrand(), e.clientVersionString(),
+                e.grimVersion(), e.clientBrand(), e.clientVersion(),
                 e.serverVersionString(), List.copyOf(e.replayClips()));
         synchronized (writeMutex) {
             SessionRecord prev = sessions.put(s.sessionId(), s);

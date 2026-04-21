@@ -13,6 +13,10 @@ import java.util.UUID;
  * {@code pageOrdinal} is a 1-based label within the current page (newest-on-page =
  * {@code pageSize}, oldest-on-page = 1). Global chronological ordinals require an
  * extra count query and are deferred; see DESIGN_NOTES.md.
+ * <p>
+ * {@code clientVersion} is a PacketEvents protocol-version number (PVN) or
+ * {@code -1} when unknown. Renderers resolve to a display string via
+ * {@code ClientVersion.getById(pvn)} at the Layer-3 command-glue layer.
  */
 @ApiStatus.Experimental
 public record SessionSummary(
@@ -23,7 +27,7 @@ public record SessionSummary(
         long lastActivityEpochMs,
         @Nullable String grimVersion,
         @Nullable String serverName,
-        @Nullable String clientVersionString,
+        int clientVersion,
         @Nullable String clientBrand,
         long violationCount) {
 

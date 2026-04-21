@@ -18,7 +18,7 @@ import java.sql.Statement;
 @ApiStatus.Internal
 public final class SqliteSchema {
 
-    public static final int CURRENT_VERSION = 2;
+    public static final int CURRENT_VERSION = 3;
 
     private SqliteSchema() {}
 
@@ -37,6 +37,7 @@ public final class SqliteSchema {
         if (existing < 0) {
             applyV1(c);
             applyV2(c);
+            applyV3(c);
             long now = System.currentTimeMillis();
             try (PreparedStatement ps = c.prepareStatement(
                     "INSERT INTO grim_meta(id, schema_version, grim_core_version, initialized_at, last_migration_at) "
@@ -56,8 +57,9 @@ public final class SqliteSchema {
                     + "; refusing to downgrade. Roll Grim forward.");
         }
 
-        if (existing < 2) {
-            applyV2(c);
+        if (existing < 2) applyV2(c);
+        if (existing < 3) applyV3(c);
+        if (existing < CURRENT_VERSION) {
             try (PreparedStatement ps = c.prepareStatement(
                     "UPDATE grim_meta SET schema_version=?, last_migration_at=?, grim_core_version=? WHERE id=0")) {
                 ps.setInt(1, CURRENT_VERSION);
@@ -106,6 +108,10 @@ public final class SqliteSchema {
                     + "last_activity INTEGER NOT NULL, "
                     + "grim_version TEXT, "
                     + "client_brand TEXT, "
+                    // v3 replaces this column with client_version_pvn INTEGER. The v1
+                    // shape is kept here only because existing databases we migrate
+                    // out of had this column; pristine v3 dbs apply v3 immediately
+                    // and the column never appears.
                     + "client_version TEXT, "
                     + "server_version TEXT, "
                     + "replay_clips_json TEXT"
@@ -183,6 +189,58 @@ public final class SqliteSchema {
             try (Statement s = c.createStatement()) {
                 s.executeUpdate("DROP TABLE grim_migration_state");
             }
+        }
+    }
+
+    /**
+     * v3: replace {@code grim_sessions.client_version TEXT} with
+     * {@code client_version_pvn INTEGER NOT NULL DEFAULT -1}. Layer 1 now stores
+     * PacketEvents protocol-version numbers instead of release-name strings —
+     * display conversion happens at Layer 3 via PE. Existing string data is
+     * discarded (set to -1); conversion at Layer 2 would require bundling a
+     * string→PVN lookup that belongs with PE at Layer 3.
+     * <p>
+     * Uses the SQLite table-rewrite pattern: create new table, copy rows from
+     * old, drop old, rename new, recreate index. Portable across SQLite
+     * versions that don't support {@code ALTER TABLE DROP COLUMN}.
+     */
+    private static void applyV3(Connection c) throws SQLException {
+        try (Statement s = c.createStatement()) {
+            // If the target shape already exists (fresh v3 db produced by applyV1
+            // then applyV3 with no pre-existing v1 artefacts), nothing to do.
+            boolean hasPvnColumn = false;
+            try (ResultSet rs = s.executeQuery("PRAGMA table_info(grim_sessions)")) {
+                while (rs.next()) {
+                    if ("client_version_pvn".equalsIgnoreCase(rs.getString("name"))) {
+                        hasPvnColumn = true;
+                        break;
+                    }
+                }
+            }
+            if (hasPvnColumn) return;
+
+            s.executeUpdate("DROP INDEX IF EXISTS idx_sessions_player_started");
+            s.executeUpdate("CREATE TABLE grim_sessions_v3 ("
+                    + "session_id BLOB PRIMARY KEY, "
+                    + "player_uuid BLOB NOT NULL, "
+                    + "server_name TEXT, "
+                    + "started_at INTEGER NOT NULL, "
+                    + "last_activity INTEGER NOT NULL, "
+                    + "grim_version TEXT, "
+                    + "client_brand TEXT, "
+                    + "client_version_pvn INTEGER NOT NULL DEFAULT -1, "
+                    + "server_version TEXT, "
+                    + "replay_clips_json TEXT"
+                    + ")");
+            s.executeUpdate("INSERT INTO grim_sessions_v3 "
+                    + "(session_id, player_uuid, server_name, started_at, last_activity, "
+                    + " grim_version, client_brand, client_version_pvn, server_version, replay_clips_json) "
+                    + "SELECT session_id, player_uuid, server_name, started_at, last_activity, "
+                    + "       grim_version, client_brand, -1, server_version, replay_clips_json "
+                    + "FROM grim_sessions");
+            s.executeUpdate("DROP TABLE grim_sessions");
+            s.executeUpdate("ALTER TABLE grim_sessions_v3 RENAME TO grim_sessions");
+            s.executeUpdate("CREATE INDEX idx_sessions_player_started ON grim_sessions(player_uuid, started_at DESC)");
         }
     }
 }

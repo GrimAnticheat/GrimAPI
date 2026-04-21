@@ -11,12 +11,11 @@ import java.util.UUID;
  * caller feeds rows in ascending {@code (player_uuid, created_at)} order and receives
  * "open session" updates as the gap heuristic produces them.
  * <p>
- * Usage:
- * <pre>
- *   SessionReconstructor r = new SessionReconstructor(gapMs, lookup, listener);
- *   for (V0Violation v : stream) r.accept(v);
- *   r.flush();
- * </pre>
+ * Client-version mapping is delegated to a caller-supplied
+ * {@link ClientVersionResolver}. The v0 store kept client versions as free-form
+ * strings (e.g. {@code "1.21.1"}); v1 stores PacketEvents protocol-version
+ * numbers. The resolver lives at Layer 3 where PE is available; Layer 2 stays
+ * PE-free and accepts {@code -1} for strings the resolver couldn't map.
  */
 @ApiStatus.Internal
 public final class SessionReconstructor {
@@ -48,15 +47,20 @@ public final class SessionReconstructor {
     private final LookupLens lookup;
     private final Emit emit;
     private final CheckIdResolver checkIdResolver;
+    private final ClientVersionResolver clientVersionResolver;
 
     private UUID currentPlayer;
     private SessionRecord currentSession;
     private java.util.List<ReconstructedViolation> pendingInSession = new java.util.ArrayList<>();
 
-    public SessionReconstructor(long gapMs, LookupLens lookup, CheckIdResolver checkIdResolver, Emit emit) {
+    public SessionReconstructor(long gapMs, LookupLens lookup,
+                                CheckIdResolver checkIdResolver,
+                                ClientVersionResolver clientVersionResolver,
+                                Emit emit) {
         this.gapMs = gapMs;
         this.lookup = lookup;
         this.checkIdResolver = checkIdResolver;
+        this.clientVersionResolver = clientVersionResolver;
         this.emit = emit;
     }
 
@@ -80,7 +84,7 @@ public final class SessionReconstructor {
                     Math.max(currentSession.lastActivityEpochMs(), v.createdAtEpochMs()),
                     currentSession.grimVersion(),
                     currentSession.clientBrand(),
-                    currentSession.clientVersionString(),
+                    currentSession.clientVersion(),
                     currentSession.serverVersionString(),
                     currentSession.replayClips());
         }
@@ -109,6 +113,8 @@ public final class SessionReconstructor {
     }
 
     private SessionRecord newSession(V0Reader.V0Violation v) {
+        String clientVersionStr = lookup.clientVersion(v.clientVersionId());
+        int clientVersionPvn = clientVersionResolver.resolve(clientVersionStr);
         return new SessionRecord(
                 UUID.randomUUID(),
                 v.playerUuid(),
@@ -117,7 +123,7 @@ public final class SessionReconstructor {
                 v.createdAtEpochMs(),
                 lookup.grimVersion(v.grimVersionId()),
                 lookup.clientBrand(v.clientBrandId()),
-                lookup.clientVersion(v.clientVersionId()),
+                clientVersionPvn,
                 lookup.serverVersion(v.serverVersionId()),
                 List.of());
     }
@@ -138,5 +144,15 @@ public final class SessionReconstructor {
     @FunctionalInterface
     public interface CheckIdResolver {
         int resolve(String legacyDisplayName);
+    }
+
+    /**
+     * Maps a legacy v0 client-version string (e.g. {@code "1.21.1"}) to a
+     * PacketEvents protocol-version number. Return {@code -1} when the string
+     * doesn't resolve to any known {@code ClientVersion} enum value.
+     */
+    @FunctionalInterface
+    public interface ClientVersionResolver {
+        int resolve(String legacyClientVersionString);
     }
 }

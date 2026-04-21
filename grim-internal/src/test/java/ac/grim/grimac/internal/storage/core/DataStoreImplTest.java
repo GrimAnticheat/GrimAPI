@@ -58,7 +58,7 @@ final class DataStoreImplTest {
                 .sessionId(sid).playerUuid(player).serverName("Prison")
                 .startedEpochMs(1000).lastActivityEpochMs(1500)
                 .grimVersion("3.1.0").clientBrand("vanilla")
-                .clientVersionString("1.21.1").serverVersionString("Paper"));
+                .clientVersion(767).serverVersionString("Paper"));
         awaitQuiesce();
         Page<SessionRecord> page = store.query(Categories.SESSION, Queries.listSessionsByPlayer(player, 10, null))
                 .toCompletableFuture().get(2, TimeUnit.SECONDS);
@@ -89,7 +89,7 @@ final class DataStoreImplTest {
                 .sessionId(session).playerUuid(player).serverName("Prison")
                 .startedEpochMs(1000).lastActivityEpochMs(1000)
                 .grimVersion("3.1.0").clientBrand("vanilla")
-                .clientVersionString("1.21.1").serverVersionString("Paper"));
+                .clientVersion(767).serverVersionString("Paper"));
         store.submit(Categories.PLAYER_IDENTITY, e -> e
                 .uuid(player).currentName("Alice").firstSeenEpochMs(1000).lastSeenEpochMs(1000));
         for (int i = 0; i < 7; i++) {

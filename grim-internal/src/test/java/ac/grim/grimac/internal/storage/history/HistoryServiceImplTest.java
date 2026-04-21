@@ -174,7 +174,7 @@ final class HistoryServiceImplTest {
     private void submitSession(UUID sid, UUID player, long start, long end) {
         store.submit(Categories.SESSION, populateSession(new SessionRecord(
                 sid, player, "Prison", start, end,
-                "3.1.0", "vanilla", "1.21.1", "Paper", List.of())));
+                "3.1.0", "vanilla", 767, "Paper", List.of())));
     }
 
     private void submitViolation(UUID sid, UUID player, int checkId, long time) {
@@ -188,7 +188,7 @@ final class HistoryServiceImplTest {
                 .sessionId(r.sessionId()).playerUuid(r.playerUuid()).serverName(r.serverName())
                 .startedEpochMs(r.startedEpochMs()).lastActivityEpochMs(r.lastActivityEpochMs())
                 .grimVersion(r.grimVersion()).clientBrand(r.clientBrand())
-                .clientVersionString(r.clientVersionString()).serverVersionString(r.serverVersionString())
+                .clientVersion(r.clientVersion()).serverVersionString(r.serverVersionString())
                 .replaceReplayClips(r.replayClips());
     }
 

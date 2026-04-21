@@ -79,7 +79,7 @@ public final class HistoryServiceImpl implements HistoryService {
         return new SessionSummary(
                 s.sessionId(), s.playerUuid(), ordinal,
                 s.startedEpochMs(), s.lastActivityEpochMs(),
-                s.grimVersion(), s.serverName(), s.clientVersionString(), s.clientBrand(),
+                s.grimVersion(), s.serverName(), s.clientVersion(), s.clientBrand(),
                 violationCount);
     }
 
@@ -133,7 +133,7 @@ public final class HistoryServiceImpl implements HistoryService {
         return new SessionDetail(
                 s.sessionId(), s.playerUuid(),
                 s.startedEpochMs(), s.lastActivityEpochMs(),
-                s.grimVersion(), s.serverName(), s.clientVersionString(), s.clientBrand(),
+                s.grimVersion(), s.serverName(), s.clientVersion(), s.clientBrand(),
                 bucketSize, buckets, entries);
     }
 }

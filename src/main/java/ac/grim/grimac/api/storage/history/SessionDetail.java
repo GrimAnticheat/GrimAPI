@@ -11,6 +11,9 @@ import java.util.UUID;
  * All data needed to render a single session's detail view. The full violation list
  * and the pre-aggregated {@code buckets} are both provided; renderers decide which
  * to show (e.g. summary vs. detailed mode).
+ * <p>
+ * {@code clientVersion} is a PacketEvents PVN or {@code -1} when unknown — see
+ * {@link SessionSummary} for the rationale.
  */
 @ApiStatus.Experimental
 public record SessionDetail(
@@ -20,7 +23,7 @@ public record SessionDetail(
         long lastActivityEpochMs,
         @Nullable String grimVersion,
         @Nullable String serverName,
-        @Nullable String clientVersionString,
+        int clientVersion,
         @Nullable String clientBrand,
         long bucketSizeMs,
         @NotNull List<CheckBucket> buckets,

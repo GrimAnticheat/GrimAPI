@@ -63,14 +63,14 @@ public final class SqliteBackend implements Backend {
 
     private static final String UPSERT_SESSIONS =
             "INSERT INTO grim_sessions(session_id, player_uuid, server_name, started_at, last_activity, "
-                    + "grim_version, client_brand, client_version, server_version, replay_clips_json) "
+                    + "grim_version, client_brand, client_version_pvn, server_version, replay_clips_json) "
                     + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
                     + "ON CONFLICT(session_id) DO UPDATE SET "
                     + "server_name=excluded.server_name, "
                     + "last_activity=excluded.last_activity, "
                     + "grim_version=excluded.grim_version, "
                     + "client_brand=excluded.client_brand, "
-                    + "client_version=excluded.client_version, "
+                    + "client_version_pvn=excluded.client_version_pvn, "
                     + "server_version=excluded.server_version, "
                     + "replay_clips_json=excluded.replay_clips_json";
 
@@ -294,7 +294,7 @@ public final class SqliteBackend implements Backend {
             ps.setLong(5, s.lastActivityEpochMs());
             ps.setString(6, s.grimVersion());
             ps.setString(7, s.clientBrand());
-            ps.setString(8, s.clientVersionString());
+            ps.setInt(8, s.clientVersion());
             ps.setString(9, s.serverVersionString());
             ps.setString(10, s.replayClips().isEmpty() ? "[]" : serializeReplayClipsShim());
         }
@@ -390,7 +390,7 @@ public final class SqliteBackend implements Backend {
                 ps.setLong(5, s.lastActivityEpochMs());
                 ps.setString(6, s.grimVersion());
                 ps.setString(7, s.clientBrand());
-                ps.setString(8, s.clientVersionString());
+                ps.setInt(8, s.clientVersion());
                 ps.setString(9, s.serverVersionString());
                 ps.setString(10, s.replayClips().isEmpty() ? "[]" : serializeReplayClipsShim());
                 ps.addBatch();
@@ -461,7 +461,7 @@ public final class SqliteBackend implements Backend {
         byte[] cursorSessionId = decodeSessionIdCursor(q.cursor());
         try (PreparedStatement ps = c.prepareStatement(
                 "SELECT session_id, player_uuid, server_name, started_at, last_activity, "
-                        + "grim_version, client_brand, client_version, server_version, replay_clips_json "
+                        + "grim_version, client_brand, client_version_pvn, server_version, replay_clips_json "
                         + "FROM grim_sessions "
                         + "WHERE player_uuid = ? AND (started_at < ? OR (started_at = ? AND session_id < ?)) "
                         + "ORDER BY started_at DESC, session_id DESC "
@@ -491,7 +491,7 @@ public final class SqliteBackend implements Backend {
     private Page<SessionRecord> getSessionById(Connection c, Queries.GetSessionById q) throws SQLException {
         try (PreparedStatement ps = c.prepareStatement(
                 "SELECT session_id, player_uuid, server_name, started_at, last_activity, "
-                        + "grim_version, client_brand, client_version, server_version, replay_clips_json "
+                        + "grim_version, client_brand, client_version_pvn, server_version, replay_clips_json "
                         + "FROM grim_sessions WHERE session_id = ?")) {
             ps.setBytes(1, UuidCodec.toBytes(q.sessionId()));
             try (ResultSet rs = ps.executeQuery()) {
@@ -578,7 +578,7 @@ public final class SqliteBackend implements Backend {
                 rs.getLong("last_activity"),
                 rs.getString("grim_version"),
                 rs.getString("client_brand"),
-                rs.getString("client_version"),
+                rs.getInt("client_version_pvn"),
                 rs.getString("server_version"),
                 List.of());
     }
