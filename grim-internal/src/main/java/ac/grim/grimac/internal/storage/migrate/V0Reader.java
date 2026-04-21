@@ -1,8 +1,10 @@
 package ac.grim.grimac.internal.storage.migrate;
 
 import org.jetbrains.annotations.ApiStatus;
+import org.jetbrains.annotations.Nullable;
 
 import java.sql.Connection;
+import java.sql.DatabaseMetaData;
 import java.sql.DriverManager;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -16,34 +18,57 @@ import java.util.function.Consumer;
 
 /**
  * Streams legacy v0 ({@code grim_history_*}) tables in order of
- * {@code (player_uuid, created_at)} so the session reconstructor can bucket by time-gap
- * without loading the whole dataset into memory.
+ * {@code (player_uuid, created_at)} so the session reconstructor can bucket by
+ * time-gap without loading the whole dataset into memory.
  * <p>
- * Column layout is read from the original 2.0 SQLite schema:
- * <ul>
- *   <li>grim_history_violations — id, server_id, uuid (BLOB/BINARY(16)), check_name_id,
- *       verbose, vl, created_at, grim_version_id, client_brand_id, client_version_id,
- *       server_version_id</li>
- *   <li>lookup tables (grim_history_servers / _check_names / _versions / _client_brands
- *       / _client_versions / _server_versions) — (id, string)</li>
- * </ul>
+ * JDBC-source-agnostic — the caller supplies any URL. The old 2.0 plugin wrote
+ * the same {@code grim_history_*} schema through three dialects (SQLite, MySQL,
+ * PostgreSQL); the SQL in this class sticks to the portable subset that all
+ * three parse identically.
+ * <p>
+ * Driver responsibility lives with the caller / host classpath. The running
+ * Paper server that used the legacy stack must have the same JDBC driver on
+ * its classpath that it did before cutover — if the driver is missing,
+ * {@link #isLegacyStorePresent()} returns {@code false} (SQLException → null
+ * presence) and migration cleanly no-ops rather than crashing Grim.
  */
 @ApiStatus.Internal
 public final class V0Reader {
 
     private final String jdbcUrl;
+    private final @Nullable String username;
+    private final @Nullable String password;
 
     public V0Reader(String jdbcUrl) {
-        this.jdbcUrl = jdbcUrl;
+        this(jdbcUrl, null, null);
     }
 
-    /** @return true iff the v0 database exists and has the expected tables. */
+    public V0Reader(String jdbcUrl, @Nullable String username, @Nullable String password) {
+        this.jdbcUrl = jdbcUrl;
+        this.username = username;
+        this.password = password;
+    }
+
+    private Connection open() throws SQLException {
+        if (username == null && password == null) return DriverManager.getConnection(jdbcUrl);
+        return DriverManager.getConnection(jdbcUrl, username, password);
+    }
+
+    /**
+     * True iff the legacy v0 database can be opened and contains the expected
+     * {@code grim_history_violations} table. Uses portable JDBC metadata so
+     * MySQL/Postgres case-folding and SQLite's case-sensitive identifiers both
+     * match.
+     */
     public boolean isLegacyStorePresent() {
-        try (Connection c = DriverManager.getConnection(jdbcUrl);
-             PreparedStatement ps = c.prepareStatement(
-                     "SELECT name FROM sqlite_master WHERE type='table' AND name='grim_history_violations'");
-             ResultSet rs = ps.executeQuery()) {
-            return rs.next();
+        try (Connection c = open()) {
+            DatabaseMetaData md = c.getMetaData();
+            try (ResultSet rs = md.getTables(null, null, "grim_history_violations", null)) {
+                if (rs.next()) return true;
+            }
+            try (ResultSet rs = md.getTables(null, null, "GRIM_HISTORY_VIOLATIONS", null)) {
+                return rs.next();
+            }
         } catch (SQLException e) {
             return false;
         }
@@ -51,7 +76,7 @@ public final class V0Reader {
 
     public Map<Integer, String> loadLookup(String table, String stringColumn) throws SQLException {
         Map<Integer, String> out = new LinkedHashMap<>();
-        try (Connection c = DriverManager.getConnection(jdbcUrl);
+        try (Connection c = open();
              PreparedStatement ps = c.prepareStatement("SELECT id, " + stringColumn + " FROM " + table);
              ResultSet rs = ps.executeQuery()) {
             while (rs.next()) out.put(rs.getInt(1), rs.getString(2));
@@ -60,7 +85,7 @@ public final class V0Reader {
     }
 
     public long maxViolationId() throws SQLException {
-        try (Connection c = DriverManager.getConnection(jdbcUrl);
+        try (Connection c = open();
              PreparedStatement ps = c.prepareStatement("SELECT COALESCE(MAX(id), 0) FROM grim_history_violations");
              ResultSet rs = ps.executeQuery()) {
             return rs.next() ? rs.getLong(1) : 0L;
@@ -74,7 +99,7 @@ public final class V0Reader {
      */
     public List<V0Violation> readChunk(long afterId, int limit) throws SQLException {
         List<V0Violation> out = new ArrayList<>(limit);
-        try (Connection c = DriverManager.getConnection(jdbcUrl);
+        try (Connection c = open();
              PreparedStatement ps = c.prepareStatement(
                      "SELECT id, server_id, uuid, check_name_id, verbose, vl, created_at, "
                              + "grim_version_id, client_brand_id, client_version_id, server_version_id "
@@ -94,7 +119,7 @@ public final class V0Reader {
      * intermediate accumulation. The consumer decides when to batch-commit.
      */
     public void streamAll(Consumer<V0Violation> consumer) throws SQLException {
-        try (Connection c = DriverManager.getConnection(jdbcUrl);
+        try (Connection c = open();
              PreparedStatement ps = c.prepareStatement(
                      "SELECT id, server_id, uuid, check_name_id, verbose, vl, created_at, "
                              + "grim_version_id, client_brand_id, client_version_id, server_version_id "
