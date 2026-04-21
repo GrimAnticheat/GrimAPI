@@ -201,14 +201,22 @@ public final class BackendToBackendCopier {
             synchronized (sq.writeMutexForCopier()) {
                 java.sql.Connection conn = sq.writeConnection();
                 if (conn == null) throw new BackendException("source backend not initialised");
-                try (java.sql.Statement s = conn.createStatement()) {
-                    s.executeUpdate("DELETE FROM grim_violations");
-                    s.executeUpdate("DELETE FROM grim_sessions");
-                    s.executeUpdate("DELETE FROM grim_players");
+                boolean wasAutoCommit = true;
+                try {
+                    wasAutoCommit = conn.getAutoCommit();
+                    if (wasAutoCommit) conn.setAutoCommit(false);
+                    try (java.sql.Statement s = conn.createStatement()) {
+                        s.executeUpdate("DELETE FROM grim_violations");
+                        s.executeUpdate("DELETE FROM grim_sessions");
+                        s.executeUpdate("DELETE FROM grim_players");
+                    }
                     conn.commit();
                 } catch (java.sql.SQLException e) {
                     try { conn.rollback(); } catch (java.sql.SQLException ignore) {}
                     throw new BackendException("failed to drop source data", e);
+                } finally {
+                    try { if (wasAutoCommit) conn.setAutoCommit(true); }
+                    catch (java.sql.SQLException ignore) {}
                 }
             }
             return;
