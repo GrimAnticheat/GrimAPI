@@ -191,8 +191,8 @@ public final class BackendToBackendCopier {
 
     /**
      * Idempotent drop of the source backend's data after a successful copy.
-     * {@link SqliteBackend} gets raw DROP TABLE on the v1 tables (copier's
-     * implicit contract is "after --delete, the source is gone for v1"). Other
+     * SQLite gets a DELETE sweep on the v1 tables (copier's implicit
+     * contract is "after --delete, the source is empty for v1"). Other
      * backends throw — MySQL/Postgres implementations can override when they
      * land.
      */
