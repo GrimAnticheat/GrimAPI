@@ -94,10 +94,10 @@ final class HistoryServiceImplTest {
         // Newest first: s2 (ordinal 2, 1 violation), s1 (ordinal 1, 2 violations).
         SessionSummary newest = page.items().get(0);
         SessionSummary oldest = page.items().get(1);
-        assertEquals(2, newest.pageOrdinal());
+        assertEquals(2, newest.sessionOrdinal());
         assertEquals(s2Id, newest.sessionId());
         assertEquals(1L, newest.violationCount());
-        assertEquals(1, oldest.pageOrdinal());
+        assertEquals(1, oldest.sessionOrdinal());
         assertEquals(s1Id, oldest.sessionId());
         assertEquals(2L, oldest.violationCount());
     }

@@ -22,8 +22,10 @@ import java.util.concurrent.CompletionStage;
 public interface HistoryService {
 
     /**
-     * Paged listing of a player's sessions, newest first. {@code pageOrdinal} on each
-     * summary is a page-local label — see {@link SessionSummary}.
+     * Paged listing of a player's sessions, newest first. Each summary's
+     * {@code sessionOrdinal} is the global chronological 1-based position of the
+     * session across the player's whole history — Session 1 is their very first
+     * ever, Session K is their most recent — see {@link SessionSummary}.
      */
     @NotNull CompletionStage<@NotNull Page<SessionSummary>> listSessions(
             @NotNull UUID player,
