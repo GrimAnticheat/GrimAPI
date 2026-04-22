@@ -145,12 +145,4 @@ dependencies {
     compileOnly(libs.annotations)
     compileOnly(libs.lombok)
     annotationProcessor(libs.lombok)
-
-    testCompileOnly(libs.lombok)
-    testAnnotationProcessor(libs.lombok)
-}
-
-
-tasks.test {
-    useJUnitPlatform()
 }
