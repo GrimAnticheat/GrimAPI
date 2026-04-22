@@ -67,3 +67,4 @@ nb-configuration.xml
 ## OS X
 ##############################
 .DS_Store
+/workspace.gradle.kts
