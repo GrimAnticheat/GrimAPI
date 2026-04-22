@@ -13,7 +13,7 @@ import java.util.concurrent.CompletionStage;
  * High-level history facade. Returns pure data records — each platform's command
  * layer formats these into its own chat component model.
  * <p>
- * Phase-1 surface covers the two {@code /grim history} use cases (list sessions for a
+ * covers the two {@code /grim history} use cases (list sessions for a
  * player + show detail of one session). Rendering lives in Layer 3 (e.g. the 2.0
  * command module's {@code HistoryComponentRenderer}); this interface carries zero
  * chat-library types on purpose.
