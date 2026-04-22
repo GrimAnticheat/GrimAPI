@@ -22,12 +22,10 @@ dependencies {
     compileOnly(libs.lombok)
     annotationProcessor(libs.lombok)
 
-    // SQLite reference backend (Layer 2).
+    // SQLite reference backend.
     compileOnly(libs.sqliteJdbc)
 
-    // Disruptor ring buffers drive the Layer 2 write path. `api` so downstream
-    // shadowed plugins pick it up transitively; Layer 3 packaging relocates
-    // com.lmax.* to avoid Log4j collisions on the classpath.
+    // com.lmax.* to avoid Log4j collisions on the classpath?
     api(libs.disruptor)
 }
 
