@@ -54,11 +54,45 @@ public final class HistoryServiceImpl implements HistoryService {
     public @NotNull CompletionStage<@NotNull Page<SessionSummary>> listSessions(
             @NotNull UUID player, @Nullable Cursor cursor, int pageSize) {
         int ps = pageSize > 0 ? pageSize : defaultPageSize;
-        return store.query(Categories.SESSION, Queries.listSessionsByPlayer(player, ps, cursor))
-                .thenCompose(this::toSummaryPage);
+        // Session ordinals are GLOBAL chronological — Session 1 = the player's
+        // very first session, Session K = their most recent. Needs countSessions
+        // to know where this page's slice sits in the global ordering.
+        return store.countSessionsByPlayer(player).thenCompose(total ->
+                store.query(Categories.SESSION, Queries.listSessionsByPlayer(player, ps, cursor))
+                        .thenCompose(p -> toSummaryPage(p, total, 0 /* unknown sessions-before; see listSessionsPaged */)));
     }
 
-    private CompletionStage<Page<SessionSummary>> toSummaryPage(Page<SessionRecord> page) {
+    /**
+     * Page-indexed variant that knows exactly where in the global list this page
+     * sits, so ordinals on returned summaries are always correct.
+     */
+    public @NotNull CompletionStage<@NotNull Page<SessionSummary>> listSessionsPaged(
+            @NotNull UUID player, int pageIndex1Based, int pageSize) {
+        int ps = pageSize > 0 ? pageSize : defaultPageSize;
+        int page = Math.max(1, pageIndex1Based);
+        return store.countSessionsByPlayer(player).thenCompose(total -> {
+            long sessionsBefore = (long) (page - 1) * ps;
+            if (sessionsBefore >= total) {
+                return CompletableFuture.completedStage(new Page<>(List.of(), null));
+            }
+            return advanceCursor(player, page, ps).thenCompose(cursor ->
+                    store.query(Categories.SESSION, Queries.listSessionsByPlayer(player, ps, cursor))
+                            .thenCompose(p -> toSummaryPage(p, total, sessionsBefore)));
+        });
+    }
+
+    private CompletionStage<Cursor> advanceCursor(UUID player, int pageIndex1Based, int pageSize) {
+        if (pageIndex1Based <= 1) return CompletableFuture.completedStage(null);
+        CompletionStage<Cursor> cur = CompletableFuture.completedStage(null);
+        for (int i = 1; i < pageIndex1Based; i++) {
+            cur = cur.thenCompose(c -> store.query(Categories.SESSION,
+                            Queries.listSessionsByPlayer(player, pageSize, c))
+                    .thenApply(Page::nextCursor));
+        }
+        return cur;
+    }
+
+    private CompletionStage<Page<SessionSummary>> toSummaryPage(Page<SessionRecord> page, long total, long sessionsBefore) {
         List<SessionRecord> sessions = page.items();
         if (sessions.isEmpty()) {
             return CompletableFuture.completedFuture(new Page<>(List.of(), page.nextCursor()));
@@ -67,7 +101,10 @@ public final class HistoryServiceImpl implements HistoryService {
         CompletionStage<Void> chain = CompletableFuture.completedStage(null);
         for (int i = 0; i < sessions.size(); i++) {
             SessionRecord s = sessions.get(i);
-            int ordinal = sessions.size() - i;
+            // Global ordinal: newest in DESC list = total; session at DESC index i
+            // on a page starting at sessionsBefore has ordinal
+            // total - sessionsBefore - i. Session 1 = oldest.
+            int ordinal = (int) (total - sessionsBefore - i);
             int slot = i;
             chain = chain.thenCompose(v -> store.countViolationsInSession(s.sessionId())
                     .thenCompose(count -> store.countUniqueChecksInSession(s.sessionId())
@@ -99,24 +136,32 @@ public final class HistoryServiceImpl implements HistoryService {
     }
 
     /**
-     * Detail-by-ordinal: ordinal is resolved against the player's session list
-     * (newest first; ordinal 1 = most recent). Bundles the pagination-math the
-     * command would otherwise do externally so SessionDetail carries its own
-     * "Session N" label even when the caller doesn't know page semantics.
+     * Detail-by-ordinal using GLOBAL chronological ordering — Session 1 is the
+     * player's very first session, Session K is their most recent. Computes the
+     * DESC-index from {@code total - ordinal} and fetches exactly the page
+     * containing that session.
      */
     public @NotNull CompletionStage<@Nullable SessionDetail> getSessionDetailByOrdinal(
             @NotNull UUID player, int sessionOrdinal) {
         if (sessionOrdinal < 1) return CompletableFuture.completedStage(null);
-        int pageSize = Math.max(1, sessionOrdinal);
-        return store.query(Categories.SESSION, Queries.listSessionsByPlayer(player, pageSize, null))
-                .thenCompose(sessionPage -> {
-                    List<SessionRecord> items = sessionPage.items();
-                    if (items.size() < sessionOrdinal) return CompletableFuture.completedStage(null);
-                    SessionRecord s = items.get(sessionOrdinal - 1);
-                    return store.query(Categories.VIOLATION,
-                                    Queries.listViolationsInSession(s.sessionId(), 10_000, null))
-                            .thenApply(vPage -> toDetail(s, vPage.items(), sessionOrdinal));
-                });
+        return store.countSessionsByPlayer(player).thenCompose(total -> {
+            if (sessionOrdinal > total) return CompletableFuture.completedStage(null);
+            // descIndex: 0 = newest, (total - 1) = oldest. ordinal 1 = oldest → descIndex = total - 1.
+            long descIndex = total - sessionOrdinal;
+            int pageSize = Math.max(1, defaultPageSize);
+            int pageIndex = (int) (descIndex / pageSize) + 1;
+            int inPage = (int) (descIndex % pageSize);
+            return advanceCursor(player, pageIndex, pageSize).thenCompose(cursor ->
+                    store.query(Categories.SESSION,
+                                    Queries.listSessionsByPlayer(player, pageSize, cursor))
+                            .thenCompose(p -> {
+                                if (inPage >= p.items().size()) return CompletableFuture.completedStage(null);
+                                SessionRecord s = p.items().get(inPage);
+                                return store.query(Categories.VIOLATION,
+                                                Queries.listViolationsInSession(s.sessionId(), 10_000, null))
+                                        .thenApply(vPage -> toDetail(s, vPage.items(), sessionOrdinal));
+                            }));
+        });
     }
 
     @Override
