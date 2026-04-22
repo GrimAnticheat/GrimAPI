@@ -345,4 +345,23 @@ public final class InMemoryBackend implements Backend {
             return violationsBySession.getOrDefault(sessionId, List.of()).size();
         }
     }
+
+    @Override
+    public long countUniqueChecksInSession(@NotNull UUID sessionId) {
+        synchronized (writeMutex) {
+            java.util.List<ViolationRecord> list = violationsBySession.get(sessionId);
+            if (list == null || list.isEmpty()) return 0L;
+            java.util.HashSet<Integer> seen = new java.util.HashSet<>();
+            for (ViolationRecord v : list) seen.add(v.checkId());
+            return seen.size();
+        }
+    }
+
+    @Override
+    public long countSessionsByPlayer(@NotNull UUID player) {
+        synchronized (writeMutex) {
+            java.util.List<SessionRecord> list = sessionsByPlayer.get(player);
+            return list == null ? 0L : list.size();
+        }
+    }
 }

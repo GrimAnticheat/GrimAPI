@@ -164,6 +164,30 @@ public final class DataStoreImpl implements DataStore {
     }
 
     @Override
+    public CompletionStage<Long> countUniqueChecksInSession(UUID sessionId) {
+        Backend b = router.backendFor(Categories.VIOLATION);
+        return CompletableFuture.supplyAsync(() -> {
+            try {
+                return b.countUniqueChecksInSession(sessionId);
+            } catch (BackendException e) {
+                throw new RuntimeException("countUniqueChecksInSession failed", e);
+            }
+        }, reader);
+    }
+
+    @Override
+    public CompletionStage<Long> countSessionsByPlayer(UUID player) {
+        Backend b = router.backendFor(Categories.SESSION);
+        return CompletableFuture.supplyAsync(() -> {
+            try {
+                return b.countSessionsByPlayer(player);
+            } catch (BackendException e) {
+                throw new RuntimeException("countSessionsByPlayer failed", e);
+            }
+        }, reader);
+    }
+
+    @Override
     public DataStoreMetrics metrics() {
         return metrics;
     }

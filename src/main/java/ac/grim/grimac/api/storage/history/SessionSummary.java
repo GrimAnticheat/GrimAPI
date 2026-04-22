@@ -17,6 +17,9 @@ import java.util.UUID;
  * {@code clientVersion} is a PacketEvents protocol-version number (PVN) or
  * {@code -1} when unknown. Renderers resolve to a display string via
  * {@code ClientVersion.getById(pvn)} at the Layer-3 command-glue layer.
+ * <p>
+ * {@code uniqueCheckCount} is the number of distinct checks that flagged in this
+ * session (shown as {@code [N]} in the design). {@code 0} when no violations.
  */
 @ApiStatus.Experimental
 public record SessionSummary(
@@ -29,7 +32,8 @@ public record SessionSummary(
         @Nullable String serverName,
         int clientVersion,
         @Nullable String clientBrand,
-        long violationCount) {
+        long violationCount,
+        int uniqueCheckCount) {
 
     public long durationMs() {
         return Math.max(0, lastActivityEpochMs - startedEpochMs);

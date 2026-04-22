@@ -38,4 +38,10 @@ public interface HistoryService {
     @NotNull CompletionStage<@Nullable SessionDetail> getSessionDetail(
             @NotNull UUID player,
             @NotNull UUID sessionId);
+
+    /**
+     * Total number of sessions ever recorded for {@code player}. Callers use it
+     * to compute the {@code [page / maxPages]} label in the session-list view.
+     */
+    @NotNull CompletionStage<@NotNull Long> countSessions(@NotNull UUID player);
 }
