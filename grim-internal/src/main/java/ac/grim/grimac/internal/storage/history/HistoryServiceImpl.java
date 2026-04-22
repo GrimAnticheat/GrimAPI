@@ -70,17 +70,18 @@ public final class HistoryServiceImpl implements HistoryService {
             int ordinal = sessions.size() - i;
             int slot = i;
             chain = chain.thenCompose(v -> store.countViolationsInSession(s.sessionId())
-                    .thenAccept(count -> out[slot] = toSummary(s, ordinal, count)));
+                    .thenCompose(count -> store.countUniqueChecksInSession(s.sessionId())
+                            .thenAccept(unique -> out[slot] = toSummary(s, ordinal, count, unique.intValue()))));
         }
         return chain.thenApply(v -> new Page<>(List.of(out), page.nextCursor()));
     }
 
-    private static SessionSummary toSummary(SessionRecord s, int ordinal, long violationCount) {
+    private static SessionSummary toSummary(SessionRecord s, int ordinal, long violationCount, int uniqueCheckCount) {
         return new SessionSummary(
                 s.sessionId(), s.playerUuid(), ordinal,
                 s.startedEpochMs(), s.lastActivityEpochMs(),
                 s.grimVersion(), s.serverName(), s.clientVersion(), s.clientBrand(),
-                violationCount);
+                violationCount, uniqueCheckCount);
     }
 
     @Override
@@ -93,16 +94,43 @@ public final class HistoryServiceImpl implements HistoryService {
                     if (!s.playerUuid().equals(player)) return CompletableFuture.completedStage(null);
                     return store.query(Categories.VIOLATION,
                                     Queries.listViolationsInSession(sessionId, 10_000, null))
-                            .thenApply(vPage -> toDetail(s, vPage.items()));
+                            .thenApply(vPage -> toDetail(s, vPage.items(), /*sessionOrdinal*/ 0));
                 });
     }
 
-    private SessionDetail toDetail(SessionRecord s, List<ViolationRecord> violations) {
+    /**
+     * Detail-by-ordinal: ordinal is resolved against the player's session list
+     * (newest first; ordinal 1 = most recent). Bundles the pagination-math the
+     * command would otherwise do externally so SessionDetail carries its own
+     * "Session N" label even when the caller doesn't know page semantics.
+     */
+    public @NotNull CompletionStage<@Nullable SessionDetail> getSessionDetailByOrdinal(
+            @NotNull UUID player, int sessionOrdinal) {
+        if (sessionOrdinal < 1) return CompletableFuture.completedStage(null);
+        int pageSize = Math.max(1, sessionOrdinal);
+        return store.query(Categories.SESSION, Queries.listSessionsByPlayer(player, pageSize, null))
+                .thenCompose(sessionPage -> {
+                    List<SessionRecord> items = sessionPage.items();
+                    if (items.size() < sessionOrdinal) return CompletableFuture.completedStage(null);
+                    SessionRecord s = items.get(sessionOrdinal - 1);
+                    return store.query(Categories.VIOLATION,
+                                    Queries.listViolationsInSession(s.sessionId(), 10_000, null))
+                            .thenApply(vPage -> toDetail(s, vPage.items(), sessionOrdinal));
+                });
+    }
+
+    @Override
+    public @NotNull CompletionStage<@NotNull Long> countSessions(@NotNull UUID player) {
+        return store.countSessionsByPlayer(player);
+    }
+
+    private SessionDetail toDetail(SessionRecord s, List<ViolationRecord> violations, int sessionOrdinal) {
         long bucketSize = Math.max(1, defaultGroupIntervalMs);
         long start = s.startedEpochMs();
 
         List<ViolationEntry> entries = new ArrayList<>(violations.size());
         Map<Long, Map<Integer, Integer>> bucketCounts = new LinkedHashMap<>();
+        java.util.Set<Integer> uniqueChecks = new java.util.LinkedHashSet<>();
         for (ViolationRecord v : violations) {
             long offset = v.occurredEpochMs() - start;
             String display = checks.displayFor(v.checkId())
@@ -115,6 +143,7 @@ public final class HistoryServiceImpl implements HistoryService {
             long bucket = offset / bucketSize;
             bucketCounts.computeIfAbsent(bucket, k -> new LinkedHashMap<>())
                     .merge(v.checkId(), 1, Integer::sum);
+            uniqueChecks.add(v.checkId());
         }
 
         List<CheckBucket> buckets = new ArrayList<>(bucketCounts.size());
@@ -131,9 +160,9 @@ public final class HistoryServiceImpl implements HistoryService {
         }
 
         return new SessionDetail(
-                s.sessionId(), s.playerUuid(),
+                s.sessionId(), s.playerUuid(), sessionOrdinal,
                 s.startedEpochMs(), s.lastActivityEpochMs(),
                 s.grimVersion(), s.serverName(), s.clientVersion(), s.clientBrand(),
-                bucketSize, buckets, entries);
+                bucketSize, uniqueChecks.size(), buckets, entries);
     }
 }

@@ -19,6 +19,7 @@ import java.util.UUID;
 public record SessionDetail(
         @NotNull UUID sessionId,
         @NotNull UUID playerUuid,
+        int sessionOrdinal,
         long startedEpochMs,
         long lastActivityEpochMs,
         @Nullable String grimVersion,
@@ -26,6 +27,7 @@ public record SessionDetail(
         int clientVersion,
         @Nullable String clientBrand,
         long bucketSizeMs,
+        int uniqueCheckCount,
         @NotNull List<CheckBucket> buckets,
         @NotNull List<ViolationEntry> violations) {
 

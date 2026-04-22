@@ -693,6 +693,36 @@ public final class SqliteBackend implements Backend {
         }
     }
 
+    @Override
+    public long countUniqueChecksInSession(@NotNull UUID sessionId) throws BackendException {
+        try (Connection c = openConnection();
+             PreparedStatement ps = c.prepareStatement(
+                     "SELECT COUNT(DISTINCT check_id) FROM grim_violations WHERE session_id = ?")) {
+            ps.setBytes(1, UuidCodec.toBytes(sessionId));
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) return rs.getLong(1);
+                return 0L;
+            }
+        } catch (SQLException e) {
+            throw new BackendException("countUniqueChecksInSession failed", e);
+        }
+    }
+
+    @Override
+    public long countSessionsByPlayer(@NotNull UUID player) throws BackendException {
+        try (Connection c = openConnection();
+             PreparedStatement ps = c.prepareStatement(
+                     "SELECT COUNT(*) FROM grim_sessions WHERE player_uuid = ?")) {
+            ps.setBytes(1, UuidCodec.toBytes(player));
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) return rs.getLong(1);
+                return 0L;
+            }
+        } catch (SQLException e) {
+            throw new BackendException("countSessionsByPlayer failed", e);
+        }
+    }
+
     // --- cursor helpers ----------------------------------------------------
 
     private static Cursor encodeStartedCursor(long started, UUID sessionId) {

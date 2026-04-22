@@ -41,6 +41,10 @@ public interface DataStore {
 
     @NotNull CompletionStage<Long> countViolationsInSession(@NotNull UUID sessionId);
 
+    @NotNull CompletionStage<Long> countUniqueChecksInSession(@NotNull UUID sessionId);
+
+    @NotNull CompletionStage<Long> countSessionsByPlayer(@NotNull UUID player);
+
     @NotNull DataStoreMetrics metrics();
 
     /**

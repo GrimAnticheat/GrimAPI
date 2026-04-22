@@ -93,4 +93,25 @@ public interface Backend {
      * a generic count query surface.
      */
     long countViolationsInSession(@NotNull java.util.UUID sessionId) throws BackendException;
+
+    /**
+     * Count distinct checks that flagged in a given session. Feeds the
+     * {@code [N]} unique-check-count indicator on session-list lines.
+     * Default throws {@link UnsupportedOperationException}; the session/history
+     * commands degrade gracefully when a backend doesn't implement it.
+     */
+    default long countUniqueChecksInSession(@NotNull java.util.UUID sessionId) throws BackendException {
+        throw new UnsupportedOperationException(
+                "backend " + id() + " does not support countUniqueChecksInSession");
+    }
+
+    /**
+     * Count sessions recorded for a player. Feeds the {@code [page / maxPages]}
+     * label on the session-list header. Default throws; see
+     * {@link #countUniqueChecksInSession} for the rationale.
+     */
+    default long countSessionsByPlayer(@NotNull java.util.UUID player) throws BackendException {
+        throw new UnsupportedOperationException(
+                "backend " + id() + " does not support countSessionsByPlayer");
+    }
 }
