@@ -13,5 +13,10 @@ public record CheckCount(
         int checkId,
         @NotNull String stableKey,
         @NotNull String displayName,
+        @NotNull String description,
         int count) {
+
+    public CheckCount {
+        if (description == null) description = "";
+    }
 }

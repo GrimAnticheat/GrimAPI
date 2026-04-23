@@ -183,8 +183,9 @@ public final class HistoryServiceImpl implements HistoryService {
             String display = checks.displayFor(v.checkId())
                     .orElseGet(() -> checks.stableKeyFor(v.checkId()).orElse("check#" + v.checkId()));
             String stable = checks.stableKeyFor(v.checkId()).orElse("check#" + v.checkId());
+            String description = checks.descriptionFor(v.checkId()).orElse("");
             entries.add(new ViolationEntry(
-                    v.checkId(), stable, display,
+                    v.checkId(), stable, display, description,
                     offset, v.vl(), v.verbose(), v.verboseFormat()));
 
             long bucket = offset / bucketSize;
@@ -201,7 +202,8 @@ public final class HistoryServiceImpl implements HistoryService {
                 String display = checks.displayFor(cc.getKey())
                         .orElseGet(() -> checks.stableKeyFor(cc.getKey()).orElse("check#" + cc.getKey()));
                 String stable = checks.stableKeyFor(cc.getKey()).orElse("check#" + cc.getKey());
-                counts.add(new CheckCount(cc.getKey(), stable, display, cc.getValue()));
+                String description = checks.descriptionFor(cc.getKey()).orElse("");
+                counts.add(new CheckCount(cc.getKey(), stable, display, description, cc.getValue()));
             }
             buckets.add(new CheckBucket(bucketStart, counts));
         }
