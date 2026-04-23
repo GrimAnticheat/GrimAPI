@@ -279,7 +279,7 @@ public final class SqliteBackend implements Backend {
             ps.setDouble(4, v.vl());
             ps.setLong(5, v.occurredEpochMs());
             ps.setString(6, v.verbose());
-            ps.setString(7, v.verboseFormat().name());
+            ps.setInt(7, v.verboseFormat().code());
         }
     }
 
@@ -375,7 +375,7 @@ public final class SqliteBackend implements Backend {
                 ps.setDouble(4, v.vl());
                 ps.setLong(5, v.occurredEpochMs());
                 ps.setString(6, v.verbose());
-                ps.setString(7, v.verboseFormat().name());
+                ps.setInt(7, v.verboseFormat().code());
                 ps.addBatch();
             }
             ps.executeBatch();
@@ -594,7 +594,7 @@ public final class SqliteBackend implements Backend {
                 rs.getDouble("vl"),
                 rs.getLong("occurred_at"),
                 rs.getString("verbose"),
-                VerboseFormat.valueOf(rs.getString("verbose_format")));
+                VerboseFormat.fromCode(rs.getInt("verbose_format")));
     }
 
     private static PlayerIdentity mapIdentity(ResultSet rs) throws SQLException {

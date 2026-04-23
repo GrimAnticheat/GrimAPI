@@ -18,7 +18,7 @@ import java.sql.Statement;
 @ApiStatus.Internal
 public final class SqliteSchema {
 
-    public static final int CURRENT_VERSION = 3;
+    public static final int CURRENT_VERSION = 4;
 
     private SqliteSchema() {}
 
@@ -38,6 +38,7 @@ public final class SqliteSchema {
             applyV1(c);
             applyV2(c);
             applyV3(c);
+            applyV4(c);
             long now = System.currentTimeMillis();
             try (PreparedStatement ps = c.prepareStatement(
                     "INSERT INTO grim_meta(id, schema_version, grim_core_version, initialized_at, last_migration_at) "
@@ -59,6 +60,7 @@ public final class SqliteSchema {
 
         if (existing < 2) applyV2(c);
         if (existing < 3) applyV3(c);
+        if (existing < 4) applyV4(c);
         if (existing < CURRENT_VERSION) {
             try (PreparedStatement ps = c.prepareStatement(
                     "UPDATE grim_meta SET schema_version=?, last_migration_at=?, grim_core_version=? WHERE id=0")) {
@@ -242,6 +244,96 @@ public final class SqliteSchema {
             s.executeUpdate("DROP TABLE grim_sessions");
             s.executeUpdate("ALTER TABLE grim_sessions_v3 RENAME TO grim_sessions");
             s.executeUpdate("CREATE INDEX idx_sessions_player_started ON grim_sessions(player_uuid, started_at DESC)");
+        }
+    }
+
+    /**
+     * v4: three additions to support the new check-identity contract.
+     * <ul>
+     *   <li>{@code grim_checks.description} — short one-liner for hover
+     *       disambiguation, sourced from each Check's declared description.
+     *       Nullable; empty / null means the check predates the contract
+     *       and the renderer falls back to display-name only.</li>
+     *   <li>{@code grim_checks.introduced_at} — epoch ms of first intern.
+     *       Feeds the collision-prefix template
+     *       ({@code V{introduced_major}/}) via grim_version lookup.</li>
+     *   <li>{@code grim_violations.verbose_format} promoted from TEXT to
+     *       INTEGER. New values are {@link VerboseFormat#code()} codes:
+     *       0=TEXT, 1=STRUCTURED_V1, with 2 reserved for a future
+     *       DEDUP_REF hash-intern scheme. Existing rows migrate by
+     *       name→code lookup.</li>
+     *   <li>{@code grim_violations.metadata} — nullable forward-compat
+     *       JSON slot so future event fields (replay clip refs,
+     *       client/server tick ids, etc.) don't need a schema bump.</li>
+     * </ul>
+     */
+    private static void applyV4(Connection c) throws SQLException {
+        try (Statement s = c.createStatement()) {
+            // grim_checks: additive columns, no rewrite needed.
+            boolean hasDescription = false, hasIntroducedAt = false;
+            try (ResultSet rs = s.executeQuery("PRAGMA table_info(grim_checks)")) {
+                while (rs.next()) {
+                    String col = rs.getString("name");
+                    if ("description".equalsIgnoreCase(col)) hasDescription = true;
+                    if ("introduced_at".equalsIgnoreCase(col)) hasIntroducedAt = true;
+                }
+            }
+            if (!hasDescription) {
+                s.executeUpdate("ALTER TABLE grim_checks ADD COLUMN description TEXT");
+            }
+            if (!hasIntroducedAt) {
+                s.executeUpdate("ALTER TABLE grim_checks ADD COLUMN introduced_at INTEGER");
+            }
+
+            // grim_violations: verbose_format TEXT → INTEGER, plus metadata
+            // column. Check first — idempotent against re-run.
+            boolean formatIsInteger = false, hasMetadata = false;
+            try (ResultSet rs = s.executeQuery("PRAGMA table_info(grim_violations)")) {
+                while (rs.next()) {
+                    String col = rs.getString("name");
+                    String type = rs.getString("type");
+                    if ("verbose_format".equalsIgnoreCase(col) && "INTEGER".equalsIgnoreCase(type)) {
+                        formatIsInteger = true;
+                    }
+                    if ("metadata".equalsIgnoreCase(col)) hasMetadata = true;
+                }
+            }
+            if (!hasMetadata) {
+                s.executeUpdate("ALTER TABLE grim_violations ADD COLUMN metadata TEXT");
+            }
+            if (!formatIsInteger) {
+                // Table-rewrite dance to change verbose_format column type.
+                s.executeUpdate("DROP INDEX IF EXISTS idx_violations_session_time");
+                s.executeUpdate("DROP INDEX IF EXISTS idx_violations_player");
+                s.executeUpdate("CREATE TABLE grim_violations_v4 ("
+                        + "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                        + "session_id BLOB NOT NULL, "
+                        + "player_uuid BLOB NOT NULL, "
+                        + "check_id INTEGER NOT NULL, "
+                        + "vl REAL NOT NULL, "
+                        + "occurred_at INTEGER NOT NULL, "
+                        + "verbose TEXT, "
+                        + "verbose_format INTEGER NOT NULL DEFAULT 0, "
+                        + "metadata TEXT"
+                        + ")");
+                // Map TEXT format names to their new codes. Unknown string
+                // values fall back to 0 (TEXT) which matches fromCode's
+                // behaviour for forward-compat robustness.
+                s.executeUpdate("INSERT INTO grim_violations_v4 "
+                        + "(id, session_id, player_uuid, check_id, vl, occurred_at, verbose, verbose_format, metadata) "
+                        + "SELECT id, session_id, player_uuid, check_id, vl, occurred_at, verbose, "
+                        + "       CASE verbose_format "
+                        + "           WHEN 'TEXT' THEN 0 "
+                        + "           WHEN 'STRUCTURED_V1' THEN 1 "
+                        + "           ELSE 0 "
+                        + "       END, "
+                        + "       metadata "
+                        + "FROM grim_violations");
+                s.executeUpdate("DROP TABLE grim_violations");
+                s.executeUpdate("ALTER TABLE grim_violations_v4 RENAME TO grim_violations");
+                s.executeUpdate("CREATE INDEX idx_violations_session_time ON grim_violations(session_id, occurred_at)");
+                s.executeUpdate("CREATE INDEX idx_violations_player ON grim_violations(player_uuid)");
+            }
         }
     }
 }
