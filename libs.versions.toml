@@ -5,6 +5,7 @@ spigot = "1.18-R0.1-SNAPSHOT"
 indraGit = "4.0.0"
 sqliteJdbc = "3.46.1.3"
 disruptor = "4.0.0"
+junit = "5.10.2"
 
 [libraries]
 lombok = { module = "org.projectlombok:lombok", version.ref = "lombok" }
@@ -12,6 +13,9 @@ annotations = { module = "org.jetbrains:annotations", version.ref = "annotations
 spigotApi = { module = "org.spigotmc:spigot-api", version.ref = "spigot" }
 sqliteJdbc = { module = "org.xerial:sqlite-jdbc", version.ref = "sqliteJdbc" }
 disruptor = { module = "com.lmax:disruptor", version.ref = "disruptor" }
+junitApi = { module = "org.junit.jupiter:junit-jupiter-api", version.ref = "junit" }
+junitEngine = { module = "org.junit.jupiter:junit-jupiter-engine", version.ref = "junit" }
+junitParams = { module = "org.junit.jupiter:junit-jupiter-params", version.ref = "junit" }
 
 [plugins]
 indraGit = { id = "net.kyori.indra.git", version.ref = "indraGit" }

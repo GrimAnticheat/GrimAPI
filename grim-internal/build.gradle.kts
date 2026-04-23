@@ -27,11 +27,20 @@ dependencies {
 
     // com.lmax.* to avoid Log4j collisions on the classpath?
     api(libs.disruptor)
+
+    testImplementation(libs.junitApi)
+    testImplementation(libs.junitParams)
+    testRuntimeOnly(libs.junitEngine)
+    testImplementation(libs.annotations)
 }
 
 tasks.withType<JavaCompile>().configureEach {
     options.release.set(17)
     options.encoding = "UTF-8"
+}
+
+tasks.withType<Test>().configureEach {
+    useJUnitPlatform()
 }
 
 // Publishing for the Legacy Module
