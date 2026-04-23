@@ -82,7 +82,10 @@ public final class StableKeyMapping {
         m.put("badpacketsh", "legacy:badpacketsh");
         m.put("badpacketsj", "legacy:badpacketsj");
         m.put("badpacketsr", "legacy:badpacketsr");
-        m.put("badpacketss", "legacy:badpacketss");
+        // GP.S (window_not_accepted transaction) shares behaviour with V3.T
+        // once that check is implemented — unify them on the semantic key
+        // so GP.S history migrates to the same id V3.T will populate.
+        m.put("badpacketss", "badpackets.window_not_accepted");
         m.put("badpacketst", "legacy:badpacketst");
         m.put("badpacketsw", "legacy:badpacketsw");
         m.put("badpacketsx", "legacy:badpacketsx");
