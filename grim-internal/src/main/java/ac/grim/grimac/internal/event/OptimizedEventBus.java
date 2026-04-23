@@ -10,11 +10,14 @@ import ac.grim.grimac.api.event.events.CompletePredictionEvent;
 import ac.grim.grimac.api.event.events.FlagEvent;
 import ac.grim.grimac.api.event.events.GrimCheckEvent;
 import ac.grim.grimac.api.event.events.GrimJoinEvent;
+import ac.grim.grimac.api.event.events.GrimPlayerSetbackEvent;
 import ac.grim.grimac.api.event.events.GrimQuitEvent;
 import ac.grim.grimac.api.event.events.GrimReloadEvent;
+import ac.grim.grimac.api.event.events.GrimSetbackEvent;
 import ac.grim.grimac.api.event.events.GrimTeleportEvent;
 import ac.grim.grimac.api.event.events.GrimTransactionReceivedEvent;
 import ac.grim.grimac.api.event.events.GrimTransactionSendEvent;
+import ac.grim.grimac.api.event.events.GrimVehicleSetbackEvent;
 import ac.grim.grimac.api.event.events.GrimVerboseCheckEvent;
 import ac.grim.grimac.api.plugin.GrimPlugin;
 import ac.grim.grimac.internal.plugin.resolver.GrimExtensionManager;
@@ -78,6 +81,8 @@ public class OptimizedEventBus implements EventBus {
         GrimTeleportEvent.Channel teleportCh               = new GrimTeleportEvent.Channel();
         GrimTransactionSendEvent.Channel txSendCh          = new GrimTransactionSendEvent.Channel();
         GrimTransactionReceivedEvent.Channel txRecvCh      = new GrimTransactionReceivedEvent.Channel();
+        GrimPlayerSetbackEvent.Channel playerSetbackCh     = new GrimPlayerSetbackEvent.Channel();
+        GrimVehicleSetbackEvent.Channel vehicleSetbackCh   = new GrimVehicleSetbackEvent.Channel();
         installChannel(FlagEvent.class,                    flagCh);
         installChannel(CommandExecuteEvent.class,          commandCh);
         installChannel(CompletePredictionEvent.class,      completeCh);
@@ -87,15 +92,19 @@ public class OptimizedEventBus implements EventBus {
         installChannel(GrimTeleportEvent.class,            teleportCh);
         installChannel(GrimTransactionSendEvent.class,     txSendCh);
         installChannel(GrimTransactionReceivedEvent.class, txRecvCh);
+        installChannel(GrimPlayerSetbackEvent.class,       playerSetbackCh);
+        installChannel(GrimVehicleSetbackEvent.class,      vehicleSetbackCh);
 
         // Abstract channels. Their Class<GrimCheckEvent<?>> keys are raw-cast
         // because GrimCheckEvent's CHANNEL type parameter is erased at .class.
         GrimEvent.Channel anyCh                            = new GrimEvent.Channel();
         GrimCheckEvent.Channel checkCh                     = new GrimCheckEvent.Channel();
         GrimVerboseCheckEvent.Channel verboseCheckCh       = new GrimVerboseCheckEvent.Channel();
+        GrimSetbackEvent.Channel setbackCh                 = new GrimSetbackEvent.Channel();
         installAbstractChannel(GrimEvent.class,             anyCh);
         installAbstractChannel(GrimCheckEvent.class,        checkCh);
         installAbstractChannel(GrimVerboseCheckEvent.class, verboseCheckCh);
+        installAbstractChannel(GrimSetbackEvent.class,      setbackCh);
 
         // Bridge wiring: every concrete subtype registers with every abstract
         // parent it can bridge to. Order matters only when abstract subscribes
@@ -110,15 +119,20 @@ public class OptimizedEventBus implements EventBus {
         verboseCheckCh.registerSubtype(FlagEvent.class,            flagCh,    FlagEvent.Channel::bridgeFromVerboseCheck);
         verboseCheckCh.registerSubtype(CommandExecuteEvent.class,  commandCh, CommandExecuteEvent.Channel::bridgeFromVerboseCheck);
 
-        anyCh.registerSubtype(FlagEvent.class,                    flagCh,        FlagEvent.Channel::bridgeFromAny);
-        anyCh.registerSubtype(CommandExecuteEvent.class,          commandCh,     CommandExecuteEvent.Channel::bridgeFromAny);
-        anyCh.registerSubtype(CompletePredictionEvent.class,      completeCh,    CompletePredictionEvent.Channel::bridgeFromAny);
-        anyCh.registerSubtype(GrimJoinEvent.class,                joinCh,        GrimJoinEvent.Channel::bridgeFromAny);
-        anyCh.registerSubtype(GrimQuitEvent.class,                quitCh,        GrimQuitEvent.Channel::bridgeFromAny);
-        anyCh.registerSubtype(GrimReloadEvent.class,              reloadCh,      GrimReloadEvent.Channel::bridgeFromAny);
-        anyCh.registerSubtype(GrimTeleportEvent.class,            teleportCh,    GrimTeleportEvent.Channel::bridgeFromAny);
-        anyCh.registerSubtype(GrimTransactionSendEvent.class,     txSendCh,      GrimTransactionSendEvent.Channel::bridgeFromAny);
-        anyCh.registerSubtype(GrimTransactionReceivedEvent.class, txRecvCh,      GrimTransactionReceivedEvent.Channel::bridgeFromAny);
+        setbackCh.registerSubtype(GrimPlayerSetbackEvent.class,   playerSetbackCh,  GrimPlayerSetbackEvent.Channel::bridgeFromSetback);
+        setbackCh.registerSubtype(GrimVehicleSetbackEvent.class,  vehicleSetbackCh, GrimVehicleSetbackEvent.Channel::bridgeFromSetback);
+
+        anyCh.registerSubtype(FlagEvent.class,                    flagCh,           FlagEvent.Channel::bridgeFromAny);
+        anyCh.registerSubtype(CommandExecuteEvent.class,          commandCh,        CommandExecuteEvent.Channel::bridgeFromAny);
+        anyCh.registerSubtype(CompletePredictionEvent.class,      completeCh,       CompletePredictionEvent.Channel::bridgeFromAny);
+        anyCh.registerSubtype(GrimJoinEvent.class,                joinCh,           GrimJoinEvent.Channel::bridgeFromAny);
+        anyCh.registerSubtype(GrimQuitEvent.class,                quitCh,           GrimQuitEvent.Channel::bridgeFromAny);
+        anyCh.registerSubtype(GrimReloadEvent.class,              reloadCh,         GrimReloadEvent.Channel::bridgeFromAny);
+        anyCh.registerSubtype(GrimTeleportEvent.class,            teleportCh,       GrimTeleportEvent.Channel::bridgeFromAny);
+        anyCh.registerSubtype(GrimTransactionSendEvent.class,     txSendCh,         GrimTransactionSendEvent.Channel::bridgeFromAny);
+        anyCh.registerSubtype(GrimTransactionReceivedEvent.class, txRecvCh,         GrimTransactionReceivedEvent.Channel::bridgeFromAny);
+        anyCh.registerSubtype(GrimPlayerSetbackEvent.class,       playerSetbackCh,  GrimPlayerSetbackEvent.Channel::bridgeFromAny);
+        anyCh.registerSubtype(GrimVehicleSetbackEvent.class,      vehicleSetbackCh, GrimVehicleSetbackEvent.Channel::bridgeFromAny);
     }
 
     private <E extends GrimEvent<C>, C extends EventChannel<? extends E, ?>> void installChannel(Class<E> eventClass, C channel) {
