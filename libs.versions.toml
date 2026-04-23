@@ -3,11 +3,13 @@ lombok = "1.18.42"
 annotations = "24.1.0"
 spigot = "1.18-R0.1-SNAPSHOT"
 indraGit = "4.0.0"
+junit = "5.11.3"
 
 [libraries]
 lombok = { module = "org.projectlombok:lombok", version.ref = "lombok" }
 annotations = { module = "org.jetbrains:annotations", version.ref = "annotations" }
 spigotApi = { module = "org.spigotmc:spigot-api", version.ref = "spigot" }
+junitJupiter = { module = "org.junit.jupiter:junit-jupiter", version.ref = "junit" }
 
 [plugins]
 indraGit = { id = "net.kyori.indra.git", version.ref = "indraGit" }
