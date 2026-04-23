@@ -1,0 +1,102 @@
+name: Build and Publish
+
+# Reusable workflow. Called by:
+#   - gradle-publish.yml on every push to master → snapshot build
+#     (version ends in -<commit>), published to the Maven repo
+#   - release.yml via manual workflow_dispatch → release build
+#     (clean version from gradle.properties), published to the Maven
+#     repo AND attached to a GitHub Release at tag v<version>
+
+on:
+  workflow_call:
+    inputs:
+      release:
+        description: 'Release build — strip the -<commit> suffix, use the version in gradle.properties verbatim'
+        type: boolean
+        default: false
+      publish-github-release:
+        description: 'Upload the built jar to the GitHub Release at v<version> and publish any draft there (requires release=true)'
+        type: boolean
+        default: false
+    secrets:
+      MAVEN_REPO_NAME:
+        required: true
+      MAVEN_REPO_URL:
+        required: true
+      MAVEN_USERNAME:
+        required: true
+      MAVEN_PASSWORD:
+        required: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Read version from gradle.properties
+        id: version
+        run: |
+          VERSION=$(grep -E '^version[[:space:]]*=' gradle.properties | cut -d'=' -f2 | xargs)
+          echo "Raw version: $VERSION"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Publish with Gradle
+        run: |
+          if [ "${{ inputs.release }}" = "true" ]; then
+            ./gradlew publish -Prelease=true
+          else
+            ./gradlew publish
+          fi
+        env:
+          MAVEN_REPO_NAME: ${{ secrets.MAVEN_REPO_NAME }}
+          MAVEN_REPO_URL: ${{ secrets.MAVEN_REPO_URL }}
+          MAVEN_USERNAME: ${{ secrets.MAVEN_USERNAME }}
+          MAVEN_PASSWORD: ${{ secrets.MAVEN_PASSWORD }}
+
+      - name: Upload jar to GitHub Release
+        if: inputs.release && inputs.publish-github-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+          REPO: ${{ github.repository }}
+        run: |
+          TAG="v${VERSION}"
+          JAR=$(ls build/libs/GrimAPI-${VERSION}.jar 2>/dev/null \
+                || ls build/libs/GrimAPI-${VERSION}-release.jar 2>/dev/null \
+                || ls build/libs/*-${VERSION}.jar 2>/dev/null | head -1)
+          if [ -z "$JAR" ]; then
+            echo "No jar found for version ${VERSION} in build/libs/:"
+            ls -la build/libs/ || true
+            exit 1
+          fi
+          echo "Uploading $JAR to $REPO release $TAG"
+
+          if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+            # Release exists (possibly a draft) — upload the jar and
+            # publish the draft if so. --clobber replaces a prior asset
+            # if this workflow is re-run.
+            gh release upload "$TAG" "$JAR" --repo "$REPO" --clobber
+            gh release edit "$TAG" --repo "$REPO" --draft=false
+            echo "Published $TAG with jar asset"
+          else
+            # No release yet — cut one with auto-generated notes.
+            gh release create "$TAG" "$JAR" \
+              --repo "$REPO" \
+              --title "$VERSION" \
+              --generate-notes \
+              --target "${{ github.sha }}"
+            echo "Created $TAG with jar asset"
+          fi
