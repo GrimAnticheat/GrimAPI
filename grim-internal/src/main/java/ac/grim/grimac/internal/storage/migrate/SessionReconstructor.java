@@ -14,8 +14,9 @@ import java.util.UUID;
  * Client-version mapping is delegated to a caller-supplied
  * {@link ClientVersionResolver}. The v0 store kept client versions as free-form
  * strings (e.g. {@code "1.21.1"}); v1 stores PacketEvents protocol-version
- * numbers. The resolver lives at Layer 3 where PE is available; Layer 2 stays
- * PE-free and accepts {@code -1} for strings the resolver couldn't map.
+ * numbers. The resolver lives in the host plugin module (where PacketEvents
+ * is on the classpath); this code stays PE-free and accepts {@code -1} for
+ * strings the resolver couldn't map.
  */
 @ApiStatus.Internal
 public final class SessionReconstructor {
@@ -129,8 +130,8 @@ public final class SessionReconstructor {
     }
 
     private boolean sameServerContext(SessionRecord s, V0Reader.V0Violation v) {
-        // Per §14 open question #1: sessions are scoped per (uuid, server_name). A
-        // server change within the gap window still starts a new session.
+        // Sessions are scoped per (uuid, server_name). A server change
+        // within the gap window still starts a new session.
         return s.serverName() == null
                 || s.serverName().equals(lookup.server(v.serverId()));
     }

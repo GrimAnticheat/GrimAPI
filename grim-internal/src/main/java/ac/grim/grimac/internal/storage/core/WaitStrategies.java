@@ -14,8 +14,8 @@ import java.util.concurrent.TimeUnit;
 
 /**
  * Maps the operator-facing {@link WaitStrategyType} enum to a Disruptor
- * {@link WaitStrategy}. Kept internal so the Disruptor types never cross into
- * Layer 1 config.
+ * {@link WaitStrategy}. Kept internal so the Disruptor types never cross
+ * into the public config surface.
  */
 @ApiStatus.Internal
 final class WaitStrategies {

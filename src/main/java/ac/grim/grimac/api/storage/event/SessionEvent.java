@@ -18,13 +18,14 @@ import java.util.UUID;
  * <p>
  * {@code clientVersion} is a PacketEvents protocol-version number (PVN). Producers
  * pass {@code user.getClientVersion().getProtocolVersion()}; use {@code -1} for
- * unresolved / unknown. Keeping Layer 1 PE-free means this is a plain int with
- * no enum leak — Layer 3 resolves back to display names via PE at render time.
+ * unresolved / unknown. The API side is a plain int so this package carries
+ * no PacketEvents dependency; renderers resolve back to display names via PE
+ * at the point where chat components are built.
  * <p>
  * {@code replayClips} is an internally mutable list held on the event. It is
  * cleared on {@link #reset()}; producers append via {@link #addReplayClip(ReplayClip)}
- * or {@link #replaceReplayClips(List)}. Phase-1 SQLite storage does not persist
- * non-empty clip lists (recorder is phase-3 work).
+ * or {@link #replaceReplayClips(List)}. The current built-in SQLite backend
+ * does not persist non-empty clip lists — a future recorder feature will.
  */
 @ApiStatus.Experimental
 public final class SessionEvent {

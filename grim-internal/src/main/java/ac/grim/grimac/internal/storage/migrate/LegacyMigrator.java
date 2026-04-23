@@ -27,17 +27,17 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 
 /**
- * Legacy v0 → v1 migrator. Reads the old {@code grim_history_*} tables in ascending
- * {@code (player_uuid, created_at, id)} order, feeds them through
- * {@link SessionReconstructor} to bucket by time-gap, and writes v1 records
- * synchronously via {@link Backend#bulkImport} (bypassing the Disruptor rings —
- * runs at startup before accept-players per §13).
+ * Migrates the legacy {@code grim_history_*} tables into the v1 schema. Reads
+ * the old rows in ascending {@code (player_uuid, created_at, id)} order, feeds
+ * them through {@link SessionReconstructor} to bucket by time-gap, and writes
+ * v1 records synchronously via {@link Backend#bulkImport} — bypasses the ring
+ * buffers because it runs at startup, before the server accepts players.
  * <p>
- * Target-agnostic — works with any {@link Backend} that implements
- * {@code bulkImport}. Migration state lives in {@code grim_settings} under
+ * Target-agnostic: works with any {@link Backend} that implements
+ * {@code bulkImport}. Migration state is stored as a setting under
  * (SERVER, grim-core, legacy_v0_migration_state), so resumability works on
- * backends that have no native migration-state table. Format is a pipe-delimited
- * UTF-8 string: {@code "<lastId>|<state>|<startedAt>|<completedAt>"}.
+ * backends that have no native migration-state table. Format is a
+ * pipe-delimited UTF-8 string: {@code "<lastId>|<state>|<startedAt>|<completedAt>"}.
  */
 @ApiStatus.Internal
 public final class LegacyMigrator {

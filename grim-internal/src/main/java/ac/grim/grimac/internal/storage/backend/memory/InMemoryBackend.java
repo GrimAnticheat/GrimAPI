@@ -35,13 +35,15 @@ import java.util.UUID;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * In-memory reference backend. Ships day 1 per §10 / brief. Used by tests and as a
- * sanity-bar for other backend impls. Not persistent.
+ * In-memory reference backend. Used by tests and as a sanity-bar for other
+ * backend implementations; also a useful target for operators who want to run
+ * a category without persistence (e.g. ephemeral setting state). Not durable
+ * — contents are lost at process exit.
  * <p>
  * {@link #eventHandlerFor(Category)} returns a thin handler per category that
  * materialises events into records and appends to the internal maps under a
- * shared write lock. Cross-category handlers on the same backend serialise on
- * {@code this}.
+ * shared write lock. Cross-category handlers on the same backend serialise
+ * on {@code this}.
  */
 @ApiStatus.Internal
 public final class InMemoryBackend implements Backend {

@@ -19,13 +19,12 @@ import java.util.Set;
  * against) and an {@link EnumSet} of {@link Capability} they provide; the shared
  * facade validates category routing against these at startup.
  * <p>
- * <strong>Write path</strong>: Layer 2 wires a Disruptor ring buffer per category;
- * slots are pre-allocated mutable events. The ring's consumer invokes the
- * {@link StorageEventHandler} returned from {@link #eventHandlerFor(Category)}
- * in sequence, with {@code endOfBatch} signalling commit boundaries. Handlers
- * may run concurrently with other handlers for sibling categories on the same
- * backend instance; implementations must synchronise shared write state
- * internally.
+ * <strong>Write path</strong>: the DataStore wires a ring buffer per category
+ * and feeds each ring's consumer through the {@link StorageEventHandler}
+ * returned by {@link #eventHandlerFor(Category)}. Slots are pre-allocated
+ * mutable events and {@code endOfBatch} signals commit boundaries. Handlers
+ * for sibling categories on the same backend instance may run concurrently;
+ * implementations must synchronise any shared write state internally.
  * <p>
  * <strong>Read path</strong>: {@link #read(Category, Query)} is on-thread; the
  * {@code Category} argument is the routing key, while the result type comes from
@@ -67,20 +66,19 @@ public interface Backend {
 
     /**
      * Synchronous bulk-import escape hatch. Writes a batch of immutable record
-     * objects (not events) for the given category outside the Disruptor ring.
-     * Used by startup-time importers (e.g. legacy v0 → v1 migration) that
-     * require the records to be visible before {@link #eventHandlerFor} begins
-     * accepting live traffic.
+     * objects (not events) for the given category, bypassing the ring. Used by
+     * startup-time importers (legacy-store migration, cross-backend copy) that
+     * need the records visible before {@link #eventHandlerFor} starts accepting
+     * live traffic.
      * <p>
      * Callers must pass records whose runtime type matches
      * {@code cat.queryResultType()}; implementations cast internally and throw
      * on mismatch. Synchronous, blocks until committed. Not intended for the
      * hot path — live writes go through the ring.
      * <p>
-     * Implementations added after phase 1 that want to support being a
-     * migration target must implement this; the default throws
-     * {@link UnsupportedOperationException} so read-only-ish backends fail
-     * clearly.
+     * A backend that wants to be a migration target must implement this; the
+     * default throws {@link UnsupportedOperationException} so read-only-ish
+     * backends fail loudly rather than silently swallowing imported data.
      */
     default <R> void bulkImport(@NotNull Category<?> cat, @NotNull List<R> records) throws BackendException {
         throw new UnsupportedOperationException(
@@ -88,9 +86,10 @@ public interface Backend {
     }
 
     /**
-     * Count violations in a session. First-class (rather than via a generic count(query))
-     * because phase 1 only needs this one aggregate and making it explicit is simpler than
-     * a generic count query surface.
+     * Count violations in a session. First-class (rather than via a generic
+     * {@code count(query)}) because the current feature set only needs this
+     * one aggregate and an explicit method is simpler than a generic count
+     * query surface.
      */
     long countViolationsInSession(@NotNull java.util.UUID sessionId) throws BackendException;
 

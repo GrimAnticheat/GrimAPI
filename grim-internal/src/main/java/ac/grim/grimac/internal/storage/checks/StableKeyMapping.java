@@ -7,16 +7,17 @@ import java.util.Map;
 import java.util.Optional;
 
 /**
- * Committed table bridging legacy v0 check display names to phase-1 stable keys.
+ * Committed table bridging legacy check display names to the stable keys the
+ * new schema uses.
  * <p>
- * When v0 data is migrated (see {@code LegacyMigrator}), every distinct
- * {@code check_name_string} in v0's {@code grim_history_check_names} is looked up here.
- * If present, the mapped stable_key is interned. If absent, a defensive
- * {@code "legacy:<name>"} stable_key is used so the row is still addressable instead of
- * crashing the migration.
+ * When legacy data is migrated (see {@code LegacyMigrator}), every distinct
+ * {@code check_name_string} in the old {@code grim_history_check_names} is
+ * looked up here. If present, the mapped stable_key is interned. If absent,
+ * a defensive {@code "legacy:<name>"} stable_key is used so the row is still
+ * addressable instead of crashing the migration.
  * <p>
- * This is the one committed place to update when a check is renamed between 2.0 and
- * later versions — editing the value here preserves historical violations' identity.
+ * When a check is renamed across plugin versions, edit the value here so
+ * historical violations keep the same stable identity.
  */
 @ApiStatus.Internal
 public final class StableKeyMapping {
@@ -35,12 +36,14 @@ public final class StableKeyMapping {
     }
 
     private static Map<String, String> buildMappings() {
-        // Keys are lowercased display names from v0's grim_history_check_names. Values
-        // are stable keys Check classes will declare in Layer 3.
+        // Keys are lowercased display names from the legacy
+        // grim_history_check_names table. Values are the stable keys new Check
+        // classes declare in the plugin module.
         //
-        // The list is deliberately small — phase 1 ships the bridge, not an exhaustive
-        // 2.0 check catalogue. Unknown names hit the "legacy:" fallback so migration
-        // always completes; the operator can rename them later via the registry.
+        // The list is deliberately small — this is a bridge for the known
+        // renames, not an exhaustive catalogue. Unknown names hit the
+        // "legacy:" fallback so migration always completes; operators can
+        // rename them later through the check registry.
         return Map.ofEntries(
                 Map.entry("reach", "combat.reach"),
                 Map.entry("timer", "movement.timer"),

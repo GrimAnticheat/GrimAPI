@@ -12,8 +12,9 @@ import java.util.concurrent.CompletionStage;
 import java.util.function.Consumer;
 
 /**
- * Top-level storage facade. Built from a {@code DataStoreConfig} by Layer 2 and
- * consumed by Layer 3 platform glue and (in future) extension sandbox handles.
+ * Top-level storage facade. Built from a {@code DataStoreConfig} by the host
+ * platform's wiring code; consumed by the command / alerts / history surface
+ * and, eventually, extension sandbox handles.
  */
 @ApiStatus.Experimental
 public interface DataStore {
@@ -48,8 +49,8 @@ public interface DataStore {
     @NotNull DataStoreMetrics metrics();
 
     /**
-     * Blocks until each category's ring drains or the timeout elapses. Anything left
-     * is dropped with a final warn. Used by Layer 3 shutdown paths.
+     * Blocks until each category's ring drains or the timeout elapses. Anything
+     * left is dropped with a final warn. Called from the host's shutdown path.
      */
     void flushAndClose(long drainTimeoutMs);
 }

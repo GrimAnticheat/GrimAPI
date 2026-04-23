@@ -8,9 +8,13 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Input contract for building a {@code DataStore} in Layer 2. Platform-agnostic:
- * Layer 3 glue builds this from whatever config source it has (YAML for 2.0,
- * generator for 3.0).
+ * Input contract for building a {@code DataStore}. Platform-agnostic — the
+ * host assembles an instance from whatever config source it has (a YAML file,
+ * an in-code builder, a database, …) and hands it to the storage wiring.
+ * <p>
+ * {@code routing} maps each category to a backend id; {@code backends} holds
+ * the per-backend {@link BackendConfig} the matching {@code BackendProvider}
+ * produced from its own settings source.
  */
 @ApiStatus.Experimental
 public record DataStoreConfig(

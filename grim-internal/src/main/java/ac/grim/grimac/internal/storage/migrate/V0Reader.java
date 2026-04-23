@@ -21,10 +21,10 @@ import java.util.function.Consumer;
  * {@code (player_uuid, created_at)} so the session reconstructor can bucket by
  * time-gap without loading the whole dataset into memory.
  * <p>
- * JDBC-source-agnostic — the caller supplies any URL. The old 2.0 plugin wrote
- * the same {@code grim_history_*} schema through three dialects (SQLite, MySQL,
- * PostgreSQL); the SQL in this class sticks to the portable subset that all
- * three parse identically.
+ * JDBC-source-agnostic — the caller supplies any URL. The legacy plugin wrote
+ * the same {@code grim_history_*} schema through three dialects (SQLite,
+ * MySQL, PostgreSQL); the SQL in this class sticks to the portable subset
+ * that all three parse identically.
  * <p>
  * Driver responsibility lives with the caller / host classpath. The running
  * Paper server that used the legacy stack must have the same JDBC driver on
