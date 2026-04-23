@@ -31,6 +31,7 @@ dependencies {
     testImplementation(libs.junitApi)
     testImplementation(libs.junitParams)
     testRuntimeOnly(libs.junitEngine)
+    testRuntimeOnly(libs.junitLauncher)
     testImplementation(libs.annotations)
 }
 

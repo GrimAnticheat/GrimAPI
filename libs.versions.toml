@@ -16,6 +16,7 @@ disruptor = { module = "com.lmax:disruptor", version.ref = "disruptor" }
 junitApi = { module = "org.junit.jupiter:junit-jupiter-api", version.ref = "junit" }
 junitEngine = { module = "org.junit.jupiter:junit-jupiter-engine", version.ref = "junit" }
 junitParams = { module = "org.junit.jupiter:junit-jupiter-params", version.ref = "junit" }
+junitLauncher = { module = "org.junit.platform:junit-platform-launcher", version = "1.10.2" }
 
 [plugins]
 indraGit = { id = "net.kyori.indra.git", version.ref = "indraGit" }
