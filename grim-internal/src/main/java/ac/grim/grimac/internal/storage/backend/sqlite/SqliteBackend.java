@@ -41,16 +41,17 @@ import java.util.Set;
 import java.util.UUID;
 
 /**
- * Phase-1 SQLite reference backend. Each {@link StorageEventHandler} owns its own
- * write connection in autoCommit=false mode, so cross-category commits never tread
- * on each other's in-flight transactions. SQLite's file-level locking serializes
- * the actual writes; the per-handler isolation just keeps transaction boundaries
- * clean. Reads open a fresh connection per call — WAL mode permits concurrent
- * readers alongside the writers.
+ * SQLite reference backend. Each {@link StorageEventHandler} owns its own
+ * write connection in {@code autoCommit=false} mode, so cross-category
+ * commits never tread on each other's in-flight transactions. SQLite's
+ * file-level locking serialises the actual writes; the per-handler isolation
+ * just keeps transaction boundaries clean. Reads open a fresh connection per
+ * call — WAL mode permits concurrent readers alongside the writers.
  * <p>
- * {@link #writeRecordsDirect(Category, List)} is a record-taking bulk-load escape
- * hatch for one-shot importers (e.g. LegacyMigrator) that want to bypass the
- * ring; it uses the backend's shared {@code writeConn} under {@code writeMutex}.
+ * {@link #writeRecordsDirect(Category, List)} is a record-taking bulk-load
+ * escape hatch for one-shot importers (e.g. {@code LegacyMigrator}) that want
+ * to bypass the ring; it uses the backend's shared {@code writeConn} under
+ * {@code writeMutex}.
  */
 @ApiStatus.Internal
 public final class SqliteBackend implements Backend {
@@ -327,7 +328,8 @@ public final class SqliteBackend implements Backend {
 
     private static String serializeReplayClipsShim() {
         throw new UnsupportedOperationException(
-                "replay clip serialization is phase-3 scope; phase 1 sessions must have empty replayClips");
+                "replay-clip serialisation isn't implemented by this backend; "
+                        + "sessions with non-empty replayClips cannot be stored");
     }
 
     // --- migration / bulk-load path (bypasses rings, shared writeConn) ------

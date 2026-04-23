@@ -10,13 +10,14 @@ import java.util.UUID;
 import java.util.concurrent.CompletionStage;
 
 /**
- * High-level history facade. Returns pure data records — each platform's command
- * layer formats these into its own chat component model.
+ * High-level history facade. Returns pure data records; callers on the
+ * command / UI side format these into their own chat-component model.
  * <p>
- * covers the two {@code /grim history} use cases (list sessions for a
- * player + show detail of one session). Rendering lives in Layer 3 (e.g. the 2.0
- * command module's {@code HistoryComponentRenderer}); this interface carries zero
- * chat-library types on purpose.
+ * The surface covers the two {@code /grim history} use cases — list sessions
+ * for a player, and show detail for one session. Rendering deliberately
+ * lives outside this interface: there are no chat-library types here, so an
+ * alternate UI (web, RCON, another command framework) can be built on the
+ * same service without touching the implementation.
  */
 @ApiStatus.Experimental
 public interface HistoryService {

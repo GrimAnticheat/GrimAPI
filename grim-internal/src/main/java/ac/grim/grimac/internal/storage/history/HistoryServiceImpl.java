@@ -27,12 +27,14 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 
 /**
- * Phase-1 {@link HistoryService} impl. Pure data — all rendering lives in Layer 3
- * (e.g. Grim-public's {@code HistoryComponentRenderer}).
+ * {@link HistoryService} implementation that walks the {@link DataStore} via
+ * the public query surface and returns pure data records. Rendering to chat
+ * components is a concern of the host plugin.
  * <p>
- * Session labels on list pages are page-local ordinals (newest-on-page = N, oldest-on-page
- * = 1): §12 calls for global ordinals but cheaply computing those needs a count query we
- * haven't added. See DESIGN_NOTES.md.
+ * {@link #listSessions} returns page-local ordinals cheaply; {@link
+ * #listSessionsPaged} recomputes the global chronological ordinal via a
+ * {@code countSessions} query so Session 1 is always the player's very first
+ * session across their whole history, regardless of which page it appears on.
  */
 @ApiStatus.Internal
 public final class HistoryServiceImpl implements HistoryService {

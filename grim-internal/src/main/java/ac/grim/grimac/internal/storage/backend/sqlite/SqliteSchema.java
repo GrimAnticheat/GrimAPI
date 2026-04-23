@@ -194,15 +194,16 @@ public final class SqliteSchema {
 
     /**
      * v3: replace {@code grim_sessions.client_version TEXT} with
-     * {@code client_version_pvn INTEGER NOT NULL DEFAULT -1}. Layer 1 now stores
-     * PacketEvents protocol-version numbers instead of release-name strings —
-     * display conversion happens at Layer 3 via PE. Existing string data is
-     * discarded (set to -1); conversion at Layer 2 would require bundling a
-     * string→PVN lookup that belongs with PE at Layer 3.
+     * {@code client_version_pvn INTEGER NOT NULL DEFAULT -1}. The record
+     * shape now stores PacketEvents protocol-version numbers instead of
+     * release-name strings — display conversion happens at the plugin-side
+     * render layer, where PE is on the classpath. Existing string data is
+     * discarded (set to -1); the conversion would need a string→PVN lookup
+     * that belongs with PE, not in this module.
      * <p>
-     * Uses the SQLite table-rewrite pattern: create new table, copy rows from
-     * old, drop old, rename new, recreate index. Portable across SQLite
-     * versions that don't support {@code ALTER TABLE DROP COLUMN}.
+     * Uses the SQLite table-rewrite pattern: create new table, copy rows
+     * from old, drop old, rename new, recreate index. Portable across
+     * SQLite versions that don't support {@code ALTER TABLE DROP COLUMN}.
      */
     private static void applyV3(Connection c) throws SQLException {
         try (Statement s = c.createStatement()) {

@@ -28,10 +28,10 @@ import java.util.function.LongConsumer;
  * from a source {@link Backend} into a destination via its {@link Backend#bulkImport}
  * escape hatch. No rings; synchronous; progress is reported through {@code onBatch}.
  * <p>
- * Scans by player UUID: identity rows in the source define the set of players to
- * walk, then for each player we page sessions and (per session) page violations.
- * This matches the only {@code Query} shape the Layer 1 read API currently
- * supports without a free-form "all rows" query.
+ * Scans by player UUID: identity rows in the source define the set of players
+ * to walk, then for each player we page sessions and (per session) page
+ * violations. This matches the only {@code Query} shape the public read API
+ * currently supports — there's no free-form "all rows" query.
  * <p>
  * Not idempotent against a partially-populated destination — if you aborted
  * halfway and re-run, rows previously copied reappear (sessions are upserts
@@ -132,39 +132,21 @@ public final class BackendToBackendCopier {
     }
 
     /**
-     * Walks the source backend enumerating distinct players. The Layer-1 API
-     * doesn't expose a "scan all identities" query; we read sessions via a
-     * well-known seed (all players the backend knows of through PLAYER_IDENTITY
-     * rows — which we probe by iterating known identity rows per UUID when we
-     * have them, otherwise by scanning session rows).
+     * Enumerates distinct player UUIDs known to the source backend. The public
+     * read API intentionally has no free-form "scan all identities" query, so
+     * we reach into per-backend escape hatches for the ones we ship:
+     * {@link ac.grim.grimac.internal.storage.backend.sqlite.SqliteBackend}
+     * answers via a direct JDBC {@code SELECT uuid FROM grim_players};
+     * {@link ac.grim.grimac.internal.storage.backend.memory.InMemoryBackend}
+     * exposes a {@code knownPlayerUuids()} helper.
      * <p>
-     * SqliteBackend's cursor scheme paginates per-player, so we can't just scan
-     * "all sessions". Instead we rely on the InMemory / Sqlite backends having
-     * grown identity rows for any active player (handled by
-     * {@code PlayerIdentityService.observe} at join time) — so grim_players is
-     * the canonical "all players" set.
-     * <p>
-     * For backends without that guarantee (future Mongo? theoretical), callers
-     * would need a different enumeration strategy. Phase 1 supports only
-     * backends where PLAYER_IDENTITY is the source of truth for "who to copy".
+     * The underlying assumption is that PLAYER_IDENTITY is the source of truth
+     * for "who to copy" — {@code PlayerIdentityService.observe} writes a row
+     * on join, so any active player shows up here. A backend that doesn't
+     * guarantee that would need a different enumeration strategy bolted on
+     * here or a new public query shape.
      */
     private Set<UUID> collectPlayersBySessionWalk() throws BackendException {
-        // The Layer 1 Query surface doesn't expose "list all identities" — so
-        // we probe through a different angle: the SqliteBackend + InMemoryBackend
-        // both happen to expose readers that let us walk rows, but the Backend
-        // interface doesn't. The cleanest legal approach right now is to require
-        // the caller to supply the player UUID set they want copied. We take the
-        // identity-row table as the authoritative set via a reflective hatch.
-        //
-        // For the two current backends:
-        //   - InMemoryBackend: ConcurrentHashMap is visible via reflection; we
-        //     avoid that brittleness.
-        //   - SqliteBackend: direct JDBC read.
-        //
-        // Simplest portable answer: use the Set<UUID> the caller hands us — the
-        // copier's commands collect it from identity queries against the source.
-        // For the phase-1 shape below we fall back to a raw JDBC read on SQLite
-        // and a reflective field read on InMemory via a small helper.
         Set<UUID> out = new LinkedHashSet<>();
         if (src instanceof ac.grim.grimac.internal.storage.backend.sqlite.SqliteBackend sq) {
             try (java.sql.Connection c = java.sql.DriverManager.getConnection(sq.jdbcUrl());

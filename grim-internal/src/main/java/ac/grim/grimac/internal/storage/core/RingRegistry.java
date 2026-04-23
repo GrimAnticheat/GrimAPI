@@ -96,10 +96,10 @@ public final class RingRegistry {
     };
 
     /**
-     * Events stay live between publishes, so before handing the slot back to the
-     * producer we clear state from the last tenant. Known Layer 1 event types
-     * carry {@code reset()}; unknown types (extension-declared categories) are
-     * trusted to overwrite every field.
+     * Events stay live between publishes, so before handing the slot back to
+     * the producer we clear state from the last tenant. The built-in event
+     * types each expose {@code reset()}; event types declared by extensions
+     * are trusted to overwrite every field.
      */
     @SuppressWarnings("unchecked")
     private static <E> E resetIfKnown(E event) {

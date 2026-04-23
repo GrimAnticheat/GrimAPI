@@ -28,7 +28,7 @@ public interface ExtensionDataStoreHandle {
     /**
      * Declare a new extension-namespaced category. Extensions provide a mutable
      * event type for the hot path and an immutable result type for reads; the
-     * shape mirrors the Layer 1 {@link Category} contract.
+     * shape mirrors the public {@link Category} contract.
      */
     @NotNull <E> Category<E> declareCategory(
             @NotNull String localId,

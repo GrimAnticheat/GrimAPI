@@ -8,11 +8,14 @@ import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * In-memory stable_key ↔ check_id registry backed by a pluggable
- * {@link CheckPersistence} (SQLite in phase 1, in-memory for tests).
+ * In-memory {@code stable_key ↔ check_id} registry backed by a pluggable
+ * {@link CheckPersistence}. The current built-in implementations are a
+ * SQLite-backed one (for production) and an in-memory stub (for tests and
+ * for setups without SQLite in their routing).
  * <p>
- * {@link #intern(String, String)} is atomic: if two threads interleave on the same
- * stable_key, one wins, the other sees the winner's check_id via a second load.
+ * {@link #intern(String, String)} is atomic: if two threads interleave on the
+ * same stable_key, one wins and the other sees the winner's check_id via a
+ * second load.
  */
 @ApiStatus.Internal
 public final class CheckRegistry {

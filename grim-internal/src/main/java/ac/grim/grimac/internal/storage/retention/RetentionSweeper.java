@@ -15,9 +15,9 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 
 /**
- * Deletes expired rows per {@link RetentionRule}. Scheduling is external — Layer 3 glue
- * invokes {@link #sweepOnce()} on whatever cadence its platform supplies (Bukkit
- * scheduler, cron-style, etc.).
+ * Deletes expired rows per {@link RetentionRule}. Scheduling is external —
+ * the host invokes {@link #sweepOnce()} on whatever cadence its platform
+ * provides (Bukkit scheduler, cron-style, test-only tick, etc.).
  */
 @ApiStatus.Internal
 public final class RetentionSweeper {
@@ -39,8 +39,10 @@ public final class RetentionSweeper {
             RetentionRule rule = entry.getValue();
             if (!rule.enabled() || rule.maxAgeDays() <= 0) continue;
             if (cat != Categories.SESSION && cat != Categories.VIOLATION) {
-                // PlayerIdentity + Setting retention is disabled by default; if an
-                // operator opts in, this sweeper doesn't claim to handle them in phase 1.
+                // PlayerIdentity + Setting retention aren't wired through this
+                // sweeper yet — their rules are parsed but not applied. Operators
+                // opting in get defaults-off retention; flipping it on is a no-op
+                // until a follow-up lands identity/setting eviction.
                 continue;
             }
             long maxAgeMs = rule.maxAgeMs();

@@ -51,14 +51,15 @@ public final class Categories {
             AccessPattern.INDEXED_KV);
 
     /**
-     * Blob category has no event type wired in phase 1 (recorder is phase-3 work). The
-     * event type is {@link BlobRef} as a placeholder so the surface shape is consistent;
-     * no producer publishes to it yet and the factory refuses to construct slots.
+     * Blob category. Declared on the surface for shape-consistency with the
+     * other categories, but no producer currently publishes to it and the
+     * event factory refuses to construct slots — a future recorder feature
+     * will hook it up.
      */
     public static final Category<BlobRef> BLOB = new Builtin<>(
             "blob",
             BlobRef.class,
-            () -> { throw new UnsupportedOperationException("BLOB category has no event factory in phase 1"); },
+            () -> { throw new UnsupportedOperationException("BLOB category has no event factory"); },
             BlobRef.class,
             EnumSet.of(Capability.BLOB),
             AccessPattern.BLOB_REF);

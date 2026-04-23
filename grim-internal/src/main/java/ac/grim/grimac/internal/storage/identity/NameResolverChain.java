@@ -37,7 +37,11 @@ public final class NameResolverChain implements NameResolver {
 
     @Override
     public CompletionStage<List<UUID>> allHistoricalUsersOfName(String name) {
-        // Phase 1: chain doesn't expose per-link "all users" yet; first hit's UUID only.
+        // The chain's links don't yet expose a "list every uuid that used this
+        // name" capability — the surface only returns "the currently-resolving
+        // uuid". Return the first hit as a singleton so the caller gets
+        // consistent behaviour; extending this to a true history walk is a
+        // follow-up that needs a new link contract.
         return resolveByName(name).thenApply(opt ->
                 opt.<List<UUID>>map(Collections::singletonList).orElseGet(Collections::emptyList));
     }

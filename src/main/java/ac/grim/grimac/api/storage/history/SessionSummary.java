@@ -7,21 +7,23 @@ import org.jetbrains.annotations.Nullable;
 import java.util.UUID;
 
 /**
- * One row of a paged session listing. Pure data — every platform's command layer
- * converts this to its own chat format.
+ * One row of a paged session listing. Pure data — callers convert to whatever
+ * chat / UI format they use.
  * <p>
- * {@code sessionOrdinal} is the <strong>global chronological</strong> ordinal —
+ * {@code sessionOrdinal} is the <strong>global chronological</strong> ordinal:
  * Session 1 is the player's very first session ever, Session K is their most
- * recent. This differs from a page-local label: two sessions on different pages
- * never share an ordinal. Computing it costs one {@code countSessions} query;
- * the service handles that bookkeeping.
+ * recent. Two sessions on different pages never share an ordinal. Computing
+ * it costs one {@code countSessions} query — the service handles that
+ * bookkeeping so callers don't have to.
  * <p>
  * {@code clientVersion} is a PacketEvents protocol-version number (PVN) or
  * {@code -1} when unknown. Renderers resolve to a display string via
- * {@code ClientVersion.getById(pvn)} at the Layer-3 command-glue layer.
+ * {@code ClientVersion.getById(pvn)} at the point where chat components
+ * are built — the storage API is PacketEvents-free on purpose.
  * <p>
- * {@code uniqueCheckCount} is the number of distinct checks that flagged in this
- * session (shown as {@code [N]} in the design). {@code 0} when no violations.
+ * {@code uniqueCheckCount} is the number of distinct checks that flagged in
+ * this session (shown as {@code [N]} in the session-list UI). {@code 0} when
+ * there were no violations.
  */
 @ApiStatus.Experimental
 public record SessionSummary(
