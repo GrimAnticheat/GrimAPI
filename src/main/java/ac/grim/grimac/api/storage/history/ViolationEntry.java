@@ -15,8 +15,13 @@ public record ViolationEntry(
         int checkId,
         @NotNull String stableKey,
         @NotNull String displayName,
+        @NotNull String description,
         long offsetFromSessionStartMs,
         double vl,
         @Nullable String verbose,
         @NotNull VerboseFormat verboseFormat) {
+
+    public ViolationEntry {
+        if (description == null) description = "";
+    }
 }
