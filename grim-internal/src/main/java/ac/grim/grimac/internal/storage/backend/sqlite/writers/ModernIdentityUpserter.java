@@ -7,6 +7,7 @@ import org.jetbrains.annotations.ApiStatus;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
+import java.util.Locale;
 import java.util.UUID;
 
 @ApiStatus.Internal
@@ -16,10 +17,11 @@ final class ModernIdentityUpserter implements IdentityUpserter {
 
     ModernIdentityUpserter(Connection c, TableNames t) throws SQLException {
         this.upsert = c.prepareStatement(
-                "INSERT INTO " + t.players() + "(uuid, current_name, first_seen, last_seen) "
-                        + "VALUES (?, ?, ?, ?) "
+                "INSERT INTO " + t.players() + "(uuid, current_name, current_name_lower, first_seen, last_seen) "
+                        + "VALUES (?, ?, ?, ?, ?) "
                         + "ON CONFLICT(uuid) DO UPDATE SET "
                         + "current_name = excluded.current_name, "
+                        + "current_name_lower = excluded.current_name_lower, "
                         + "first_seen = min(first_seen, excluded.first_seen), "
                         + "last_seen = max(last_seen, excluded.last_seen)");
     }
@@ -31,8 +33,9 @@ final class ModernIdentityUpserter implements IdentityUpserter {
                          long lastSeenEpochMs) throws SQLException {
         upsert.setBytes(1, UuidCodec.toBytes(uuid));
         upsert.setString(2, currentName);
-        upsert.setLong(3, firstSeenEpochMs);
-        upsert.setLong(4, lastSeenEpochMs);
+        upsert.setString(3, currentName == null ? null : currentName.toLowerCase(Locale.ROOT));
+        upsert.setLong(4, firstSeenEpochMs);
+        upsert.setLong(5, lastSeenEpochMs);
         upsert.addBatch();
     }
 
