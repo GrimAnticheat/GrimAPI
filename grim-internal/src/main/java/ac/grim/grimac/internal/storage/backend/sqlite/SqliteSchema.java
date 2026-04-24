@@ -18,7 +18,7 @@ import java.sql.Statement;
 @ApiStatus.Internal
 public final class SqliteSchema {
 
-    public static final int CURRENT_VERSION = 4;
+    public static final int CURRENT_VERSION = 5;
 
     private SqliteSchema() {}
 
@@ -39,6 +39,7 @@ public final class SqliteSchema {
             applyV2(c);
             applyV3(c);
             applyV4(c);
+            applyV5(c);
             long now = System.currentTimeMillis();
             try (PreparedStatement ps = c.prepareStatement(
                     "INSERT INTO grim_meta(id, schema_version, grim_core_version, initialized_at, last_migration_at) "
@@ -61,6 +62,7 @@ public final class SqliteSchema {
         if (existing < 2) applyV2(c);
         if (existing < 3) applyV3(c);
         if (existing < 4) applyV4(c);
+        if (existing < 5) applyV5(c);
         if (existing < CURRENT_VERSION) {
             try (PreparedStatement ps = c.prepareStatement(
                     "UPDATE grim_meta SET schema_version=?, last_migration_at=?, grim_core_version=? WHERE id=0")) {
@@ -334,6 +336,51 @@ public final class SqliteSchema {
                 s.executeUpdate("CREATE INDEX idx_violations_session_time ON grim_violations(session_id, occurred_at)");
                 s.executeUpdate("CREATE INDEX idx_violations_player ON grim_violations(player_uuid)");
             }
+        }
+    }
+
+    /**
+     * v5: namespace every {@code grim_checks.stable_key} under the {@code grim.}
+     * family so core keys share one prefix and 3rd-party extensions can claim
+     * their own {@code <extension-id>.} prefix without collision.
+     * <ul>
+     *   <li>{@code legacy:X} → {@code grim.legacy.X} (migration-fallback marker
+     *       preserved, just moved under the new namespace).</li>
+     *   <li>{@code family.name} → {@code grim.family.name}.</li>
+     *   <li>Already-prefixed keys left alone — the update is idempotent.</li>
+     * </ul>
+     * Aborts loudly if a rename would collide with an existing row; that would
+     * only happen on a half-migrated database and wants manual merge rather
+     * than silent corruption.
+     */
+    private static void applyV5(Connection c) throws SQLException {
+        try (Statement s = c.createStatement()) {
+            // Conflict detection: find rows where the post-rename key already
+            // exists under a different check_id. Manual merge needed there —
+            // re-point grim_violations.check_id to the surviving row, then
+            // DELETE the duplicate. No automated merge; too much judgment.
+            try (ResultSet rs = s.executeQuery(
+                    "SELECT a.stable_key AS src, b.stable_key AS dst "
+                            + "FROM grim_checks a JOIN grim_checks b "
+                            + "ON a.check_id <> b.check_id "
+                            + "AND b.stable_key = CASE "
+                            + "  WHEN a.stable_key LIKE 'legacy:%' THEN 'grim.legacy.' || substr(a.stable_key, 8) "
+                            + "  ELSE 'grim.' || a.stable_key "
+                            + "END "
+                            + "WHERE a.stable_key NOT LIKE 'grim.%'")) {
+                if (rs.next()) {
+                    throw new SQLException("[grim-datastore] v5 migration aborted: "
+                            + "'" + rs.getString("src") + "' would rename to '"
+                            + rs.getString("dst") + "' which already exists with a different check_id. "
+                            + "Manual merge required before upgrade can proceed.");
+                }
+            }
+            s.executeUpdate(
+                    "UPDATE grim_checks SET stable_key = CASE "
+                            + "  WHEN stable_key LIKE 'legacy:%' THEN 'grim.legacy.' || substr(stable_key, 8) "
+                            + "  ELSE 'grim.' || stable_key "
+                            + "END "
+                            + "WHERE stable_key NOT LIKE 'grim.%'");
         }
     }
 }
