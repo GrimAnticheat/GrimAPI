@@ -25,6 +25,14 @@ dependencies {
     // SQLite reference backend.
     compileOnly(libs.sqliteJdbc)
 
+    // Optional plugin-side backends — compileOnly so the shaded plugin jar
+    // picks which drivers to bundle. Each backend's init() throws a clear
+    // error when its driver isn't on the runtime classpath.
+    compileOnly(libs.mysqlJdbc)
+    compileOnly(libs.postgresJdbc)
+    compileOnly(libs.mongoDriverSync)
+    compileOnly(libs.jedis)
+
     // com.lmax.* to avoid Log4j collisions on the classpath?
     api(libs.disruptor)
 
@@ -33,6 +41,11 @@ dependencies {
     testRuntimeOnly(libs.junitEngine)
     testRuntimeOnly(libs.junitLauncher)
     testImplementation(libs.annotations)
+    testImplementation(libs.sqliteJdbc)
+    testImplementation(libs.mysqlJdbc)
+    testImplementation(libs.postgresJdbc)
+    testImplementation(libs.mongoDriverSync)
+    testImplementation(libs.jedis)
 }
 
 tasks.withType<JavaCompile>().configureEach {
