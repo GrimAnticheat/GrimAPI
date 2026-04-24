@@ -30,6 +30,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicLong;
@@ -275,6 +276,19 @@ public final class InMemoryBackend implements Backend {
             if (query instanceof Queries.GetPlayerIdentityByName q) {
                 PlayerIdentity p = identityByName.get(q.name().toLowerCase(java.util.Locale.ROOT));
                 return (Page<R>) new Page<>(p == null ? List.of() : List.of(p), null);
+            }
+            if (query instanceof Queries.ListPlayersByNamePrefix q) {
+                String prefix = q.lowerPrefix();
+                if (prefix == null || prefix.isEmpty() || q.limit() <= 0) {
+                    return (Page<R>) Page.empty();
+                }
+                List<PlayerIdentity> out = new ArrayList<>();
+                for (Map.Entry<String, PlayerIdentity> e : identityByName.entrySet()) {
+                    if (e.getKey().startsWith(prefix)) out.add(e.getValue());
+                }
+                out.sort(Comparator.comparingLong(PlayerIdentity::lastSeenEpochMs).reversed());
+                if (out.size() > q.limit()) out = out.subList(0, q.limit());
+                return (Page<R>) new Page<>(out, null);
             }
             if (query instanceof Queries.GetSetting q) {
                 SettingRecord s = settings.get(settingKey(q.scope().name(), q.scopeKey(), q.key()));
