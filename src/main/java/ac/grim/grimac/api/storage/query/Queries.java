@@ -35,6 +35,16 @@ public final class Queries {
         return new GetPlayerIdentityByName(name);
     }
 
+    /**
+     * Prefix-only lookup for tab completion. Callers pass the already-lowercased
+     * prefix and a cap on returned rows; backends sort by {@code last_seen DESC}
+     * so the most recently seen matches land first. Prefix must be non-empty —
+     * empty-prefix enumeration policy belongs to the caller.
+     */
+    public static ListPlayersByNamePrefix listPlayersByNamePrefix(String lowerPrefix, int limit) {
+        return new ListPlayersByNamePrefix(lowerPrefix, limit);
+    }
+
     public static GetSetting getSetting(SettingScope scope, String scopeKey, String key) {
         return new GetSetting(scope, scopeKey, key);
     }
@@ -48,6 +58,8 @@ public final class Queries {
     public record GetPlayerIdentity(UUID uuid) implements Query<PlayerIdentity> {}
 
     public record GetPlayerIdentityByName(String name) implements Query<PlayerIdentity> {}
+
+    public record ListPlayersByNamePrefix(String lowerPrefix, int limit) implements Query<PlayerIdentity> {}
 
     public record GetSetting(SettingScope scope, String scopeKey, String key) implements Query<SettingRecord> {}
 }
