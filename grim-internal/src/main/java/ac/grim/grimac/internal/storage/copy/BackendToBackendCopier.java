@@ -151,7 +151,7 @@ public final class BackendToBackendCopier {
         if (src instanceof ac.grim.grimac.internal.storage.backend.sqlite.SqliteBackend sq) {
             try (java.sql.Connection c = java.sql.DriverManager.getConnection(sq.jdbcUrl());
                  java.sql.Statement s = c.createStatement();
-                 java.sql.ResultSet rs = s.executeQuery("SELECT uuid FROM grim_players")) {
+                 java.sql.ResultSet rs = s.executeQuery("SELECT uuid FROM " + sq.tableNames().players())) {
                 while (rs.next()) {
                     byte[] bytes = rs.getBytes(1);
                     if (bytes != null && bytes.length == 16) {
@@ -188,9 +188,10 @@ public final class BackendToBackendCopier {
                     wasAutoCommit = conn.getAutoCommit();
                     if (wasAutoCommit) conn.setAutoCommit(false);
                     try (java.sql.Statement s = conn.createStatement()) {
-                        s.executeUpdate("DELETE FROM grim_violations");
-                        s.executeUpdate("DELETE FROM grim_sessions");
-                        s.executeUpdate("DELETE FROM grim_players");
+                        ac.grim.grimac.api.storage.config.TableNames t = sq.tableNames();
+                        s.executeUpdate("DELETE FROM " + t.violations());
+                        s.executeUpdate("DELETE FROM " + t.sessions());
+                        s.executeUpdate("DELETE FROM " + t.players());
                     }
                     conn.commit();
                 } catch (java.sql.SQLException e) {

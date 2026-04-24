@@ -4,6 +4,7 @@ import ac.grim.grimac.api.storage.backend.Backend;
 import ac.grim.grimac.api.storage.backend.BackendConfig;
 import ac.grim.grimac.api.storage.backend.BackendConfigSource;
 import ac.grim.grimac.api.storage.backend.BackendProvider;
+import ac.grim.grimac.api.storage.config.TableNames;
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
 
@@ -28,7 +29,8 @@ public final class SqliteBackendProvider implements BackendProvider {
                 src.getString("synchronous-mode", "NORMAL"),
                 src.getInt("busy-timeout-ms", 5000),
                 src.getInt("cache-pages", 10_000),
-                src.getInt("batch-flush-cap", 256));
+                src.getInt("batch-flush-cap", 256),
+                TableNames.readFrom(src));
     }
 
     @Override
