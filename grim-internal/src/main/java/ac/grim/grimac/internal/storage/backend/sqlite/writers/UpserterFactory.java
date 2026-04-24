@@ -22,4 +22,5 @@ public interface UpserterFactory {
     SettingsUpserter newSettingsUpserter(Connection c, TableNames t) throws SQLException;
 
     UpserterFactory MODERN = new ModernUpserterFactory();
+    UpserterFactory LEGACY = new LegacyUpserterFactory();
 }

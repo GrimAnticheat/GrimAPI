@@ -131,6 +131,7 @@ public final class SqliteBackend implements Backend {
                     s.execute("PRAGMA busy_timeout=" + config.busyTimeoutMs());
                     s.execute("PRAGMA cache_size=" + config.cachePages());
                 }
+                this.upserterFactory = selectDialect(writeConn, ctx.logger());
                 SqliteSchema.ensureInitialized(writeConn, "phase1", config.tableNames());
                 // writeConn stays in autoCommit=true; write ops that batch wrap their own
                 // setAutoCommit(false) / commit cycle.
@@ -138,6 +139,45 @@ public final class SqliteBackend implements Backend {
                 throw new BackendException("failed to initialise SQLite backend", e);
             }
         }
+    }
+
+    /**
+     * Picks a modern or legacy upsert dialect based on the live engine version.
+     * The modern path uses {@code ON CONFLICT DO UPDATE} (SQLite 3.24+, 2018,
+     * = CraftBukkit 1.13.2+ bundled). Older engines fall through to the legacy
+     * two-step {@code INSERT OR IGNORE} + {@code UPDATE} path.
+     */
+    private static UpserterFactory selectDialect(Connection c, java.util.logging.Logger log) throws SQLException {
+        String version;
+        try (Statement s = c.createStatement();
+             ResultSet rs = s.executeQuery("SELECT sqlite_version()")) {
+            if (!rs.next()) {
+                log.warning("[grim-datastore] sqlite_version() returned no row; assuming modern dialect");
+                return UpserterFactory.MODERN;
+            }
+            version = rs.getString(1);
+        }
+        boolean legacy = compareVersionTriple(version, 3, 24, 0) < 0;
+        log.info("[grim-datastore] SQLite engine " + version + " — using "
+                + (legacy ? "legacy (pre-3.24, no UPSERT) dialect" : "modern dialect"));
+        return legacy ? UpserterFactory.LEGACY : UpserterFactory.MODERN;
+    }
+
+    private static int compareVersionTriple(String version, int majorFloor, int minorFloor, int patchFloor) {
+        int[] triple = {0, 0, 0};
+        int idx = 0;
+        int i = 0;
+        while (i < version.length() && idx < 3) {
+            int start = i;
+            while (i < version.length() && Character.isDigit(version.charAt(i))) i++;
+            if (i == start) break;
+            triple[idx++] = Integer.parseInt(version.substring(start, i));
+            if (i < version.length() && version.charAt(i) == '.') i++;
+            else break;
+        }
+        if (triple[0] != majorFloor) return Integer.compare(triple[0], majorFloor);
+        if (triple[1] != minorFloor) return Integer.compare(triple[1], minorFloor);
+        return Integer.compare(triple[2], patchFloor);
     }
 
     private Connection openConnection() throws SQLException {
