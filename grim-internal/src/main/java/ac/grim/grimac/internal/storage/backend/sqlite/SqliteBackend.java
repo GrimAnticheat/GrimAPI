@@ -23,6 +23,10 @@ import ac.grim.grimac.api.storage.query.Deletes;
 import ac.grim.grimac.api.storage.query.Page;
 import ac.grim.grimac.api.storage.query.Queries;
 import ac.grim.grimac.api.storage.query.Query;
+import ac.grim.grimac.internal.storage.backend.sqlite.writers.IdentityUpserter;
+import ac.grim.grimac.internal.storage.backend.sqlite.writers.SessionUpserter;
+import ac.grim.grimac.internal.storage.backend.sqlite.writers.SettingsUpserter;
+import ac.grim.grimac.internal.storage.backend.sqlite.writers.UpserterFactory;
 import ac.grim.grimac.internal.storage.util.UuidCodec;
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
@@ -63,9 +67,9 @@ public final class SqliteBackend implements Backend {
     private final Object writeMutex = new Object();
     private final List<BatchingHandler<?>> handlers = new ArrayList<>();
     private final String insertViolations;
-    private final String upsertSessions;
-    private final String upsertIdentities;
-    private final String upsertSettings;
+    // Picked once at init(). Defaults to MODERN here; the version-probe branch
+    // in init() may swap to a legacy factory for pre-3.24 SQLite engines.
+    private UpserterFactory upserterFactory = UpserterFactory.MODERN;
     private String jdbcUrl;
     private Connection writeConn;
 
@@ -75,31 +79,6 @@ public final class SqliteBackend implements Backend {
         this.insertViolations =
                 "INSERT INTO " + t.violations() + "(session_id, player_uuid, check_id, vl, occurred_at, verbose, verbose_format) "
                         + "VALUES (?, ?, ?, ?, ?, ?, ?)";
-        this.upsertSessions =
-                "INSERT INTO " + t.sessions() + "(session_id, player_uuid, server_name, started_at, last_activity, "
-                        + "grim_version, client_brand, client_version_pvn, server_version, replay_clips_json) "
-                        + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
-                        + "ON CONFLICT(session_id) DO UPDATE SET "
-                        + "server_name=excluded.server_name, "
-                        + "last_activity=excluded.last_activity, "
-                        + "grim_version=excluded.grim_version, "
-                        + "client_brand=excluded.client_brand, "
-                        + "client_version_pvn=excluded.client_version_pvn, "
-                        + "server_version=excluded.server_version, "
-                        + "replay_clips_json=excluded.replay_clips_json";
-        this.upsertIdentities =
-                "INSERT INTO " + t.players() + "(uuid, current_name, first_seen, last_seen) "
-                        + "VALUES (?, ?, ?, ?) "
-                        + "ON CONFLICT(uuid) DO UPDATE SET "
-                        + "current_name = excluded.current_name, "
-                        + "first_seen = min(first_seen, excluded.first_seen), "
-                        + "last_seen = max(last_seen, excluded.last_seen)";
-        this.upsertSettings =
-                "INSERT INTO " + t.settings() + "(scope, scope_key, key, value, updated_at) "
-                        + "VALUES (?, ?, ?, ?, ?) "
-                        + "ON CONFLICT(scope, scope_key, key) DO UPDATE SET "
-                        + "value = excluded.value, "
-                        + "updated_at = excluded.updated_at";
     }
 
     @Override public @NotNull String id() { return ID; }
@@ -212,10 +191,14 @@ public final class SqliteBackend implements Backend {
      * stays in autoCommit=false mode for the handler's lifetime; {@code flushLocked}
      * commits and resets the pending count. Per-handler connections keep each
      * category's transaction timeline independent of sibling categories.
+     * <p>
+     * Each concrete handler owns its own statements (a plain PreparedStatement
+     * for single-shot inserts, or an {@link UpserterFactory}-produced upserter
+     * that may hide one or two PreparedStatements depending on dialect). The
+     * abstract class knows only the lifecycle, never the statement shape.
      */
     private abstract class BatchingHandler<E> implements StorageEventHandler<E> {
-        private Connection conn;
-        private PreparedStatement stmt;
+        protected Connection conn;
         private int pending;
 
         void start() throws BackendException {
@@ -231,9 +214,7 @@ public final class SqliteBackend implements Backend {
         public synchronized void onEvent(E event, long sequence, boolean endOfBatch) throws BackendException {
             if (conn == null) return; // closed
             try {
-                if (stmt == null) stmt = conn.prepareStatement(sql());
-                bind(stmt, event);
-                stmt.addBatch();
+                bindOne(event);
                 pending++;
                 if (endOfBatch || pending >= config.batchFlushCap()) flushLocked();
             } catch (SQLException e) {
@@ -244,87 +225,134 @@ public final class SqliteBackend implements Backend {
 
         private void flushLocked() throws SQLException {
             if (pending == 0) return;
-            stmt.executeBatch();
+            executeBatch();
             conn.commit();
             pending = 0;
         }
 
         private void abortLocked() {
             try { if (conn != null) conn.rollback(); } catch (SQLException ignore) {}
-            try { if (stmt != null) { stmt.close(); stmt = null; } } catch (SQLException ignore) {}
+            try { closeStmts(); } catch (SQLException ignore) {}
             pending = 0;
         }
 
         synchronized void shutDown() {
-            try { if (pending > 0 && stmt != null) { stmt.executeBatch(); conn.commit(); } }
-            catch (SQLException ignore) {}
-            try { if (stmt != null) stmt.close(); } catch (SQLException ignore) {}
+            try { if (pending > 0) { executeBatch(); conn.commit(); } } catch (SQLException ignore) {}
+            try { closeStmts(); } catch (SQLException ignore) {}
             try { if (conn != null) conn.close(); } catch (SQLException ignore) {}
-            stmt = null;
             conn = null;
             pending = 0;
         }
 
-        protected abstract String sql();
         protected abstract String categoryId();
-        protected abstract void bind(PreparedStatement ps, E event) throws SQLException;
+
+        /** Bind + addBatch one event onto this handler's statements. */
+        protected abstract void bindOne(E event) throws SQLException;
+
+        /** Execute all accumulated batches. Called inside {@code flushLocked()}. */
+        protected abstract void executeBatch() throws SQLException;
+
+        /** Close all owned statements. Called on shutdown and abort. */
+        protected abstract void closeStmts() throws SQLException;
     }
 
     private final class ViolationHandler extends BatchingHandler<ViolationEvent> {
-        @Override protected String sql() { return insertViolations; }
+        private PreparedStatement stmt;
+
         @Override protected String categoryId() { return "violation"; }
+
         @Override
-        protected void bind(PreparedStatement ps, ViolationEvent v) throws SQLException {
-            ps.setBytes(1, UuidCodec.toBytes(v.sessionId()));
-            ps.setBytes(2, UuidCodec.toBytes(v.playerUuid()));
-            ps.setInt(3, v.checkId());
-            ps.setDouble(4, v.vl());
-            ps.setLong(5, v.occurredEpochMs());
-            ps.setString(6, v.verbose());
-            ps.setInt(7, v.verboseFormat().code());
+        protected void bindOne(ViolationEvent v) throws SQLException {
+            if (stmt == null) stmt = conn.prepareStatement(insertViolations);
+            stmt.setBytes(1, UuidCodec.toBytes(v.sessionId()));
+            stmt.setBytes(2, UuidCodec.toBytes(v.playerUuid()));
+            stmt.setInt(3, v.checkId());
+            stmt.setDouble(4, v.vl());
+            stmt.setLong(5, v.occurredEpochMs());
+            stmt.setString(6, v.verbose());
+            stmt.setInt(7, v.verboseFormat().code());
+            stmt.addBatch();
+        }
+
+        @Override
+        protected void executeBatch() throws SQLException {
+            if (stmt != null) stmt.executeBatch();
+        }
+
+        @Override
+        protected void closeStmts() throws SQLException {
+            if (stmt != null) { stmt.close(); stmt = null; }
         }
     }
 
     private final class SessionHandler extends BatchingHandler<SessionEvent> {
-        @Override protected String sql() { return upsertSessions; }
+        private SessionUpserter upserter;
+
         @Override protected String categoryId() { return "session"; }
+
         @Override
-        protected void bind(PreparedStatement ps, SessionEvent s) throws SQLException {
-            ps.setBytes(1, UuidCodec.toBytes(s.sessionId()));
-            ps.setBytes(2, UuidCodec.toBytes(s.playerUuid()));
-            ps.setString(3, s.serverName());
-            ps.setLong(4, s.startedEpochMs());
-            ps.setLong(5, s.lastActivityEpochMs());
-            ps.setString(6, s.grimVersion());
-            ps.setString(7, s.clientBrand());
-            ps.setInt(8, s.clientVersion());
-            ps.setString(9, s.serverVersionString());
-            ps.setString(10, s.replayClips().isEmpty() ? "[]" : serializeReplayClipsShim());
+        protected void bindOne(SessionEvent s) throws SQLException {
+            if (upserter == null) upserter = upserterFactory.newSessionUpserter(conn, config.tableNames());
+            upserter.addBatch(
+                    s.sessionId(), s.playerUuid(), s.serverName(),
+                    s.startedEpochMs(), s.lastActivityEpochMs(),
+                    s.grimVersion(), s.clientBrand(), s.clientVersion(),
+                    s.serverVersionString(),
+                    s.replayClips().isEmpty() ? "[]" : serializeReplayClipsShim());
+        }
+
+        @Override
+        protected void executeBatch() throws SQLException {
+            if (upserter != null) upserter.executeBatch();
+        }
+
+        @Override
+        protected void closeStmts() throws SQLException {
+            if (upserter != null) { upserter.close(); upserter = null; }
         }
     }
 
     private final class IdentityHandler extends BatchingHandler<PlayerIdentityEvent> {
-        @Override protected String sql() { return upsertIdentities; }
+        private IdentityUpserter upserter;
+
         @Override protected String categoryId() { return "player-identity"; }
+
         @Override
-        protected void bind(PreparedStatement ps, PlayerIdentityEvent e) throws SQLException {
-            ps.setBytes(1, UuidCodec.toBytes(e.uuid()));
-            ps.setString(2, e.currentName());
-            ps.setLong(3, e.firstSeenEpochMs());
-            ps.setLong(4, e.lastSeenEpochMs());
+        protected void bindOne(PlayerIdentityEvent e) throws SQLException {
+            if (upserter == null) upserter = upserterFactory.newIdentityUpserter(conn, config.tableNames());
+            upserter.addBatch(e.uuid(), e.currentName(), e.firstSeenEpochMs(), e.lastSeenEpochMs());
+        }
+
+        @Override
+        protected void executeBatch() throws SQLException {
+            if (upserter != null) upserter.executeBatch();
+        }
+
+        @Override
+        protected void closeStmts() throws SQLException {
+            if (upserter != null) { upserter.close(); upserter = null; }
         }
     }
 
     private final class SettingHandler extends BatchingHandler<SettingEvent> {
-        @Override protected String sql() { return upsertSettings; }
+        private SettingsUpserter upserter;
+
         @Override protected String categoryId() { return "setting"; }
+
         @Override
-        protected void bind(PreparedStatement ps, SettingEvent s) throws SQLException {
-            ps.setString(1, s.scope().name());
-            ps.setString(2, s.scopeKey());
-            ps.setString(3, s.key());
-            ps.setBytes(4, s.value());
-            ps.setLong(5, s.updatedEpochMs());
+        protected void bindOne(SettingEvent s) throws SQLException {
+            if (upserter == null) upserter = upserterFactory.newSettingsUpserter(conn, config.tableNames());
+            upserter.addBatch(s.scope().name(), s.scopeKey(), s.key(), s.value(), s.updatedEpochMs());
+        }
+
+        @Override
+        protected void executeBatch() throws SQLException {
+            if (upserter != null) upserter.executeBatch();
+        }
+
+        @Override
+        protected void closeStmts() throws SQLException {
+            if (upserter != null) { upserter.close(); upserter = null; }
         }
     }
 
@@ -385,48 +413,34 @@ public final class SqliteBackend implements Backend {
     }
 
     private void writeSessionRecords(List<SessionRecord> rows) throws SQLException {
-        try (PreparedStatement ps = writeConn.prepareStatement(upsertSessions)) {
+        try (SessionUpserter u = upserterFactory.newSessionUpserter(writeConn, config.tableNames())) {
             for (SessionRecord s : rows) {
-                ps.setBytes(1, UuidCodec.toBytes(s.sessionId()));
-                ps.setBytes(2, UuidCodec.toBytes(s.playerUuid()));
-                ps.setString(3, s.serverName());
-                ps.setLong(4, s.startedEpochMs());
-                ps.setLong(5, s.lastActivityEpochMs());
-                ps.setString(6, s.grimVersion());
-                ps.setString(7, s.clientBrand());
-                ps.setInt(8, s.clientVersion());
-                ps.setString(9, s.serverVersionString());
-                ps.setString(10, s.replayClips().isEmpty() ? "[]" : serializeReplayClipsShim());
-                ps.addBatch();
+                u.addBatch(
+                        s.sessionId(), s.playerUuid(), s.serverName(),
+                        s.startedEpochMs(), s.lastActivityEpochMs(),
+                        s.grimVersion(), s.clientBrand(), s.clientVersion(),
+                        s.serverVersionString(),
+                        s.replayClips().isEmpty() ? "[]" : serializeReplayClipsShim());
             }
-            ps.executeBatch();
+            u.executeBatch();
         }
     }
 
     private void writeIdentityRecords(List<PlayerIdentity> rows) throws SQLException {
-        try (PreparedStatement ps = writeConn.prepareStatement(upsertIdentities)) {
+        try (IdentityUpserter u = upserterFactory.newIdentityUpserter(writeConn, config.tableNames())) {
             for (PlayerIdentity id : rows) {
-                ps.setBytes(1, UuidCodec.toBytes(id.uuid()));
-                ps.setString(2, id.currentName());
-                ps.setLong(3, id.firstSeenEpochMs());
-                ps.setLong(4, id.lastSeenEpochMs());
-                ps.addBatch();
+                u.addBatch(id.uuid(), id.currentName(), id.firstSeenEpochMs(), id.lastSeenEpochMs());
             }
-            ps.executeBatch();
+            u.executeBatch();
         }
     }
 
     private void writeSettingRecords(List<SettingRecord> rows) throws SQLException {
-        try (PreparedStatement ps = writeConn.prepareStatement(upsertSettings)) {
+        try (SettingsUpserter u = upserterFactory.newSettingsUpserter(writeConn, config.tableNames())) {
             for (SettingRecord s : rows) {
-                ps.setString(1, s.scope().name());
-                ps.setString(2, s.scopeKey());
-                ps.setString(3, s.key());
-                ps.setBytes(4, s.value());
-                ps.setLong(5, s.updatedEpochMs());
-                ps.addBatch();
+                u.addBatch(s.scope().name(), s.scopeKey(), s.key(), s.value(), s.updatedEpochMs());
             }
-            ps.executeBatch();
+            u.executeBatch();
         }
     }
 
