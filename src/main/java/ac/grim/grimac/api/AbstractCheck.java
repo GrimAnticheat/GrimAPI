@@ -14,6 +14,17 @@ public interface AbstractCheck extends AbstractProcessor, BasicStatus {
         return "No description provided";
     }
 
+    /**
+     * Canonical cross-version identity used by the history / storage layer
+     * to keep rows coherent across plugin versions. Dot-separated, lower
+     * snake-case (e.g. {@code "badpackets.duplicate_slot"}). Empty string
+     * means the check predates the stable-key contract; the runtime falls
+     * back to {@code StableKeyMapping} in that case.
+     */
+    default String getStableKey() {
+        return "";
+    }
+
     double getViolations();
 
     /**
