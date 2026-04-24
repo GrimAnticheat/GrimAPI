@@ -4,8 +4,16 @@ annotations = "24.1.0"
 spigot = "1.18-R0.1-SNAPSHOT"
 indraGit = "4.0.0"
 sqliteJdbc = "3.46.1.3"
-disruptor = "4.0.0"
+# Prod builds shade+relocate disruptor. Pinned to 3.4.4 so no-relocate
+# debug builds coexist with Paper's bundled copy on the server classpath.
+disruptor = "3.4.4"
 junit = "5.10.2"
+# Optional plugin-side backends — compileOnly so the shaded plugin jar picks
+# which driver to ship.
+mysqlJdbc = "9.1.0"
+postgresJdbc = "42.7.5"
+mongoDriver = "5.3.1"
+jedis = "5.2.0"
 
 [libraries]
 lombok = { module = "org.projectlombok:lombok", version.ref = "lombok" }
@@ -13,6 +21,10 @@ annotations = { module = "org.jetbrains:annotations", version.ref = "annotations
 spigotApi = { module = "org.spigotmc:spigot-api", version.ref = "spigot" }
 sqliteJdbc = { module = "org.xerial:sqlite-jdbc", version.ref = "sqliteJdbc" }
 disruptor = { module = "com.lmax:disruptor", version.ref = "disruptor" }
+mysqlJdbc = { module = "com.mysql:mysql-connector-j", version.ref = "mysqlJdbc" }
+postgresJdbc = { module = "org.postgresql:postgresql", version.ref = "postgresJdbc" }
+mongoDriverSync = { module = "org.mongodb:mongodb-driver-sync", version.ref = "mongoDriver" }
+jedis = { module = "redis.clients:jedis", version.ref = "jedis" }
 junitApi = { module = "org.junit.jupiter:junit-jupiter-api", version.ref = "junit" }
 junitEngine = { module = "org.junit.jupiter:junit-jupiter-engine", version.ref = "junit" }
 junitParams = { module = "org.junit.jupiter:junit-jupiter-params", version.ref = "junit" }
