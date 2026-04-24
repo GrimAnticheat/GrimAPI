@@ -67,9 +67,19 @@ public interface Backend {
     /**
      * Synchronous bulk-import escape hatch. Writes a batch of immutable record
      * objects (not events) for the given category, bypassing the ring. Used by
-     * startup-time importers (legacy-store migration, cross-backend copy) that
-     * need the records visible before {@link #eventHandlerFor} starts accepting
-     * live traffic.
+     * startup-time importers that need the records visible before
+     * {@link #eventHandlerFor} starts accepting live traffic. The two importers
+     * that drive this today:
+     * <ul>
+     *   <li><strong>V0 → V1 history migration</strong> — on first boot after
+     *       upgrading from a pre-v1 Grim, rows from the legacy
+     *       {@code violations.sqlite} are replayed into the routed backend for
+     *       the violation category so {@code /grim history} is continuous
+     *       across the upgrade. See {@link ac.grim.grimac.api.storage.config.MigrationConfig}.</li>
+     *   <li><strong>Cross-backend copy</strong> — {@code /grim history copy}
+     *       moves an operator from one backend to another (e.g. SQLite to
+     *       MySQL) without losing history.</li>
+     * </ul>
      * <p>
      * Callers must pass records whose runtime type matches
      * {@code cat.queryResultType()}; implementations cast internally and throw
@@ -82,7 +92,7 @@ public interface Backend {
      */
     default <R> void bulkImport(@NotNull Category<?> cat, @NotNull List<R> records) throws BackendException {
         throw new UnsupportedOperationException(
-                "backend " + id() + " does not support bulkImport; cannot be used as a migration target");
+                "backend " + id() + " does not support bulkImport; cannot be used as a V0 → V1 migration or cross-backend copy target");
     }
 
     /**
