@@ -142,6 +142,18 @@ public final class SqliteBackend implements Backend {
     }
 
     /**
+     * Test-only override for the dialect-selector result. Call after
+     * {@link #init(BackendContext)}; the supplied factory replaces whatever
+     * the version probe chose and is used for every subsequent handler /
+     * direct-write. Intended only for parameterized tests that need to
+     * exercise the legacy path against a modern SQLite engine.
+     */
+    @ApiStatus.Internal
+    void overrideUpserterFactoryForTest(UpserterFactory factory) {
+        this.upserterFactory = factory;
+    }
+
+    /**
      * Picks a modern or legacy upsert dialect based on the live engine version.
      * The modern path uses {@code ON CONFLICT DO UPDATE} (SQLite 3.24+, 2018,
      * = CraftBukkit 1.13.2+ bundled). Older engines fall through to the legacy
