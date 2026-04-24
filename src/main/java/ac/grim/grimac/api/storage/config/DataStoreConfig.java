@@ -14,7 +14,10 @@ import java.util.Map;
  * <p>
  * {@code routing} maps each category to a backend id; {@code backends} holds
  * the per-backend {@link BackendConfig} the matching {@code BackendProvider}
- * produced from its own settings source.
+ * produced from its own settings source. {@code migration} controls the
+ * one-shot V0 → V1 history import performed on first boot after upgrade (see
+ * {@link MigrationConfig}); it's only consulted while a legacy
+ * {@code violations.sqlite} file is still present in the plugin data folder.
  */
 @ApiStatus.Experimental
 public record DataStoreConfig(
