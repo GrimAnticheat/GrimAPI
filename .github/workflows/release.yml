@@ -1,0 +1,29 @@
+name: Release
+
+# Manual release workflow. Triggered via the Actions tab.
+#
+# Publishes the version currently in gradle.properties to the Maven
+# repo with the commit suffix stripped (-Prelease=true) AND attaches
+# the resulting jar to the GitHub Release at v<version>. If a draft
+# release already exists at that tag, the jar is uploaded to it and
+# the draft is published. Otherwise a release is cut with
+# auto-generated notes.
+#
+# Before running: bump the version in gradle.properties on master and
+# push. Then run this workflow from the Actions tab.
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish-github-release:
+        description: 'Upload jar to GitHub Release v<version> and publish any draft there'
+        type: boolean
+        default: true
+
+jobs:
+  release:
+    uses: ./.github/workflows/build-and-publish.yml
+    with:
+      release: true
+      publish-github-release: ${{ inputs.publish-github-release }}
+    secrets: inherit

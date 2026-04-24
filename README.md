@@ -68,3 +68,100 @@ dependencies {
   <scope>provided</scope>
 </dependency>
 ```
+
+### **Subscribing to events** (1.3+)
+
+The current API dispatches each event through its own `EventChannel`. Grab the
+channel via `bus.get(EventClass.class)` and subscribe with its fluent
+`on…(…)` method. Handlers take the event's fields as positional parameters
+— no pooled event object, no class-keyed registry lookup on the hot path.
+
+Every subscribe takes a `GrimPlugin` as the first argument. The bus tracks
+subscriptions by that plugin and sweeps them automatically on plugin disable
+via `bus.unregisterAllListeners(plugin)` — same lifecycle model as Bukkit's
+`HandlerList`. Resolve the `GrimPlugin` once at plugin enable and reuse it:
+
+```java
+GrimAbstractAPI api = GrimAPIProvider.get();
+EventBus bus = api.getEventBus();
+GrimPlugin grim = api.getGrimPlugin(this);   // resolve once; `this` can be a Bukkit
+                                             // JavaPlugin, a Fabric ModContainer, etc.
+
+// Non-cancellable — observational
+bus.get(GrimTransactionSendEvent.class)
+   .onTransactionSend(grim, (user, id, ts) -> {
+       getLogger().info("tx-send " + id + " for " + user.getName());
+   });
+
+// Cancellable — returns the new cancelled state (true = cancel)
+bus.get(FlagEvent.class)
+   .onFlag(grim, (user, check, verbose, cancelled) -> {
+       if (verbose.contains("safe")) return false; // un-cancel
+       return cancelled;
+   });
+
+// Priority + ignoreCancelled overloads
+bus.get(FlagEvent.class)
+   .onFlag(grim, (u, c, v, cancelled) -> true, /*priority*/ 10, /*ignoreCancelled*/ false);
+```
+
+If you really don't want to hold a `GrimPlugin` reference, every `onX(...)`
+has a `@Deprecated` `onX(Object pluginContext, Handler, …)` overload that
+resolves the context through the bus's plugin resolver:
+
+```java
+// Works but warns. Call api.getGrimPlugin(this) once and use the
+// non-deprecated overload instead.
+bus.get(FlagEvent.class).onFlag((Object) this, (u, c, v, cancelled) -> cancelled);
+```
+
+**Cache the channel for hot paths.** The `bus.get(...)` lookup is a
+ConcurrentHashMap hit; storing the channel in a `static final` lets the JIT
+fold the lookup away entirely:
+
+```java
+public final class MyHotPathClass {
+    private static final FlagEvent.Channel FLAG =
+            GrimAPIProvider.get().getEventBus().get(FlagEvent.class);
+
+    public void process() {
+        // No map lookup, no event-object allocation.
+        FLAG.fire(user, check, verbose);
+    }
+}
+```
+
+**Priority ordering.** Lower priority fires first; higher priority gets the
+final say on cancellation. This matches Bukkit's `EventPriority`
+convention — a handler at a high priority can observe the settled cancelled
+state after lower-priority handlers have run (useful for monitoring) or,
+when registered with `ignoreCancelled = true`, override a lower-priority
+handler's cancellation by returning `false`.
+
+> **Note:** This is a direction flip from pre-1.3 Grim, which sorted
+> highest-first. Plugins migrating from 1.2.x that use explicit priority
+> numbers should re-evaluate what "early" and "late" mean for their logic.
+
+**Addon events.** Plugins that define their own `GrimEvent<Channel>`
+subclass register it once at enable with
+`bus.register(MyEvent.class, new MyEvent.Channel())`.
+
+**Plugin-disable cleanup.** `bus.unregisterAllListeners(grim)` sweeps every
+handler registered with that `GrimPlugin` — both the typed
+`bus.get(E.class).onX(grim, handler)` path and the legacy
+`bus.subscribe(ctx, E.class, listener)` / `@GrimEventHandler` paths. In
+`onDisable()`, pass either your `GrimPlugin` or the same `Object` context
+you registered with:
+
+```java
+@Override
+public void onDisable() {
+    EventBus bus = GrimAPIProvider.get().getEventBus();
+    bus.unregisterAllListeners(this);  // or: bus.unregisterAllListeners(grim)
+}
+```
+
+**Legacy API.** `bus.post(event)`, `bus.subscribe(ctx, EventClass.class, listener)`
+and `@GrimEventHandler` reflective registration are preserved for source
+compatibility with 1.2.4.0 callers, route through the same channels, and are
+marked `@Deprecated` with doc pointing at `bus.get(E.class).on…(grim, handler)`.

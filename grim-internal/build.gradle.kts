@@ -33,14 +33,14 @@ dependencies {
     compileOnly(libs.mongoDriverSync)
     compileOnly(libs.jedis)
 
-    // com.lmax.* to avoid Log4j collisions on the classpath?
+    // com.lmax.* ring-buffer writer path used by the datastore. Shaded +
+    // relocated in prod builds; version pinned to match Paper's bundled
+    // 3.4.4 so no-relocate debug builds don't double up on the classpath.
     api(libs.disruptor)
 
-    testImplementation(libs.junitApi)
-    testImplementation(libs.junitParams)
-    testRuntimeOnly(libs.junitEngine)
-    testRuntimeOnly(libs.junitLauncher)
     testImplementation(libs.annotations)
+    testImplementation(libs.junitJupiter)
+    testRuntimeOnly("org.junit.platform:junit-platform-launcher")
     testImplementation(libs.sqliteJdbc)
     testImplementation(libs.mysqlJdbc)
     testImplementation(libs.postgresJdbc)
@@ -53,7 +53,7 @@ tasks.withType<JavaCompile>().configureEach {
     options.encoding = "UTF-8"
 }
 
-tasks.withType<Test>().configureEach {
+tasks.test {
     useJUnitPlatform()
 }
 

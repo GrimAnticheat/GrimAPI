@@ -1,49 +1,76 @@
 package ac.grim.grimac.api.event.events;
 
 import ac.grim.grimac.api.GrimUser;
+import ac.grim.grimac.api.event.EventChannel;
 import ac.grim.grimac.api.event.GrimEvent;
+import ac.grim.grimac.api.plugin.GrimPlugin;
+import org.jetbrains.annotations.NotNull;
 
 /**
  * Fired when Grim sends a teleport packet to the client.
  *
- * <p>This event exists to help maintain compatibility with packet-based plugins and
- * other anticheats that keep track of inbound / outbound teleport packets to build a deque.</p>
+ * <p>Exists to help maintain compatibility with packet-based plugins and other
+ * anticheats that track inbound/outbound teleport packets to build a
+ * pending-teleport deque.
  *
- * <p>This event is fired on the Netty thread associated with the PacketEvents
- * user represented by the {@link GrimUser}.</p>
+ * <p>Fires on the Netty thread associated with the PacketEvents user.
+ * Observational, not cancellable.
  */
-public class GrimTeleportEvent extends GrimEvent implements GrimUserEvent {
-    private final GrimUser user;
-    private final int teleportId;
-    private final long timestamp;
-
-    public GrimTeleportEvent(GrimUser user, int teleportId, long timestamp) {
-        super();
-        this.user = user;
-        this.teleportId = teleportId;
-        this.timestamp = timestamp;
+public final class GrimTeleportEvent extends GrimEvent<GrimTeleportEvent.Channel> {
+    private GrimTeleportEvent() {
+        // Never instantiated — exists only as a Class key for bus.get(GrimTeleportEvent.class).
     }
 
-    @Override
-    public GrimUser getUser() {
-        return user;
+    @FunctionalInterface
+    public interface Handler {
+        void onTeleport(@NotNull GrimUser user, int teleportId, long timestamp);
     }
 
-    /**
-     * Returns the teleport id sent to the client.
-     *
-     * @return the teleport id that will be echoed in the teleport acknowledgement
-     */
-    public int getTeleportId() {
-        return teleportId;
-    }
+    public static final class Channel extends EventChannel<GrimTeleportEvent, Handler> {
+        public Channel() {
+            super(GrimTeleportEvent.class, Handler.class);
+        }
 
-    /**
-     * Returns the timestamp captured when the teleport packet was sent.
-     *
-     * @return the event timestamp in milliseconds
-     */
-    public long getTimestamp() {
-        return timestamp;
+        public void onTeleport(@NotNull GrimPlugin plugin, @NotNull Handler handler) {
+            subscribe(handler, 0, false, plugin, null);
+        }
+
+        public void onTeleport(@NotNull GrimPlugin plugin, @NotNull Handler handler, int priority) {
+            subscribe(handler, priority, false, plugin, null);
+        }
+
+        /** @deprecated resolve your context once at plugin enable — {@code api.getGrimPlugin(this)} — and call the {@link GrimPlugin}-taking overload. */
+        @Deprecated
+        public void onTeleport(@NotNull Object pluginContext, @NotNull Handler handler) {
+            onTeleport(resolvePlugin(pluginContext), handler);
+        }
+
+        /** @deprecated see {@link #onTeleport(Object, Handler)}. */
+        @Deprecated
+        public void onTeleport(@NotNull Object pluginContext, @NotNull Handler handler, int priority) {
+            onTeleport(resolvePlugin(pluginContext), handler, priority);
+        }
+
+        public void fire(@NotNull GrimUser user, int teleportId, long timestamp) {
+            Entry<Handler>[] entries = entries();
+            for (Entry<Handler> e : entries) {
+                try {
+                    e.handler.onTeleport(user, teleportId, timestamp);
+                } catch (Throwable t) {
+                    t.printStackTrace();
+                }
+            }
+        }
+
+        @Override
+        protected boolean dispatchTypedFromLegacy(@NotNull GrimTeleportEvent event, @NotNull Handler handler, boolean cancelled) {
+            // Unreachable — GrimTeleportEvent has no public constructor, so no caller can post() one.
+            throw new UnsupportedOperationException("GrimTeleportEvent has no legacy representation");
+        }
+
+        @org.jetbrains.annotations.ApiStatus.Internal
+        public static @NotNull Handler bridgeFromAny(@NotNull ac.grim.grimac.api.event.GrimEvent.Handler abstractHandler) {
+            return (user, id, ts) -> abstractHandler.onAnyEvent(GrimTeleportEvent.class, false);
+        }
     }
 }
