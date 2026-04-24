@@ -43,8 +43,8 @@ class CheckRegistryTest {
 
     @Test
     void internSameKeyTwiceIsIdempotent() {
-        int first = registry.intern("badpackets.duplicate_slot", "BadPacketsA", "Duplicate slot", "2.3.0");
-        int second = registry.intern("badpackets.duplicate_slot", "BadPacketsA", "Duplicate slot", "2.3.0");
+        int first = registry.intern("grim.badpackets.duplicate_slot", "BadPacketsA", "Duplicate slot", "2.3.0");
+        int second = registry.intern("grim.badpackets.duplicate_slot", "BadPacketsA", "Duplicate slot", "2.3.0");
         assertEquals(first, second, "same key should return the same id");
         assertEquals(1, registry.size(), "no extra rows");
         assertEquals(1, persistence.insertCount, "persistence insert fired exactly once");
@@ -52,10 +52,10 @@ class CheckRegistryTest {
 
     @Test
     void internSameKeyWithNewDisplayUpdatesDisplay() {
-        int id = registry.intern("badpackets.respawn_alive", "BadPacketsM", "Respawn while alive", "2.3.0");
+        int id = registry.intern("grim.badpackets.respawn_alive", "BadPacketsM", "Respawn while alive", "2.3.0");
 
         // V3 boots and declares the same stable_key but a different display.
-        int rebound = registry.intern("badpackets.respawn_alive", "BadPacketsS", "Respawn while alive", "3.0.0");
+        int rebound = registry.intern("grim.badpackets.respawn_alive", "BadPacketsS", "Respawn while alive", "3.0.0");
 
         assertEquals(id, rebound, "same stable_key preserves id across a display rename");
         assertEquals("BadPacketsS", registry.displayFor(id).orElseThrow());
@@ -66,11 +66,11 @@ class CheckRegistryTest {
     @Test
     void internNewKeyOnOccupiedDisplayPrefixesTheOlderRow() {
         // V2 checks in first: BadPacketsB means ignored_rotation.
-        int v2Id = registry.intern("badpackets.ignored_rotation", "BadPacketsB", "Ignored rotation", "2.3.0");
+        int v2Id = registry.intern("grim.badpackets.ignored_rotation", "BadPacketsB", "Ignored rotation", "2.3.0");
         assertEquals("BadPacketsB", registry.displayFor(v2Id).orElseThrow());
 
         // V3 boots and claims BadPacketsB for a different behaviour.
-        int v3Id = registry.intern("badpackets.invalid_steer", "BadPacketsB", "Invalid vehicle steer", "3.0.0");
+        int v3Id = registry.intern("grim.badpackets.invalid_steer", "BadPacketsB", "Invalid vehicle steer", "3.0.0");
 
         assertNotEquals(v2Id, v3Id, "different stable_key gets a new check_id");
         assertEquals("V2/BadPacketsB", registry.displayFor(v2Id).orElseThrow(),
@@ -86,14 +86,14 @@ class CheckRegistryTest {
         // the first time and registers its BadPacketsB. Older row gets
         // prefixed; V3 plants the clean display. V3 then restarts — it
         // re-registers the same stable_key. No new rows, no re-prefix.
-        int v2Id = registry.intern("badpackets.ignored_rotation", "BadPacketsB", null, "2.3.0");
-        int v3Id = registry.intern("badpackets.invalid_steer", "BadPacketsB", "Invalid steer", "3.0.0");
+        int v2Id = registry.intern("grim.badpackets.ignored_rotation", "BadPacketsB", null, "2.3.0");
+        int v3Id = registry.intern("grim.badpackets.invalid_steer", "BadPacketsB", "Invalid steer", "3.0.0");
         assertEquals("V2/BadPacketsB", registry.displayFor(v2Id).orElseThrow());
         assertEquals("BadPacketsB", registry.displayFor(v3Id).orElseThrow());
         assertEquals(2, registry.size());
 
         // V3 restarts (V2 is gone — it was upgraded away and no longer registers).
-        int v3Again = registry.intern("badpackets.invalid_steer", "BadPacketsB", "Invalid steer", "3.0.0");
+        int v3Again = registry.intern("grim.badpackets.invalid_steer", "BadPacketsB", "Invalid steer", "3.0.0");
 
         assertEquals(v3Id, v3Again, "same key returns same id");
         assertEquals(2, registry.size(), "no new rows");
@@ -116,11 +116,11 @@ class CheckRegistryTest {
         // prefix again — but our default prefix would produce
         // "V2/V2/BadPacketsB", which is fine, just ugly. This test
         // confirms no crash and no lost data.
-        int v2Id = registry.intern("bp.old", "BadPacketsB", null, "2.0.0");
-        registry.intern("bp.new", "BadPacketsB", null, "3.0.0");
+        int v2Id = registry.intern("grim.bp.old", "BadPacketsB", null, "2.0.0");
+        registry.intern("grim.bp.new", "BadPacketsB", null, "3.0.0");
         assertEquals("V2/BadPacketsB", registry.displayFor(v2Id).orElseThrow());
 
-        int pathId = registry.intern("weird.one", "V2/BadPacketsB", null, "2.0.0");
+        int pathId = registry.intern("grim.weird.one", "V2/BadPacketsB", null, "2.0.0");
 
         assertEquals(3, registry.size(), "new row inserted, no merging of unrelated keys");
         // One of the two "V2/BadPacketsB" rows (the older one) gets prefixed again.
@@ -142,7 +142,7 @@ class CheckRegistryTest {
                 futures.add(pool.submit(() -> {
                     ready.countDown();
                     go.await();
-                    return registry.intern("combat.reach", "Reach", "Reach exceeds bedrock envelope", "3.0.0");
+                    return registry.intern("grim.combat.reach", "Reach", "Reach exceeds bedrock envelope", "3.0.0");
                 }));
             }
             assertTrue(ready.await(5, TimeUnit.SECONDS), "threads ready");
@@ -163,8 +163,8 @@ class CheckRegistryTest {
     @Test
     void defaultCollisionPrefixReadsIntroducedMajorVersion() {
         CheckRegistry versioned = new CheckRegistry(persistence, CheckRegistry.DEFAULT_COLLISION_PREFIX);
-        int v2Id = versioned.intern("badpackets.ignored_rotation", "BadPacketsB", null, "2.3.61");
-        versioned.intern("badpackets.invalid_steer", "BadPacketsB", null, "3.0.0");
+        int v2Id = versioned.intern("grim.badpackets.ignored_rotation", "BadPacketsB", null, "2.3.61");
+        versioned.intern("grim.badpackets.invalid_steer", "BadPacketsB", null, "3.0.0");
         assertEquals("V2/BadPacketsB", versioned.displayFor(v2Id).orElseThrow(),
                 "default prefix reads major from introduced_version");
     }
@@ -172,8 +172,8 @@ class CheckRegistryTest {
     @Test
     void defaultCollisionPrefixFallsBackWhenVersionIsMissing() {
         CheckRegistry versioned = new CheckRegistry(persistence, CheckRegistry.DEFAULT_COLLISION_PREFIX);
-        int oldId = versioned.intern("something.old", "FooA", null, null);
-        versioned.intern("something.new", "FooA", null, "3.0.0");
+        int oldId = versioned.intern("grim.something.old", "FooA", null, null);
+        versioned.intern("grim.something.new", "FooA", null, "3.0.0");
         assertEquals("legacy/FooA", versioned.displayFor(oldId).orElseThrow(),
                 "null introduced_version degrades to the 'legacy/' fallback");
     }
