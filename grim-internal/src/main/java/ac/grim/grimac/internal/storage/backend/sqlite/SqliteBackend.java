@@ -564,7 +564,7 @@ public final class SqliteBackend implements Backend {
     private Page<PlayerIdentity> getPlayerIdentityByName(Connection c, Queries.GetPlayerIdentityByName q) throws SQLException {
         try (PreparedStatement ps = c.prepareStatement(
                 "SELECT uuid, current_name, first_seen, last_seen FROM " + config.tableNames().players() + " "
-                        + "WHERE lower(current_name) = ? ORDER BY last_seen DESC LIMIT 1")) {
+                        + "WHERE current_name_lower = ? ORDER BY last_seen DESC LIMIT 1")) {
             ps.setString(1, q.name().toLowerCase(Locale.ROOT));
             try (ResultSet rs = ps.executeQuery()) {
                 if (rs.next()) return new Page<>(List.of(mapIdentity(rs)), null);
