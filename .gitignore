@@ -66,4 +66,6 @@ nb-configuration.xml
 ##############################
 ## OS X
 ##############################
-.DS_StorebuildSrc/.kotlin/
+.DS_Store
+
+buildSrc/.kotlin/
