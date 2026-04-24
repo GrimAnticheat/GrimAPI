@@ -23,6 +23,7 @@ import ac.grim.grimac.api.storage.query.Deletes;
 import ac.grim.grimac.api.storage.query.Page;
 import ac.grim.grimac.api.storage.query.Queries;
 import ac.grim.grimac.api.storage.query.Query;
+import ac.grim.grimac.internal.storage.util.UuidCodec;
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
 
@@ -58,46 +59,47 @@ public final class SqliteBackend implements Backend {
 
     public static final String ID = "sqlite";
 
-    private static final String INSERT_VIOLATIONS =
-            "INSERT INTO grim_violations(session_id, player_uuid, check_id, vl, occurred_at, verbose, verbose_format) "
-                    + "VALUES (?, ?, ?, ?, ?, ?, ?)";
-
-    private static final String UPSERT_SESSIONS =
-            "INSERT INTO grim_sessions(session_id, player_uuid, server_name, started_at, last_activity, "
-                    + "grim_version, client_brand, client_version_pvn, server_version, replay_clips_json) "
-                    + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
-                    + "ON CONFLICT(session_id) DO UPDATE SET "
-                    + "server_name=excluded.server_name, "
-                    + "last_activity=excluded.last_activity, "
-                    + "grim_version=excluded.grim_version, "
-                    + "client_brand=excluded.client_brand, "
-                    + "client_version_pvn=excluded.client_version_pvn, "
-                    + "server_version=excluded.server_version, "
-                    + "replay_clips_json=excluded.replay_clips_json";
-
-    private static final String UPSERT_IDENTITIES =
-            "INSERT INTO grim_players(uuid, current_name, first_seen, last_seen) "
-                    + "VALUES (?, ?, ?, ?) "
-                    + "ON CONFLICT(uuid) DO UPDATE SET "
-                    + "current_name = excluded.current_name, "
-                    + "first_seen = min(first_seen, excluded.first_seen), "
-                    + "last_seen = max(last_seen, excluded.last_seen)";
-
-    private static final String UPSERT_SETTINGS =
-            "INSERT INTO grim_settings(scope, scope_key, key, value, updated_at) "
-                    + "VALUES (?, ?, ?, ?, ?) "
-                    + "ON CONFLICT(scope, scope_key, key) DO UPDATE SET "
-                    + "value = excluded.value, "
-                    + "updated_at = excluded.updated_at";
-
     private final SqliteBackendConfig config;
     private final Object writeMutex = new Object();
     private final List<BatchingHandler<?>> handlers = new ArrayList<>();
+    private final String insertViolations;
+    private final String upsertSessions;
+    private final String upsertIdentities;
+    private final String upsertSettings;
     private String jdbcUrl;
     private Connection writeConn;
 
     public SqliteBackend(SqliteBackendConfig config) {
         this.config = config;
+        ac.grim.grimac.api.storage.config.TableNames t = config.tableNames();
+        this.insertViolations =
+                "INSERT INTO " + t.violations() + "(session_id, player_uuid, check_id, vl, occurred_at, verbose, verbose_format) "
+                        + "VALUES (?, ?, ?, ?, ?, ?, ?)";
+        this.upsertSessions =
+                "INSERT INTO " + t.sessions() + "(session_id, player_uuid, server_name, started_at, last_activity, "
+                        + "grim_version, client_brand, client_version_pvn, server_version, replay_clips_json) "
+                        + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                        + "ON CONFLICT(session_id) DO UPDATE SET "
+                        + "server_name=excluded.server_name, "
+                        + "last_activity=excluded.last_activity, "
+                        + "grim_version=excluded.grim_version, "
+                        + "client_brand=excluded.client_brand, "
+                        + "client_version_pvn=excluded.client_version_pvn, "
+                        + "server_version=excluded.server_version, "
+                        + "replay_clips_json=excluded.replay_clips_json";
+        this.upsertIdentities =
+                "INSERT INTO " + t.players() + "(uuid, current_name, first_seen, last_seen) "
+                        + "VALUES (?, ?, ?, ?) "
+                        + "ON CONFLICT(uuid) DO UPDATE SET "
+                        + "current_name = excluded.current_name, "
+                        + "first_seen = min(first_seen, excluded.first_seen), "
+                        + "last_seen = max(last_seen, excluded.last_seen)";
+        this.upsertSettings =
+                "INSERT INTO " + t.settings() + "(scope, scope_key, key, value, updated_at) "
+                        + "VALUES (?, ?, ?, ?, ?) "
+                        + "ON CONFLICT(scope, scope_key, key) DO UPDATE SET "
+                        + "value = excluded.value, "
+                        + "updated_at = excluded.updated_at";
     }
 
     @Override public @NotNull String id() { return ID; }
@@ -150,7 +152,7 @@ public final class SqliteBackend implements Backend {
                     s.execute("PRAGMA busy_timeout=" + config.busyTimeoutMs());
                     s.execute("PRAGMA cache_size=" + config.cachePages());
                 }
-                SqliteSchema.ensureInitialized(writeConn, "phase1");
+                SqliteSchema.ensureInitialized(writeConn, "phase1", config.tableNames());
                 // writeConn stays in autoCommit=true; write ops that batch wrap their own
                 // setAutoCommit(false) / commit cycle.
             } catch (SQLException e) {
@@ -269,7 +271,7 @@ public final class SqliteBackend implements Backend {
     }
 
     private final class ViolationHandler extends BatchingHandler<ViolationEvent> {
-        @Override protected String sql() { return INSERT_VIOLATIONS; }
+        @Override protected String sql() { return insertViolations; }
         @Override protected String categoryId() { return "violation"; }
         @Override
         protected void bind(PreparedStatement ps, ViolationEvent v) throws SQLException {
@@ -284,7 +286,7 @@ public final class SqliteBackend implements Backend {
     }
 
     private final class SessionHandler extends BatchingHandler<SessionEvent> {
-        @Override protected String sql() { return UPSERT_SESSIONS; }
+        @Override protected String sql() { return upsertSessions; }
         @Override protected String categoryId() { return "session"; }
         @Override
         protected void bind(PreparedStatement ps, SessionEvent s) throws SQLException {
@@ -302,7 +304,7 @@ public final class SqliteBackend implements Backend {
     }
 
     private final class IdentityHandler extends BatchingHandler<PlayerIdentityEvent> {
-        @Override protected String sql() { return UPSERT_IDENTITIES; }
+        @Override protected String sql() { return upsertIdentities; }
         @Override protected String categoryId() { return "player-identity"; }
         @Override
         protected void bind(PreparedStatement ps, PlayerIdentityEvent e) throws SQLException {
@@ -314,7 +316,7 @@ public final class SqliteBackend implements Backend {
     }
 
     private final class SettingHandler extends BatchingHandler<SettingEvent> {
-        @Override protected String sql() { return UPSERT_SETTINGS; }
+        @Override protected String sql() { return upsertSettings; }
         @Override protected String categoryId() { return "setting"; }
         @Override
         protected void bind(PreparedStatement ps, SettingEvent s) throws SQLException {
@@ -367,7 +369,7 @@ public final class SqliteBackend implements Backend {
     }
 
     private void writeViolationRecords(List<ViolationRecord> rows) throws SQLException {
-        try (PreparedStatement ps = writeConn.prepareStatement(INSERT_VIOLATIONS)) {
+        try (PreparedStatement ps = writeConn.prepareStatement(insertViolations)) {
             for (ViolationRecord v : rows) {
                 ps.setBytes(1, UuidCodec.toBytes(v.sessionId()));
                 ps.setBytes(2, UuidCodec.toBytes(v.playerUuid()));
@@ -383,7 +385,7 @@ public final class SqliteBackend implements Backend {
     }
 
     private void writeSessionRecords(List<SessionRecord> rows) throws SQLException {
-        try (PreparedStatement ps = writeConn.prepareStatement(UPSERT_SESSIONS)) {
+        try (PreparedStatement ps = writeConn.prepareStatement(upsertSessions)) {
             for (SessionRecord s : rows) {
                 ps.setBytes(1, UuidCodec.toBytes(s.sessionId()));
                 ps.setBytes(2, UuidCodec.toBytes(s.playerUuid()));
@@ -402,7 +404,7 @@ public final class SqliteBackend implements Backend {
     }
 
     private void writeIdentityRecords(List<PlayerIdentity> rows) throws SQLException {
-        try (PreparedStatement ps = writeConn.prepareStatement(UPSERT_IDENTITIES)) {
+        try (PreparedStatement ps = writeConn.prepareStatement(upsertIdentities)) {
             for (PlayerIdentity id : rows) {
                 ps.setBytes(1, UuidCodec.toBytes(id.uuid()));
                 ps.setString(2, id.currentName());
@@ -415,7 +417,7 @@ public final class SqliteBackend implements Backend {
     }
 
     private void writeSettingRecords(List<SettingRecord> rows) throws SQLException {
-        try (PreparedStatement ps = writeConn.prepareStatement(UPSERT_SETTINGS)) {
+        try (PreparedStatement ps = writeConn.prepareStatement(upsertSettings)) {
             for (SettingRecord s : rows) {
                 ps.setString(1, s.scope().name());
                 ps.setString(2, s.scopeKey());
@@ -464,7 +466,7 @@ public final class SqliteBackend implements Backend {
         try (PreparedStatement ps = c.prepareStatement(
                 "SELECT session_id, player_uuid, server_name, started_at, last_activity, "
                         + "grim_version, client_brand, client_version_pvn, server_version, replay_clips_json "
-                        + "FROM grim_sessions "
+                        + "FROM " + config.tableNames().sessions() + " "
                         + "WHERE player_uuid = ? AND (started_at < ? OR (started_at = ? AND session_id < ?)) "
                         + "ORDER BY started_at DESC, session_id DESC "
                         + "LIMIT ?")) {
@@ -494,7 +496,7 @@ public final class SqliteBackend implements Backend {
         try (PreparedStatement ps = c.prepareStatement(
                 "SELECT session_id, player_uuid, server_name, started_at, last_activity, "
                         + "grim_version, client_brand, client_version_pvn, server_version, replay_clips_json "
-                        + "FROM grim_sessions WHERE session_id = ?")) {
+                        + "FROM " + config.tableNames().sessions() + " WHERE session_id = ?")) {
             ps.setBytes(1, UuidCodec.toBytes(q.sessionId()));
             try (ResultSet rs = ps.executeQuery()) {
                 if (rs.next()) return new Page<>(List.of(mapSession(rs)), null);
@@ -508,7 +510,7 @@ public final class SqliteBackend implements Backend {
         long lastId = decodeViolationIdCursor(q.cursor());
         try (PreparedStatement ps = c.prepareStatement(
                 "SELECT id, session_id, player_uuid, check_id, vl, occurred_at, verbose, verbose_format "
-                        + "FROM grim_violations "
+                        + "FROM " + config.tableNames().violations() + " "
                         + "WHERE session_id = ? AND (occurred_at > ? OR (occurred_at = ? AND id > ?)) "
                         + "ORDER BY occurred_at ASC, id ASC "
                         + "LIMIT ?")) {
@@ -536,7 +538,7 @@ public final class SqliteBackend implements Backend {
 
     private Page<PlayerIdentity> getPlayerIdentity(Connection c, Queries.GetPlayerIdentity q) throws SQLException {
         try (PreparedStatement ps = c.prepareStatement(
-                "SELECT uuid, current_name, first_seen, last_seen FROM grim_players WHERE uuid = ?")) {
+                "SELECT uuid, current_name, first_seen, last_seen FROM " + config.tableNames().players() + " WHERE uuid = ?")) {
             ps.setBytes(1, UuidCodec.toBytes(q.uuid()));
             try (ResultSet rs = ps.executeQuery()) {
                 if (rs.next()) return new Page<>(List.of(mapIdentity(rs)), null);
@@ -547,7 +549,7 @@ public final class SqliteBackend implements Backend {
 
     private Page<PlayerIdentity> getPlayerIdentityByName(Connection c, Queries.GetPlayerIdentityByName q) throws SQLException {
         try (PreparedStatement ps = c.prepareStatement(
-                "SELECT uuid, current_name, first_seen, last_seen FROM grim_players "
+                "SELECT uuid, current_name, first_seen, last_seen FROM " + config.tableNames().players() + " "
                         + "WHERE lower(current_name) = ? ORDER BY last_seen DESC LIMIT 1")) {
             ps.setString(1, q.name().toLowerCase(Locale.ROOT));
             try (ResultSet rs = ps.executeQuery()) {
@@ -559,7 +561,7 @@ public final class SqliteBackend implements Backend {
 
     private Page<SettingRecord> getSetting(Connection c, Queries.GetSetting q) throws SQLException {
         try (PreparedStatement ps = c.prepareStatement(
-                "SELECT scope, scope_key, key, value, updated_at FROM grim_settings "
+                "SELECT scope, scope_key, key, value, updated_at FROM " + config.tableNames().settings() + " "
                         + "WHERE scope = ? AND scope_key = ? AND key = ?")) {
             ps.setString(1, q.scope().name());
             ps.setString(2, q.scopeKey());
@@ -620,17 +622,18 @@ public final class SqliteBackend implements Backend {
             if (writeConn == null) throw new BackendException("backend not initialised");
             try {
                 writeConn.setAutoCommit(false);
+                ac.grim.grimac.api.storage.config.TableNames t = config.tableNames();
                 if (criteria instanceof Deletes.ByPlayer d) {
                     byte[] uuid = UuidCodec.toBytes(d.uuid());
-                    if (cat == Categories.VIOLATION) execDelete("DELETE FROM grim_violations WHERE player_uuid = ?", uuid);
+                    if (cat == Categories.VIOLATION) execDelete("DELETE FROM " + t.violations() + " WHERE player_uuid = ?", uuid);
                     else if (cat == Categories.SESSION) {
-                        execDelete("DELETE FROM grim_violations WHERE player_uuid = ?", uuid);
-                        execDelete("DELETE FROM grim_sessions WHERE player_uuid = ?", uuid);
+                        execDelete("DELETE FROM " + t.violations() + " WHERE player_uuid = ?", uuid);
+                        execDelete("DELETE FROM " + t.sessions() + " WHERE player_uuid = ?", uuid);
                     } else if (cat == Categories.PLAYER_IDENTITY) {
-                        execDelete("DELETE FROM grim_players WHERE uuid = ?", uuid);
+                        execDelete("DELETE FROM " + t.players() + " WHERE uuid = ?", uuid);
                     } else if (cat == Categories.SETTING) {
                         try (PreparedStatement ps = writeConn.prepareStatement(
-                                "DELETE FROM grim_settings WHERE scope = 'PLAYER' AND scope_key = ?")) {
+                                "DELETE FROM " + t.settings() + " WHERE scope = 'PLAYER' AND scope_key = ?")) {
                             ps.setString(1, d.uuid().toString());
                             ps.executeUpdate();
                         }
@@ -641,19 +644,19 @@ public final class SqliteBackend implements Backend {
                     long cutoff = System.currentTimeMillis() - d.maxAgeMs();
                     if (cat == Categories.SESSION) {
                         try (PreparedStatement ps = writeConn.prepareStatement(
-                                "DELETE FROM grim_violations WHERE session_id IN "
-                                        + "(SELECT session_id FROM grim_sessions WHERE started_at < ?)")) {
+                                "DELETE FROM " + t.violations() + " WHERE session_id IN "
+                                        + "(SELECT session_id FROM " + t.sessions() + " WHERE started_at < ?)")) {
                             ps.setLong(1, cutoff);
                             ps.executeUpdate();
                         }
                         try (PreparedStatement ps = writeConn.prepareStatement(
-                                "DELETE FROM grim_sessions WHERE started_at < ?")) {
+                                "DELETE FROM " + t.sessions() + " WHERE started_at < ?")) {
                             ps.setLong(1, cutoff);
                             ps.executeUpdate();
                         }
                     } else if (cat == Categories.VIOLATION) {
                         try (PreparedStatement ps = writeConn.prepareStatement(
-                                "DELETE FROM grim_violations WHERE occurred_at < ?")) {
+                                "DELETE FROM " + t.violations() + " WHERE occurred_at < ?")) {
                             ps.setLong(1, cutoff);
                             ps.executeUpdate();
                         }
@@ -684,7 +687,7 @@ public final class SqliteBackend implements Backend {
     public long countViolationsInSession(@NotNull UUID sessionId) throws BackendException {
         try (Connection c = openConnection();
              PreparedStatement ps = c.prepareStatement(
-                     "SELECT COUNT(*) FROM grim_violations WHERE session_id = ?")) {
+                     "SELECT COUNT(*) FROM " + config.tableNames().violations() + " WHERE session_id = ?")) {
             ps.setBytes(1, UuidCodec.toBytes(sessionId));
             try (ResultSet rs = ps.executeQuery()) {
                 if (rs.next()) return rs.getLong(1);
@@ -699,7 +702,7 @@ public final class SqliteBackend implements Backend {
     public long countUniqueChecksInSession(@NotNull UUID sessionId) throws BackendException {
         try (Connection c = openConnection();
              PreparedStatement ps = c.prepareStatement(
-                     "SELECT COUNT(DISTINCT check_id) FROM grim_violations WHERE session_id = ?")) {
+                     "SELECT COUNT(DISTINCT check_id) FROM " + config.tableNames().violations() + " WHERE session_id = ?")) {
             ps.setBytes(1, UuidCodec.toBytes(sessionId));
             try (ResultSet rs = ps.executeQuery()) {
                 if (rs.next()) return rs.getLong(1);
@@ -714,7 +717,7 @@ public final class SqliteBackend implements Backend {
     public long countSessionsByPlayer(@NotNull UUID player) throws BackendException {
         try (Connection c = openConnection();
              PreparedStatement ps = c.prepareStatement(
-                     "SELECT COUNT(*) FROM grim_sessions WHERE player_uuid = ?")) {
+                     "SELECT COUNT(*) FROM " + config.tableNames().sessions() + " WHERE player_uuid = ?")) {
             ps.setBytes(1, UuidCodec.toBytes(player));
             try (ResultSet rs = ps.executeQuery()) {
                 if (rs.next()) return rs.getLong(1);
@@ -791,6 +794,13 @@ public final class SqliteBackend implements Backend {
     @ApiStatus.Internal
     public String jdbcUrl() {
         return jdbcUrl;
+    }
+
+    /** Exposes the backend's effective table names for cross-cutting consumers
+     * (copier, check persistence) that can't go through the ring. */
+    @ApiStatus.Internal
+    public ac.grim.grimac.api.storage.config.TableNames tableNames() {
+        return config.tableNames();
     }
 
     /**

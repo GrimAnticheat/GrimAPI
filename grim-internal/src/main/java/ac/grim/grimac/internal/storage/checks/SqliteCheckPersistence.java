@@ -1,5 +1,6 @@
 package ac.grim.grimac.internal.storage.checks;
 
+import ac.grim.grimac.api.storage.config.TableNames;
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.Nullable;
 
@@ -22,9 +23,22 @@ import java.util.List;
 public final class SqliteCheckPersistence implements CheckRegistry.CheckPersistence {
 
     private final String jdbcUrl;
+    private final String checksTable;
 
-    public SqliteCheckPersistence(String jdbcUrl) {
+    /**
+     * @param jdbcUrl JDBC URL for the backing SQLite database.
+     * @param checksTable Name of the {@code checks} table — read from the
+     *                    SQLite backend's {@link TableNames} so overrides
+     *                    stay consistent with the backend's schema.
+     */
+    public SqliteCheckPersistence(String jdbcUrl, String checksTable) {
         this.jdbcUrl = jdbcUrl;
+        this.checksTable = checksTable;
+    }
+
+    /** Back-compat ctor using default {@link TableNames#DEFAULT_CHECKS}. */
+    public SqliteCheckPersistence(String jdbcUrl) {
+        this(jdbcUrl, TableNames.DEFAULT_CHECKS);
     }
 
     @Override
@@ -33,7 +47,7 @@ public final class SqliteCheckPersistence implements CheckRegistry.CheckPersiste
         try (Connection c = DriverManager.getConnection(jdbcUrl);
              PreparedStatement ps = c.prepareStatement(
                      "SELECT check_id, stable_key, display, description, introduced_version, introduced_at "
-                             + "FROM grim_checks");
+                             + "FROM " + checksTable);
              ResultSet rs = ps.executeQuery()) {
             while (rs.next()) {
                 long introducedAt = rs.getLong(6);
@@ -47,7 +61,7 @@ public final class SqliteCheckPersistence implements CheckRegistry.CheckPersiste
                         introducedAt));
             }
         } catch (SQLException e) {
-            throw new RuntimeException("failed to load grim_checks", e);
+            throw new RuntimeException("failed to load " + checksTable, e);
         }
         return out;
     }
@@ -60,7 +74,7 @@ public final class SqliteCheckPersistence implements CheckRegistry.CheckPersiste
                       long introducedAt) {
         try (Connection c = DriverManager.getConnection(jdbcUrl);
              PreparedStatement ps = c.prepareStatement(
-                     "INSERT INTO grim_checks(stable_key, display, description, introduced_version, introduced_at) "
+                     "INSERT INTO " + checksTable + "(stable_key, display, description, introduced_version, introduced_at) "
                              + "VALUES (?, ?, ?, ?, ?)",
                      Statement.RETURN_GENERATED_KEYS)) {
             ps.setString(1, stableKey);
@@ -71,19 +85,19 @@ public final class SqliteCheckPersistence implements CheckRegistry.CheckPersiste
             ps.executeUpdate();
             try (ResultSet keys = ps.getGeneratedKeys()) {
                 if (keys.next()) return keys.getInt(1);
-                throw new SQLException("no generated key for grim_checks insert");
+                throw new SQLException("no generated key for " + checksTable + " insert");
             }
         } catch (SQLException e) {
             // Race: another writer may have interned between our check and this insert.
             // Return the existing row's id instead of failing.
             try (Connection c = DriverManager.getConnection(jdbcUrl);
-                 PreparedStatement ps = c.prepareStatement("SELECT check_id FROM grim_checks WHERE stable_key = ?")) {
+                 PreparedStatement ps = c.prepareStatement("SELECT check_id FROM " + checksTable + " WHERE stable_key = ?")) {
                 ps.setString(1, stableKey);
                 try (ResultSet rs = ps.executeQuery()) {
                     if (rs.next()) return rs.getInt(1);
                 }
             } catch (SQLException ignore) {}
-            throw new RuntimeException("failed to insert grim_checks row for " + stableKey, e);
+            throw new RuntimeException("failed to insert " + checksTable + " row for " + stableKey, e);
         }
     }
 
@@ -93,13 +107,13 @@ public final class SqliteCheckPersistence implements CheckRegistry.CheckPersiste
                                             @Nullable String description) {
         try (Connection c = DriverManager.getConnection(jdbcUrl);
              PreparedStatement ps = c.prepareStatement(
-                     "UPDATE grim_checks SET display = ?, description = ? WHERE check_id = ?")) {
+                     "UPDATE " + checksTable + " SET display = ?, description = ? WHERE check_id = ?")) {
             if (display == null) ps.setNull(1, Types.VARCHAR); else ps.setString(1, display);
             if (description == null) ps.setNull(2, Types.VARCHAR); else ps.setString(2, description);
             ps.setInt(3, checkId);
             ps.executeUpdate();
         } catch (SQLException e) {
-            throw new RuntimeException("failed to update grim_checks display/description", e);
+            throw new RuntimeException("failed to update " + checksTable + " display/description", e);
         }
     }
 }
