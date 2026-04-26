@@ -67,6 +67,11 @@ public final class MysqlBackend implements Backend {
     private final String upsertIdentities;
     private final String upsertSettings;
     private Connection writeConn;
+    // Cached at init() if minecraft-mysql-jdbc holder is present. When non-null,
+    // every openConnection() call routes through the holder's child-first
+    // classloader instead of DriverManager. See SqliteBackend for the same
+    // pattern with deeper rationale.
+    private java.lang.reflect.Method holderConnectMethod;
 
     public MysqlBackend(MysqlBackendConfig config) {
         this.config = config;
@@ -134,6 +139,13 @@ public final class MysqlBackend implements Backend {
         } catch (ClassNotFoundException cnf) {
             throw new BackendException("mysql-connector-j not on the classpath — either shade it into the plugin jar or drop it into server/plugins", cnf);
         }
+        // If minecraft-mysql-jdbc holder is on the classloader graph (Grim
+        // softdepends on it), route through its child-first classloader.
+        // Unlike SQLite, MySQL doesn't have a sharply-different feature gap
+        // between bundled and current connector-j — operators install the
+        // holder when they specifically want its version (typically on
+        // Fabric/NeoForge or to upgrade past a stale fork's bundled driver).
+        this.holderConnectMethod = pickHolderIfInstalled(ctx.logger());
         synchronized (writeMutex) {
             try {
                 this.writeConn = openConnection();
@@ -144,7 +156,47 @@ public final class MysqlBackend implements Backend {
         }
     }
 
+    /**
+     * Probe for {@code dev.axionize.mysql_jdbc.MinecraftMysqlJdbc} on the
+     * classpath. Return its {@code connect(String, Properties)} method if
+     * present, {@code null} otherwise. See SqliteBackend.pickHolderIfNewer
+     * for the deeper reasoning on why the API class lets us bypass parent-
+     * first delegation.
+     */
+    private java.lang.reflect.Method pickHolderIfInstalled(java.util.logging.Logger log) {
+        try {
+            Class<?> api = Class.forName(
+                    "dev.axionize.mysql_jdbc.MinecraftMysqlJdbc",
+                    true, getClass().getClassLoader());
+            String holderVersion = (String) api.getMethod("driverVersion").invoke(null);
+            java.lang.reflect.Method connect = api.getMethod(
+                    "connect", String.class, java.util.Properties.class);
+            log.info("[grim-datastore] minecraft-mysql-jdbc holder detected (driver "
+                    + holderVersion + "); routing JDBC through holder's child-first classloader");
+            return connect;
+        } catch (ClassNotFoundException notInstalled) {
+            return null;
+        } catch (Throwable t) {
+            log.warning("[grim-datastore] mysql holder probe failed (" + t + "); using bundled driver");
+            return null;
+        }
+    }
+
     private Connection openConnection() throws SQLException {
+        java.util.Properties props = new java.util.Properties();
+        props.setProperty("user", config.user());
+        props.setProperty("password", config.password() == null ? "" : config.password());
+        if (holderConnectMethod != null) {
+            try {
+                return (Connection) holderConnectMethod.invoke(null, config.jdbcUrl(), props);
+            } catch (java.lang.reflect.InvocationTargetException ite) {
+                Throwable cause = ite.getCause();
+                if (cause instanceof SQLException) throw (SQLException) cause;
+                throw new SQLException("mysql holder connect failed", cause != null ? cause : ite);
+            } catch (Exception e) {
+                throw new SQLException("mysql holder connect failed", e);
+            }
+        }
         return DriverManager.getConnection(config.jdbcUrl(), config.user(),
                 config.password() == null ? "" : config.password());
     }

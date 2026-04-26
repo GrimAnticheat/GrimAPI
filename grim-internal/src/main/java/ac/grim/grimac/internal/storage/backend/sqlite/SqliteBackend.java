@@ -72,6 +72,12 @@ public final class SqliteBackend implements Backend {
     private UpserterFactory upserterFactory = UpserterFactory.MODERN;
     private String jdbcUrl;
     private Connection writeConn;
+    // Cached at init() if minecraft-sqlite-jdbc holder is present AND offers a
+    // newer SQLite engine than the server's bundled driver. When non-null, every
+    // openConnection() call routes through the holder's child-first classloader,
+    // giving Grim access to engine features (RETURNING, STRICT, modern UPSERT)
+    // even on servers whose bundled engine is too old for them.
+    private java.lang.reflect.Method holderConnectMethod;
 
     public SqliteBackend(SqliteBackendConfig config) {
         this.config = config;
@@ -122,6 +128,12 @@ public final class SqliteBackend implements Backend {
         } catch (ClassNotFoundException cnf) {
             throw new BackendException("sqlite-jdbc not on the classpath", cnf);
         }
+        // If the minecraft-sqlite-jdbc holder is installed AND it ships a newer
+        // SQLite engine than the bundled driver, route through the holder's
+        // child-first classloader so we use the newer engine (modern UPSERT,
+        // RETURNING, STRICT tables) even on servers whose bundled engine is
+        // too old for them.
+        this.holderConnectMethod = pickHolderIfNewer(ctx.logger());
         synchronized (writeMutex) {
             try {
                 this.writeConn = openConnection();
@@ -139,6 +151,85 @@ public final class SqliteBackend implements Backend {
                 throw new BackendException("failed to initialise SQLite backend", e);
             }
         }
+    }
+
+    /**
+     * Probe for {@code dev.axionize.sqlite_jdbc.MinecraftSqliteJdbc} on the
+     * classpath. If present, compare its engine version with the server's
+     * bundled engine. Return the holder's {@code connect(String)} {@link
+     * java.lang.reflect.Method} when the holder is strictly newer; return
+     * {@code null} (use bundled) otherwise.
+     * <p>
+     * Why this works: the holder's API class wraps a child-first
+     * {@link java.net.URLClassLoader} pointing at its own jar. Calling
+     * {@code MinecraftSqliteJdbc.connect(url)} returns a {@link Connection}
+     * whose driver was loaded from that classloader, not from the parent-
+     * first plugin classloader chain that resolves to the bundled driver.
+     * The holder's API class is reachable here because Grim's plugin.yml
+     * declares the holder as a {@code softdepend}, linking the classloaders.
+     * <p>
+     * Reflection avoids a hard compile-time dependency on the holder.
+     */
+    private java.lang.reflect.Method pickHolderIfNewer(java.util.logging.Logger log) {
+        try {
+            Class<?> api = Class.forName(
+                    "dev.axionize.sqlite_jdbc.MinecraftSqliteJdbc",
+                    true, getClass().getClassLoader());
+            String holderEngine = (String) api.getMethod("engineVersion").invoke(null);
+            String bundledEngine = bundledEngineVersion();
+            if (compareVersionString(holderEngine, bundledEngine) <= 0) {
+                log.info("[grim-datastore] minecraft-sqlite-jdbc holder present but"
+                        + " not newer (holder=" + holderEngine + ", bundled=" + bundledEngine
+                        + "); using bundled driver");
+                return null;
+            }
+            java.lang.reflect.Method connect = api.getMethod("connect", String.class);
+            log.info("[grim-datastore] minecraft-sqlite-jdbc holder is newer than bundled"
+                    + " (holder=" + holderEngine + ", bundled=" + bundledEngine
+                    + "); routing JDBC through holder's child-first classloader");
+            return connect;
+        } catch (ClassNotFoundException notInstalled) {
+            return null;
+        } catch (Throwable t) {
+            log.warning("[grim-datastore] holder probe failed (" + t + "); using bundled driver");
+            return null;
+        }
+    }
+
+    private static String bundledEngineVersion() {
+        // In-memory probe — doesn't touch the real DB file. Uses the bundled
+        // driver via DriverManager regardless of holder presence.
+        try (Connection c = DriverManager.getConnection("jdbc:sqlite::memory:");
+             Statement s = c.createStatement();
+             ResultSet rs = s.executeQuery("SELECT sqlite_version()")) {
+            return rs.next() ? rs.getString(1) : "0.0.0";
+        } catch (Exception e) {
+            return "0.0.0";
+        }
+    }
+
+    private static int compareVersionString(String a, String b) {
+        // Shared comparator with compareVersionTriple — reuses the same parser
+        // by walking both sides once.
+        int[] av = parseTriple(a);
+        int[] bv = parseTriple(b);
+        if (av[0] != bv[0]) return Integer.compare(av[0], bv[0]);
+        if (av[1] != bv[1]) return Integer.compare(av[1], bv[1]);
+        return Integer.compare(av[2], bv[2]);
+    }
+
+    private static int[] parseTriple(String version) {
+        int[] triple = {0, 0, 0};
+        int idx = 0, i = 0;
+        while (i < version.length() && idx < 3) {
+            int start = i;
+            while (i < version.length() && Character.isDigit(version.charAt(i))) i++;
+            if (i == start) break;
+            triple[idx++] = Integer.parseInt(version.substring(start, i));
+            if (i < version.length() && version.charAt(i) == '.') i++;
+            else break;
+        }
+        return triple;
     }
 
     /**
@@ -193,7 +284,20 @@ public final class SqliteBackend implements Backend {
     }
 
     private Connection openConnection() throws SQLException {
-        Connection c = DriverManager.getConnection(jdbcUrl);
+        Connection c;
+        if (holderConnectMethod != null) {
+            try {
+                c = (Connection) holderConnectMethod.invoke(null, jdbcUrl);
+            } catch (java.lang.reflect.InvocationTargetException ite) {
+                Throwable cause = ite.getCause();
+                if (cause instanceof SQLException) throw (SQLException) cause;
+                throw new SQLException("holder connect failed", cause != null ? cause : ite);
+            } catch (Exception e) {
+                throw new SQLException("holder connect failed", e);
+            }
+        } else {
+            c = DriverManager.getConnection(jdbcUrl);
+        }
         try (Statement s = c.createStatement()) {
             s.execute("PRAGMA busy_timeout=" + config.busyTimeoutMs());
         }
