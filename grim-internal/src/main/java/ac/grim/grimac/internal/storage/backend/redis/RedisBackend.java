@@ -383,6 +383,7 @@ public final class RedisBackend implements Backend {
             if (query instanceof Queries.ListViolationsInSession q) return (Page<R>) listViolationsInSession(j, q);
             if (query instanceof Queries.GetPlayerIdentity q) return (Page<R>) getPlayerIdentity(j, q);
             if (query instanceof Queries.GetPlayerIdentityByName q) return (Page<R>) getPlayerIdentityByName(j, q);
+            if (query instanceof Queries.ListPlayersByNamePrefix q) return (Page<R>) listPlayersByNamePrefix(j, q);
             if (query instanceof Queries.GetSetting q) return (Page<R>) getSetting(j, q);
             throw new BackendException("unsupported query: " + query.getClass().getSimpleName());
         } catch (RuntimeException e) {
@@ -450,6 +451,49 @@ public final class RedisBackend implements Backend {
         if (hexId == null) return Page.empty();
         Map<String, String> h = j.hgetAll(tableKey(config.tableNames().players()) + ":" + hexId);
         return h.isEmpty() ? Page.empty() : new Page<>(List.of(mapIdentity(h)), null);
+    }
+
+    private Page<PlayerIdentity> listPlayersByNamePrefix(Jedis j, Queries.ListPlayersByNamePrefix q) {
+        String prefix = q.lowerPrefix();
+        if (prefix == null || prefix.isEmpty() || q.limit() <= 0) return Page.empty();
+        // SCAN keyspace for <players>:by-name-lower:<prefix>* — Redis glob-escape
+        // the user-supplied chars so '*'/'?'/'[' in a name don't expand the match.
+        String pattern = tableKey(config.tableNames().players()) + ":by-name-lower:" + globEscape(prefix) + "*";
+        redis.clients.jedis.params.ScanParams sp = new redis.clients.jedis.params.ScanParams()
+                .match(pattern)
+                .count(Math.min(Math.max(q.limit() * 4, 50), 500));
+        // Worst case: SCAN visits every key in the players index. Cap iteration
+        // count so an enormous keyspace doesn't make tab-completion hang. Sort
+        // the candidates we DID see by last_seen DESC and trim to limit.
+        java.util.List<PlayerIdentity> out = new java.util.ArrayList<>();
+        int maxCandidates = Math.max(q.limit() * 8, 200);
+        String cursor = redis.clients.jedis.params.ScanParams.SCAN_POINTER_START;
+        do {
+            redis.clients.jedis.resps.ScanResult<String> r = j.scan(cursor, sp);
+            cursor = r.getCursor();
+            for (String key : r.getResult()) {
+                String hexId = j.get(key);
+                if (hexId == null) continue;
+                Map<String, String> h = j.hgetAll(tableKey(config.tableNames().players()) + ":" + hexId);
+                if (h.isEmpty()) continue;
+                out.add(mapIdentity(h));
+                if (out.size() >= maxCandidates) break;
+            }
+            if (out.size() >= maxCandidates) break;
+        } while (!cursor.equals(redis.clients.jedis.params.ScanParams.SCAN_POINTER_START));
+        out.sort(java.util.Comparator.comparingLong(PlayerIdentity::lastSeenEpochMs).reversed());
+        if (out.size() > q.limit()) out = out.subList(0, q.limit());
+        return new Page<>(out, null);
+    }
+
+    private static String globEscape(String s) {
+        StringBuilder out = new StringBuilder(s.length());
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (c == '*' || c == '?' || c == '[' || c == ']' || c == '\\') out.append('\\');
+            out.append(c);
+        }
+        return out.toString();
     }
 
     private Page<SettingRecord> getSetting(Jedis j, Queries.GetSetting q) {

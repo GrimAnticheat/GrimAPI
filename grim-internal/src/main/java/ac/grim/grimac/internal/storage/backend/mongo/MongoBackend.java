@@ -433,6 +433,7 @@ public final class MongoBackend implements Backend {
             if (query instanceof Queries.ListViolationsInSession q) return (Page<R>) listViolationsInSession(q);
             if (query instanceof Queries.GetPlayerIdentity q) return (Page<R>) getPlayerIdentity(q);
             if (query instanceof Queries.GetPlayerIdentityByName q) return (Page<R>) getPlayerIdentityByName(q);
+            if (query instanceof Queries.ListPlayersByNamePrefix q) return (Page<R>) listPlayersByNamePrefix(q);
             if (query instanceof Queries.GetSetting q) return (Page<R>) getSetting(q);
             throw new BackendException("unsupported query: " + query.getClass().getSimpleName());
         } catch (RuntimeException e) {
@@ -514,6 +515,22 @@ public final class MongoBackend implements Backend {
                 .limit(1)
                 .first();
         return d == null ? Page.empty() : new Page<>(List.of(mapIdentity(d)), null);
+    }
+
+    private Page<PlayerIdentity> listPlayersByNamePrefix(Queries.ListPlayersByNamePrefix q) {
+        String prefix = q.lowerPrefix();
+        if (prefix == null || prefix.isEmpty() || q.limit() <= 0) return Page.empty();
+        // ^ + Pattern.quote anchors the regex and escapes any user-supplied
+        // metachars. The current_name_lower index is ascending so anchored-
+        // prefix regex hits the index range scan path.
+        String anchored = "^" + java.util.regex.Pattern.quote(prefix);
+        java.util.List<PlayerIdentity> out = new java.util.ArrayList<>();
+        for (Document d : players.find(Filters.regex("current_name_lower", anchored))
+                .sort(new Document("last_seen", -1))
+                .limit(q.limit())) {
+            out.add(mapIdentity(d));
+        }
+        return new Page<>(out, null);
     }
 
     private Page<SettingRecord> getSetting(Queries.GetSetting q) {

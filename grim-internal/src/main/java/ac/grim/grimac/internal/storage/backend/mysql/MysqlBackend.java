@@ -452,6 +452,7 @@ public final class MysqlBackend implements Backend {
             if (query instanceof Queries.ListViolationsInSession q) return (Page<R>) listViolationsInSession(c, q);
             if (query instanceof Queries.GetPlayerIdentity q) return (Page<R>) getPlayerIdentity(c, q);
             if (query instanceof Queries.GetPlayerIdentityByName q) return (Page<R>) getPlayerIdentityByName(c, q);
+            if (query instanceof Queries.ListPlayersByNamePrefix q) return (Page<R>) listPlayersByNamePrefix(c, q);
             if (query instanceof Queries.GetSetting q) return (Page<R>) getSetting(c, q);
             throw new BackendException("unsupported query: " + query.getClass().getSimpleName());
         } catch (SQLException e) {
@@ -556,6 +557,34 @@ public final class MysqlBackend implements Backend {
                 return Page.empty();
             }
         }
+    }
+
+    private Page<PlayerIdentity> listPlayersByNamePrefix(Connection c, Queries.ListPlayersByNamePrefix q) throws SQLException {
+        String prefix = q.lowerPrefix();
+        if (prefix == null || prefix.isEmpty() || q.limit() <= 0) return Page.empty();
+        String escaped = escapeLike(prefix);
+        try (PreparedStatement ps = c.prepareStatement(
+                "SELECT uuid, current_name, first_seen, last_seen FROM " + config.tableNames().players() + " "
+                        + "WHERE LOWER(current_name) LIKE ? ESCAPE '\\\\' "
+                        + "ORDER BY last_seen DESC LIMIT ?")) {
+            ps.setString(1, escaped + "%");
+            ps.setInt(2, q.limit());
+            try (ResultSet rs = ps.executeQuery()) {
+                java.util.List<PlayerIdentity> out = new java.util.ArrayList<>();
+                while (rs.next()) out.add(mapIdentity(rs));
+                return new Page<>(out, null);
+            }
+        }
+    }
+
+    private static String escapeLike(String s) {
+        StringBuilder out = new StringBuilder(s.length());
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (c == '\\' || c == '%' || c == '_') out.append('\\');
+            out.append(c);
+        }
+        return out.toString();
     }
 
     private Page<SettingRecord> getSetting(Connection c, Queries.GetSetting q) throws SQLException {
