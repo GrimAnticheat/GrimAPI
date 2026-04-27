@@ -9,8 +9,8 @@ version = rootProject.version
 description = "GrimAPI-Internal"
 
 java {
-    sourceCompatibility = JavaVersion.VERSION_1_8
-    targetCompatibility = JavaVersion.VERSION_1_8
+    sourceCompatibility = JavaVersion.VERSION_17
+    targetCompatibility = JavaVersion.VERSION_17
     withSourcesJar()
     withJavadocJar()
 }
@@ -22,9 +22,30 @@ dependencies {
     compileOnly(libs.lombok)
     annotationProcessor(libs.lombok)
 
+    // SQLite reference backend.
+    compileOnly(libs.sqliteJdbc)
+
+    // Optional plugin-side backends — compileOnly so the shaded plugin jar
+    // picks which drivers to bundle. Each backend's init() throws a clear
+    // error when its driver isn't on the runtime classpath.
+    compileOnly(libs.mysqlJdbc)
+    compileOnly(libs.postgresJdbc)
+    compileOnly(libs.mongoDriverSync)
+    compileOnly(libs.jedis)
+
+    // com.lmax.* ring-buffer writer path used by the datastore. Shaded +
+    // relocated in prod builds; version pinned to match Paper's bundled
+    // 3.4.4 so no-relocate debug builds don't double up on the classpath.
+    api(libs.disruptor)
+
     testImplementation(libs.annotations)
     testImplementation(libs.junitJupiter)
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
+    testImplementation(libs.sqliteJdbc)
+    testImplementation(libs.mysqlJdbc)
+    testImplementation(libs.postgresJdbc)
+    testImplementation(libs.mongoDriverSync)
+    testImplementation(libs.jedis)
 }
 
 tasks.withType<JavaCompile>().configureEach {

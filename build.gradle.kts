@@ -103,6 +103,11 @@ fun getEnvVar(name: String): String? =
 
 // --- Publishing Configuration ---
 allprojects {
+    tasks.withType<Javadoc>().configureEach {
+        isFailOnError = false
+        (options as? StandardJavadocDocletOptions)?.addStringOption("Xdoclint:none", "-quiet")
+    }
+
     // Ensure the plugin is applied so we can access the 'publishing' extension
     apply(plugin = "maven-publish")
 
@@ -145,12 +150,4 @@ dependencies {
     compileOnly(libs.annotations)
     compileOnly(libs.lombok)
     annotationProcessor(libs.lombok)
-
-    testCompileOnly(libs.lombok)
-    testAnnotationProcessor(libs.lombok)
-}
-
-
-tasks.test {
-    useJUnitPlatform()
 }

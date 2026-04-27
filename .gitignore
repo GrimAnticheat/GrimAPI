@@ -67,4 +67,5 @@ nb-configuration.xml
 ## OS X
 ##############################
 .DS_Store
+buildSrc/.kotlin/
 /workspace.gradle.kts
