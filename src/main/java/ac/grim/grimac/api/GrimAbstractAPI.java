@@ -1,6 +1,7 @@
 package ac.grim.grimac.api;
 
 import ac.grim.grimac.api.alerts.AlertManager;
+import ac.grim.grimac.api.command.CommandRegistry;
 import ac.grim.grimac.api.common.BasicReloadable;
 import ac.grim.grimac.api.config.ConfigManager;
 import ac.grim.grimac.api.config.ConfigReloadable;
@@ -131,5 +132,15 @@ public interface GrimAbstractAPI extends ConfigReloadable, BasicReloadable {
      * @throws IllegalArgumentException If the provided context is not a valid plugin, mod, or class known to the platform.
      */
     @NotNull GrimPlugin getGrimPlugin(@NotNull Object platformContext);
+
+    /**
+     * Retrieves the registry used to register {@link ac.grim.grimac.api.command.AbstractCommand}
+     * trees. Registrations are bound to the supplied {@link GrimPlugin} owner;
+     * the registry sweeps owner-bound commands when that plugin disables, the
+     * same lifecycle contract as {@link EventBus}.
+     *
+     * @return CommandRegistry
+     */
+    @NotNull CommandRegistry getCommandRegistry();
 
 }
