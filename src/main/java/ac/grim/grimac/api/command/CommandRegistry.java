@@ -1,5 +1,6 @@
 package ac.grim.grimac.api.command;
 
+import ac.grim.grimac.api.command.builder.GrimCommand;
 import ac.grim.grimac.api.plugin.GrimPlugin;
 import org.jetbrains.annotations.NotNull;
 
@@ -45,6 +46,14 @@ public interface CommandRegistry {
      *                               {@code /grim} subcommand
      */
     void registerUnderGrim(@NotNull GrimPlugin owner, @NotNull AbstractCommand command);
+
+    /**
+     * Registers a command built via the {@link GrimCommand#builder} facade.
+     * Use this for commands that need typed argument parsers, flags, or async
+     * handlers — the Cloud-shaped path. For hierarchy-style class-per-command
+     * authoring, use {@link #register(GrimPlugin, AbstractCommand)} instead.
+     */
+    void registerBuilt(@NotNull GrimPlugin owner, @NotNull GrimCommand.Built command);
 
     /**
      * Removes a single previously registered command. Normally not needed —
