@@ -36,6 +36,29 @@ public interface CommandSender {
 
     boolean isPlayer();
 
+    /**
+     * Categorical view of this sender, cross-platform. Default implementation
+     * derives from the existing {@link #isPlayer()} / {@link #isConsole()}
+     * checks; platform-specific senders should override to disambiguate
+     * {@link SenderKind#REMOTE_CONSOLE}, {@link SenderKind#COMMAND_BLOCK},
+     * {@link SenderKind#FUNCTION}, etc.
+     */
+    default @org.jetbrains.annotations.NotNull SenderKind getKind() {
+        if (isPlayer()) return SenderKind.PLAYER;
+        if (isConsole()) return SenderKind.CONSOLE;
+        return SenderKind.OTHER;
+    }
+
+    /** True iff this sender is RCON (a network-attached console). Default: derived from {@link #getKind()}. */
+    default boolean isRemoteConsole() {
+        return getKind() == SenderKind.REMOTE_CONSOLE;
+    }
+
+    /** True iff this sender is a command block in the world. Default: derived from {@link #getKind()}. */
+    default boolean isCommandBlock() {
+        return getKind() == SenderKind.COMMAND_BLOCK;
+    }
+
     default boolean isValid() {
         return true;
     }
