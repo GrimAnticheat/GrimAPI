@@ -1,6 +1,7 @@
 package ac.grim.grimac.internal.storage.backend.sqlite;
 
 import ac.grim.grimac.api.storage.config.TableNames;
+import ac.grim.grimac.internal.storage.checks.LegacyKeyRenames;
 import org.jetbrains.annotations.ApiStatus;
 
 import java.sql.Connection;
@@ -8,6 +9,7 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.util.Map;
 
 /**
  * Creates tables + indexes + the meta singleton row on first touch. Idempotent:
@@ -28,7 +30,7 @@ import java.sql.Statement;
 @ApiStatus.Internal
 public final class SqliteSchema {
 
-    public static final int CURRENT_VERSION = 2;
+    public static final int CURRENT_VERSION = 3;
 
     private SqliteSchema() {}
 
@@ -68,6 +70,7 @@ public final class SqliteSchema {
         // Forward migrations — additive only; each step is idempotent and
         // gated on its target version.
         if (existing < 2) migrateV1ToV2(c, t);
+        if (existing < 3) migrateV2ToV3(c, t);
 
         if (existing < CURRENT_VERSION) {
             try (PreparedStatement ps = c.prepareStatement(
@@ -88,6 +91,28 @@ public final class SqliteSchema {
     private static void migrateV1ToV2(Connection c, TableNames t) throws SQLException {
         try (Statement s = c.createStatement()) {
             s.executeUpdate("ALTER TABLE " + t.sessions() + " ADD COLUMN closed_at INTEGER");
+        }
+    }
+
+    /**
+     * v2 → v3: rewrite stable_keys for checks that were parked under
+     * {@code grim.legacy.*} into descriptive {@code grim.<category>.<name>}
+     * keys. Each row keeps its {@code check_id}; only {@code stable_key} moves,
+     * so {@link ac.grim.grimac.internal.storage.backend.sqlite.SqliteBackend
+     * grim_violations} rows still reference the same check correctly. The
+     * canonical map lives on {@link LegacyKeyRenames}; backend migrations on
+     * Mysql / Postgres / Mongo / Redis run the equivalent rewrite from the
+     * same source.
+     */
+    private static void migrateV2ToV3(Connection c, TableNames t) throws SQLException {
+        try (PreparedStatement ps = c.prepareStatement(
+                "UPDATE " + t.checks() + " SET stable_key = ? WHERE stable_key = ?")) {
+            for (Map.Entry<String, String> e : LegacyKeyRenames.OLD_TO_NEW.entrySet()) {
+                ps.setString(1, e.getValue());
+                ps.setString(2, e.getKey());
+                ps.addBatch();
+            }
+            ps.executeBatch();
         }
     }
 

@@ -1,6 +1,7 @@
 package ac.grim.grimac.internal.storage.backend.postgres;
 
 import ac.grim.grimac.api.storage.config.TableNames;
+import ac.grim.grimac.internal.storage.checks.LegacyKeyRenames;
 import org.jetbrains.annotations.ApiStatus;
 
 import java.sql.Connection;
@@ -8,6 +9,7 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.util.Map;
 
 /**
  * Postgres 14+ schema for the Postgres backend. Born at the v5 baseline — see
@@ -17,7 +19,7 @@ import java.sql.Statement;
 @ApiStatus.Internal
 public final class PostgresSchema {
 
-    public static final int CURRENT_VERSION = 6;
+    public static final int CURRENT_VERSION = 7;
 
     private PostgresSchema() {}
 
@@ -55,6 +57,7 @@ public final class PostgresSchema {
         }
 
         if (existing < 6) migrateV5ToV6(c, t);
+        if (existing < 7) migrateV6ToV7(c, t);
 
         if (existing < CURRENT_VERSION) {
             try (PreparedStatement ps = c.prepareStatement(
@@ -70,6 +73,19 @@ public final class PostgresSchema {
     private static void migrateV5ToV6(Connection c, TableNames t) throws SQLException {
         try (Statement s = c.createStatement()) {
             s.executeUpdate("ALTER TABLE " + quoteId(t.sessions()) + " ADD COLUMN closed_at BIGINT");
+        }
+    }
+
+    /** v6 → v7: rewrite {@code grim.legacy.*} stable_keys onto descriptive ones. See {@link LegacyKeyRenames}. */
+    private static void migrateV6ToV7(Connection c, TableNames t) throws SQLException {
+        try (PreparedStatement ps = c.prepareStatement(
+                "UPDATE " + quoteId(t.checks()) + " SET stable_key = ? WHERE stable_key = ?")) {
+            for (Map.Entry<String, String> e : LegacyKeyRenames.OLD_TO_NEW.entrySet()) {
+                ps.setString(1, e.getValue());
+                ps.setString(2, e.getKey());
+                ps.addBatch();
+            }
+            ps.executeBatch();
         }
     }
 

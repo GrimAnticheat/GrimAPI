@@ -1,6 +1,7 @@
 package ac.grim.grimac.internal.storage.backend.mysql;
 
 import ac.grim.grimac.api.storage.config.TableNames;
+import ac.grim.grimac.internal.storage.checks.LegacyKeyRenames;
 import org.jetbrains.annotations.ApiStatus;
 
 import java.sql.Connection;
@@ -8,6 +9,7 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.util.Map;
 
 /**
  * MySQL 8.x schema for the MySQL backend. New backends are born at the
@@ -19,7 +21,7 @@ import java.sql.Statement;
 @ApiStatus.Internal
 public final class MysqlSchema {
 
-    public static final int CURRENT_VERSION = 6;
+    public static final int CURRENT_VERSION = 7;
 
     private MysqlSchema() {}
 
@@ -63,6 +65,7 @@ public final class MysqlSchema {
 
         // Forward migrations — additive only.
         if (existing < 6) migrateV5ToV6(c, t);
+        if (existing < 7) migrateV6ToV7(c, t);
 
         if (existing < CURRENT_VERSION) {
             try (PreparedStatement ps = c.prepareStatement(
@@ -78,6 +81,19 @@ public final class MysqlSchema {
     private static void migrateV5ToV6(Connection c, TableNames t) throws SQLException {
         try (Statement s = c.createStatement()) {
             s.executeUpdate("ALTER TABLE " + t.sessions() + " ADD COLUMN closed_at BIGINT NULL");
+        }
+    }
+
+    /** v6 → v7: rewrite {@code grim.legacy.*} stable_keys onto descriptive ones. See {@link LegacyKeyRenames}. */
+    private static void migrateV6ToV7(Connection c, TableNames t) throws SQLException {
+        try (PreparedStatement ps = c.prepareStatement(
+                "UPDATE " + t.checks() + " SET stable_key = ? WHERE stable_key = ?")) {
+            for (Map.Entry<String, String> e : LegacyKeyRenames.OLD_TO_NEW.entrySet()) {
+                ps.setString(1, e.getValue());
+                ps.setString(2, e.getKey());
+                ps.addBatch();
+            }
+            ps.executeBatch();
         }
     }
 
