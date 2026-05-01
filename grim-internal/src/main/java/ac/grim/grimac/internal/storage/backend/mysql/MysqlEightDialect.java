@@ -7,80 +7,18 @@ import java.sql.SQLException;
 import java.sql.Statement;
 
 /**
- * MySQL 8.0+ dialect. Uses the functional index
- * ({@code INDEX … ((LOWER(current_name)))}) introduced in MySQL 8.0.13 and the
- * aliased-row upsert form ({@code … AS new ON DUPLICATE KEY UPDATE col = new.col})
- * introduced in MySQL 8.0.19.
+ * MySQL 8.0+ dialect. Inherits the v8 baseline DDL and read SQL from
+ * {@link MysqlDialect}; the only divergence from {@link MariaDbDialect} is
+ * the upsert syntax, which uses MySQL 8.0.19's aliased-row form
+ * ({@code … AS new ON DUPLICATE KEY UPDATE col = new.col}) to avoid the
+ * deprecated {@code VALUES()} reference.
  * <p>
- * The minimum effective MySQL version is therefore 8.0.19 — the
- * {@link MysqlBackend} version probe doesn't enforce that explicitly because
- * pre-8.0.19 MySQL is older than the connector-j we ship and effectively
- * extinct in production.
+ * The minimum effective MySQL version is 8.0.19 — pre-8.0.19 MySQL is older
+ * than the connector-j we ship and effectively extinct in production, so the
+ * version probe in {@link MysqlBackend} doesn't enforce that explicitly.
  */
 @ApiStatus.Internal
 final class MysqlEightDialect implements MysqlDialect {
-
-    @Override
-    public void applyBaseline(Statement s, TableNames t) throws SQLException {
-        s.executeUpdate("CREATE TABLE " + t.checks() + " ("
-                + "check_id INT AUTO_INCREMENT PRIMARY KEY, "
-                + "stable_key VARCHAR(255) NOT NULL UNIQUE, "
-                + "display VARCHAR(255), "
-                + "description VARCHAR(1024), "
-                + "introduced_version VARCHAR(64), "
-                + "removed_version VARCHAR(64), "
-                + "introduced_at BIGINT"
-                + ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
-
-        // Functional index — MySQL 8.0.13+. Lookups via WHERE LOWER(current_name)
-        // = ? are rewritten by the optimiser to use this index directly; no
-        // generated column needed.
-        s.executeUpdate("CREATE TABLE " + t.players() + " ("
-                + "uuid BINARY(16) PRIMARY KEY, "
-                + "current_name VARCHAR(32), "
-                + "first_seen BIGINT NOT NULL, "
-                + "last_seen BIGINT NOT NULL, "
-                + "INDEX idx_" + t.players() + "_name_lower ((LOWER(current_name)))"
-                + ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
-
-        s.executeUpdate("CREATE TABLE " + t.sessions() + " ("
-                + "session_id BINARY(16) PRIMARY KEY, "
-                + "player_uuid BINARY(16) NOT NULL, "
-                + "server_name VARCHAR(64), "
-                + "started_at BIGINT NOT NULL, "
-                + "last_activity BIGINT NOT NULL, "
-                + "closed_at BIGINT NULL, "
-                + "grim_version VARCHAR(64), "
-                + "client_brand VARCHAR(64), "
-                + "client_version_pvn INT NOT NULL DEFAULT -1, "
-                + "server_version VARCHAR(64), "
-                + "replay_clips_json MEDIUMTEXT, "
-                + "INDEX idx_" + t.sessions() + "_player_started (player_uuid, started_at DESC)"
-                + ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
-
-        s.executeUpdate("CREATE TABLE " + t.violations() + " ("
-                + "id BIGINT AUTO_INCREMENT PRIMARY KEY, "
-                + "session_id BINARY(16) NOT NULL, "
-                + "player_uuid BINARY(16) NOT NULL, "
-                + "check_id INT NOT NULL, "
-                + "vl DOUBLE NOT NULL, "
-                + "occurred_at BIGINT NOT NULL, "
-                + "verbose MEDIUMTEXT, "
-                + "verbose_format INT NOT NULL DEFAULT 0, "
-                + "metadata MEDIUMTEXT, "
-                + "INDEX idx_" + t.violations() + "_session_time (session_id, occurred_at), "
-                + "INDEX idx_" + t.violations() + "_player (player_uuid)"
-                + ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
-
-        s.executeUpdate("CREATE TABLE " + t.settings() + " ("
-                + "scope VARCHAR(16) NOT NULL, "
-                + "scope_key VARCHAR(128) NOT NULL, "
-                + "`key` VARCHAR(128) NOT NULL, "
-                + "value LONGBLOB NOT NULL, "
-                + "updated_at BIGINT NOT NULL, "
-                + "PRIMARY KEY (scope, scope_key, `key`)"
-                + ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
-    }
 
     @Override
     public String upsertSessions(TableNames t) {
@@ -119,16 +57,30 @@ final class MysqlEightDialect implements MysqlDialect {
                 + "updated_at = new.updated_at";
     }
 
+    /**
+     * v7 → v8 migration on MySQL: replace the functional-index shape with
+     * the gen col shape so {@code listPlayersByNamePrefix} actually uses
+     * an index. MySQL 8 doesn't support {@code ALGORITHM=INSTANT} or
+     * {@code INPLACE} for adding STORED generated columns — falls back to
+     * {@code ALGORITHM=COPY}, which rewrites the table and blocks writes
+     * for the duration. Acceptable on alpha-only v7 tables; for any
+     * future post-GA migration, an external online tool
+     * (gh-ost / pt-online-schema-change) would be the move.
+     * <p>
+     * The DROP+ADD INDEX is one ALTER so the table never has zero
+     * lower-case-name index between the two operations. ANALYZE TABLE
+     * is run last so the optimiser sees fresh stats on the new index.
+     */
     @Override
-    public String selectIdentityByName(TableNames t) {
-        return "SELECT uuid, current_name, first_seen, last_seen FROM " + t.players() + " "
-                + "WHERE LOWER(current_name) = ? ORDER BY last_seen DESC LIMIT 1";
-    }
-
-    @Override
-    public String selectIdentitiesByNamePrefix(TableNames t) {
-        return "SELECT uuid, current_name, first_seen, last_seen FROM " + t.players() + " "
-                + "WHERE LOWER(current_name) LIKE ? ESCAPE '\\\\' "
-                + "ORDER BY last_seen DESC LIMIT ?";
+    public void migrateV7ToV8(Statement s, TableNames t) throws SQLException {
+        s.executeUpdate("ALTER TABLE " + t.players()
+                + " ADD COLUMN current_name_lower VARCHAR(32) AS (LOWER(current_name)) STORED");
+        s.executeUpdate("ALTER TABLE " + t.players()
+                + " DROP INDEX idx_" + t.players() + "_name_lower"
+                + ", ADD INDEX idx_" + t.players() + "_name_lower (current_name_lower)");
+        // ANALYZE TABLE returns a one-row result set (Op/Msg_type/Msg_text)
+        // rather than an update count, so executeUpdate() rejects it. Use
+        // execute() and discard the resultset cursor.
+        s.execute("ANALYZE TABLE " + t.players());
     }
 }
