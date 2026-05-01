@@ -41,11 +41,12 @@ import java.util.Set;
 import java.util.UUID;
 
 /**
- * MySQL 8.x backend. Same ring/handler model as the SQLite reference backend —
- * each category's {@link StorageEventHandler} owns a dedicated write connection
- * in {@code autoCommit=false}, reads open a fresh connection per call. No
- * connection pool is bundled; operators who need one can front the JDBC URL
- * with a server-side proxy (ProxySQL) or drop in HikariCP alongside the plugin.
+ * MySQL-family backend. Same ring/handler model as the SQLite reference
+ * backend — each category's {@link StorageEventHandler} owns a dedicated write
+ * connection in {@code autoCommit=false}, reads open a fresh connection per
+ * call. No connection pool is bundled; operators who need one can front the
+ * JDBC URL with a server-side proxy (ProxySQL) or drop in HikariCP alongside
+ * the plugin.
  * <p>
  * Unsupported features gracefully throw {@link UnsupportedOperationException}
  * where the {@link Backend} contract allows it. The schema is the post-v5
@@ -53,6 +54,11 @@ import java.util.UUID;
  * {@code verbose_format} as INTEGER and a {@code metadata} column); there are
  * no pre-v5 MySQL databases to migrate from, so the linear applyVN pattern
  * used by SQLite isn't mirrored here.
+ * <p>
+ * Server flavor (genuine MySQL vs MariaDB) is detected at {@link #init} by
+ * probing {@code SELECT VERSION()}; the dialect that owns the flavor-specific
+ * SQL (functional index vs STORED generated column for {@code current_name},
+ * aliased-row vs legacy {@code VALUES()} upsert) is held in {@link #dialect}.
  */
 @ApiStatus.Internal
 public final class MysqlBackend implements Backend {
@@ -63,9 +69,13 @@ public final class MysqlBackend implements Backend {
     private final Object writeMutex = new Object();
     private final List<BatchingHandler<?>> handlers = new ArrayList<>();
     private final String insertViolations;
-    private final String upsertSessions;
-    private final String upsertIdentities;
-    private final String upsertSettings;
+    // Populated in init() once the dialect is selected from the live engine.
+    // The handlers and direct-write paths read these via final-field-after-init
+    // semantics — init() runs before eventHandlerFor() / writeXxx() is invoked.
+    private String upsertSessions;
+    private String upsertIdentities;
+    private String upsertSettings;
+    private MysqlDialect dialect;
     private Connection writeConn;
     // Cached at init() if minecraft-mysql-jdbc holder is present. When non-null,
     // every openConnection() call routes through the holder's child-first
@@ -76,39 +86,10 @@ public final class MysqlBackend implements Backend {
     public MysqlBackend(MysqlBackendConfig config) {
         this.config = config;
         TableNames t = config.tableNames();
-        // MySQL 8.0+ aliased-row upsert: `... AS new ON DUPLICATE KEY UPDATE col = new.col`.
-        // Avoids the deprecated VALUES(col) reference.
+        // Flavor-agnostic — plain INSERT, no ON DUPLICATE KEY clause.
         this.insertViolations =
                 "INSERT INTO " + t.violations() + "(session_id, player_uuid, check_id, vl, occurred_at, verbose, verbose_format) "
                         + "VALUES (?, ?, ?, ?, ?, ?, ?)";
-        this.upsertSessions =
-                "INSERT INTO " + t.sessions() + "(session_id, player_uuid, server_name, started_at, last_activity, closed_at, "
-                        + "grim_version, client_brand, client_version_pvn, server_version, replay_clips_json) "
-                        + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) AS new "
-                        + "ON DUPLICATE KEY UPDATE "
-                        + "server_name=new.server_name, "
-                        + "last_activity=new.last_activity, "
-                        // closed_at: NULL → set transitions only; never overwrite an
-                        // already-closed row with NULL on a late heartbeat.
-                        + "closed_at=COALESCE(" + t.sessions() + ".closed_at, new.closed_at), "
-                        + "grim_version=new.grim_version, "
-                        + "client_brand=new.client_brand, "
-                        + "client_version_pvn=new.client_version_pvn, "
-                        + "server_version=new.server_version, "
-                        + "replay_clips_json=new.replay_clips_json";
-        this.upsertIdentities =
-                "INSERT INTO " + t.players() + "(uuid, current_name, first_seen, last_seen) "
-                        + "VALUES (?, ?, ?, ?) AS new "
-                        + "ON DUPLICATE KEY UPDATE "
-                        + "current_name = new.current_name, "
-                        + "first_seen = LEAST(" + t.players() + ".first_seen, new.first_seen), "
-                        + "last_seen = GREATEST(" + t.players() + ".last_seen, new.last_seen)";
-        this.upsertSettings =
-                "INSERT INTO " + t.settings() + "(scope, scope_key, `key`, value, updated_at) "
-                        + "VALUES (?, ?, ?, ?, ?) AS new "
-                        + "ON DUPLICATE KEY UPDATE "
-                        + "value = new.value, "
-                        + "updated_at = new.updated_at";
     }
 
     @Override public @NotNull String id() { return ID; }
@@ -152,11 +133,74 @@ public final class MysqlBackend implements Backend {
         synchronized (writeMutex) {
             try {
                 this.writeConn = openConnection();
-                MysqlSchema.ensureInitialized(writeConn, "phase1", config.tableNames());
+                this.dialect = selectDialect(writeConn, ctx.logger());
+                TableNames t = config.tableNames();
+                this.upsertSessions = dialect.upsertSessions(t);
+                this.upsertIdentities = dialect.upsertIdentities(t);
+                this.upsertSettings = dialect.upsertSettings(t);
+                MysqlSchema.ensureInitialized(writeConn, "phase1", t, dialect);
+            } catch (BackendException be) {
+                throw be;
             } catch (SQLException e) {
                 throw new BackendException("failed to initialise MySQL backend", e);
             }
         }
+    }
+
+    /**
+     * Probe {@code SELECT VERSION()} and pick the matching dialect. MariaDB
+     * 10.6+ goes through {@link MariaDbDialect}; everything else routes through
+     * {@link MysqlEightDialect}. MariaDB older than 10.6 is rejected — the
+     * STORED-generated-column DDL needs 10.2.1+ at the absolute minimum, and
+     * 10.6 is the oldest LTS still in upstream support.
+     * <p>
+     * Mirrors {@link ac.grim.grimac.internal.storage.backend.sqlite.SqliteBackend}'s
+     * dialect-selector pattern; see that class for the fuller rationale on
+     * version-driven dialect splits over compile-time forks.
+     */
+    static MysqlDialect selectDialect(Connection c, java.util.logging.Logger log) throws SQLException, BackendException {
+        String version;
+        try (java.sql.Statement s = c.createStatement();
+             java.sql.ResultSet rs = s.executeQuery("SELECT VERSION()")) {
+            version = rs.next() ? rs.getString(1) : "";
+        }
+        boolean mariaDb = version.contains("MariaDB");
+        if (!mariaDb) {
+            log.info("[grim-datastore] MySQL engine " + version + " — using MySQL 8 dialect");
+            return new MysqlEightDialect();
+        }
+        // MariaDB version strings:
+        //   "10.11.16-MariaDB-ubu2204"           — modern
+        //   "5.5.5-10.11.16-MariaDB-…"           — legacy compat prefix the
+        //                                          server prepends to fool old
+        //                                          MySQL client libs (see
+        //                                          MDEV-9788). Strip it.
+        String triplePart = version.startsWith("5.5.5-") ? version.substring("5.5.5-".length()) : version;
+        int dash = triplePart.indexOf('-');
+        if (dash > 0) triplePart = triplePart.substring(0, dash);
+        int[] triple = parseTriple(triplePart);
+        int major = triple[0], minor = triple[1];
+        if (major < 10 || (major == 10 && minor < 6)) {
+            throw new BackendException("MariaDB " + version + " is too old; minimum supported is 10.6 "
+                    + "(STORED generated columns require 10.2.1, 10.6 is the oldest LTS still in upstream support). "
+                    + "Upgrade MariaDB or point Grim at a different storage backend.");
+        }
+        log.info("[grim-datastore] MariaDB engine " + version + " — using MariaDB dialect");
+        return new MariaDbDialect();
+    }
+
+    private static int[] parseTriple(String version) {
+        int[] triple = {0, 0, 0};
+        int idx = 0, i = 0;
+        while (i < version.length() && idx < 3) {
+            int start = i;
+            while (i < version.length() && Character.isDigit(version.charAt(i))) i++;
+            if (i == start) break;
+            triple[idx++] = Integer.parseInt(version.substring(start, i));
+            if (i < version.length() && version.charAt(i) == '.') i++;
+            else break;
+        }
+        return triple;
     }
 
     /**
@@ -555,9 +599,7 @@ public final class MysqlBackend implements Backend {
     }
 
     private Page<PlayerIdentity> getPlayerIdentityByName(Connection c, Queries.GetPlayerIdentityByName q) throws SQLException {
-        try (PreparedStatement ps = c.prepareStatement(
-                "SELECT uuid, current_name, first_seen, last_seen FROM " + config.tableNames().players() + " "
-                        + "WHERE LOWER(current_name) = ? ORDER BY last_seen DESC LIMIT 1")) {
+        try (PreparedStatement ps = c.prepareStatement(dialect.selectIdentityByName(config.tableNames()))) {
             ps.setString(1, q.name().toLowerCase(Locale.ROOT));
             try (ResultSet rs = ps.executeQuery()) {
                 if (rs.next()) return new Page<>(List.of(mapIdentity(rs)), null);
@@ -570,10 +612,7 @@ public final class MysqlBackend implements Backend {
         String prefix = q.lowerPrefix();
         if (prefix == null || prefix.isEmpty() || q.limit() <= 0) return Page.empty();
         String escaped = escapeLike(prefix);
-        try (PreparedStatement ps = c.prepareStatement(
-                "SELECT uuid, current_name, first_seen, last_seen FROM " + config.tableNames().players() + " "
-                        + "WHERE LOWER(current_name) LIKE ? ESCAPE '\\\\' "
-                        + "ORDER BY last_seen DESC LIMIT ?")) {
+        try (PreparedStatement ps = c.prepareStatement(dialect.selectIdentitiesByNamePrefix(config.tableNames()))) {
             ps.setString(1, escaped + "%");
             ps.setInt(2, q.limit());
             try (ResultSet rs = ps.executeQuery()) {
@@ -813,5 +852,11 @@ public final class MysqlBackend implements Backend {
     @ApiStatus.Internal
     public TableNames tableNames() {
         return config.tableNames();
+    }
+
+    /** Test-only accessor for asserting the version probe picked the right dialect. */
+    @ApiStatus.Internal
+    MysqlDialect dialectForTest() {
+        return dialect;
     }
 }
