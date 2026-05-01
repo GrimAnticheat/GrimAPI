@@ -133,16 +133,74 @@ public final class MysqlBackend implements Backend {
         synchronized (writeMutex) {
             try {
                 this.writeConn = openConnection();
-                this.dialect = new MysqlEightDialect();
+                this.dialect = selectDialect(writeConn, ctx.logger());
                 TableNames t = config.tableNames();
                 this.upsertSessions = dialect.upsertSessions(t);
                 this.upsertIdentities = dialect.upsertIdentities(t);
                 this.upsertSettings = dialect.upsertSettings(t);
                 MysqlSchema.ensureInitialized(writeConn, "phase1", t, dialect);
+            } catch (BackendException be) {
+                throw be;
             } catch (SQLException e) {
                 throw new BackendException("failed to initialise MySQL backend", e);
             }
         }
+    }
+
+    /**
+     * Probe {@code SELECT VERSION()} and pick the matching dialect. MariaDB
+     * 10.6+ goes through {@link MariaDbDialect}; everything else routes through
+     * {@link MysqlEightDialect}. MariaDB older than 10.6 is rejected — the
+     * STORED-generated-column DDL needs 10.2.1+ at the absolute minimum, and
+     * 10.6 is the oldest LTS still in upstream support.
+     * <p>
+     * Mirrors {@link ac.grim.grimac.internal.storage.backend.sqlite.SqliteBackend}'s
+     * dialect-selector pattern; see that class for the fuller rationale on
+     * version-driven dialect splits over compile-time forks.
+     */
+    static MysqlDialect selectDialect(Connection c, java.util.logging.Logger log) throws SQLException, BackendException {
+        String version;
+        try (java.sql.Statement s = c.createStatement();
+             java.sql.ResultSet rs = s.executeQuery("SELECT VERSION()")) {
+            version = rs.next() ? rs.getString(1) : "";
+        }
+        boolean mariaDb = version.contains("MariaDB");
+        if (!mariaDb) {
+            log.info("[grim-datastore] MySQL engine " + version + " — using MySQL 8 dialect");
+            return new MysqlEightDialect();
+        }
+        // MariaDB version strings:
+        //   "10.11.16-MariaDB-ubu2204"           — modern
+        //   "5.5.5-10.11.16-MariaDB-…"           — legacy compat prefix the
+        //                                          server prepends to fool old
+        //                                          MySQL client libs (see
+        //                                          MDEV-9788). Strip it.
+        String triplePart = version.startsWith("5.5.5-") ? version.substring("5.5.5-".length()) : version;
+        int dash = triplePart.indexOf('-');
+        if (dash > 0) triplePart = triplePart.substring(0, dash);
+        int[] triple = parseTriple(triplePart);
+        int major = triple[0], minor = triple[1];
+        if (major < 10 || (major == 10 && minor < 6)) {
+            throw new BackendException("MariaDB " + version + " is too old; minimum supported is 10.6 "
+                    + "(STORED generated columns require 10.2.1, 10.6 is the oldest LTS still in upstream support). "
+                    + "Upgrade MariaDB or point Grim at a different storage backend.");
+        }
+        log.info("[grim-datastore] MariaDB engine " + version + " — using MariaDB dialect");
+        return new MariaDbDialect();
+    }
+
+    private static int[] parseTriple(String version) {
+        int[] triple = {0, 0, 0};
+        int idx = 0, i = 0;
+        while (i < version.length() && idx < 3) {
+            int start = i;
+            while (i < version.length() && Character.isDigit(version.charAt(i))) i++;
+            if (i == start) break;
+            triple[idx++] = Integer.parseInt(version.substring(start, i));
+            if (i < version.length() && version.charAt(i) == '.') i++;
+            else break;
+        }
+        return triple;
     }
 
     /**
@@ -794,5 +852,11 @@ public final class MysqlBackend implements Backend {
     @ApiStatus.Internal
     public TableNames tableNames() {
         return config.tableNames();
+    }
+
+    /** Test-only accessor for asserting the version probe picked the right dialect. */
+    @ApiStatus.Internal
+    MysqlDialect dialectForTest() {
+        return dialect;
     }
 }
