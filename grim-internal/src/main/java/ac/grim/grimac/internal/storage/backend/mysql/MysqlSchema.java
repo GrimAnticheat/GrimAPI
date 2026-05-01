@@ -12,11 +12,17 @@ import java.sql.Statement;
 import java.util.Map;
 
 /**
- * MySQL 8.x schema for the MySQL backend. New backends are born at the
+ * MySQL-family schema for the MySQL backend. New backends are born at the
  * {@link #CURRENT_VERSION} baseline (the shape SQLite reached at v5) rather
  * than replaying each migration — there are no pre-v5 MySQL databases to
  * upgrade from, so the linear applyVN pattern used by SQLite is overkill
  * here. Future bumps will add applyVN methods as normal.
+ * <p>
+ * The v0 baseline DDL is delegated to the {@link MysqlDialect} the
+ * {@link MysqlBackend} probed at init — only the players table differs
+ * between MySQL 8 (functional index) and MariaDB 10.6+ (STORED generated
+ * column + plain index). Forward migrations are flavor-agnostic and stay
+ * inline here.
  */
 @ApiStatus.Internal
 public final class MysqlSchema {
@@ -25,7 +31,7 @@ public final class MysqlSchema {
 
     private MysqlSchema() {}
 
-    public static void ensureInitialized(Connection c, String grimCoreVersion, TableNames t) throws SQLException {
+    public static void ensureInitialized(Connection c, String grimCoreVersion, TableNames t, MysqlDialect dialect) throws SQLException {
         try (Statement s = c.createStatement()) {
             // MySQL check-constraint names are schema-global (not table-scoped),
             // so the name must be unique per meta table in the DB — otherwise two
@@ -43,7 +49,7 @@ public final class MysqlSchema {
 
         int existing = readSchemaVersion(c, t);
         if (existing < 0) {
-            applyBaseline(c, t);
+            applyBaseline(c, t, dialect);
             long now = System.currentTimeMillis();
             try (PreparedStatement ps = c.prepareStatement(
                     "INSERT INTO " + t.meta() + "(id, schema_version, grim_core_version, initialized_at, last_migration_at) "
@@ -110,63 +116,9 @@ public final class MysqlSchema {
         }
     }
 
-    private static void applyBaseline(Connection c, TableNames t) throws SQLException {
+    private static void applyBaseline(Connection c, TableNames t, MysqlDialect dialect) throws SQLException {
         try (Statement s = c.createStatement()) {
-            s.executeUpdate("CREATE TABLE " + t.checks() + " ("
-                    + "check_id INT AUTO_INCREMENT PRIMARY KEY, "
-                    + "stable_key VARCHAR(255) NOT NULL UNIQUE, "
-                    + "display VARCHAR(255), "
-                    + "description VARCHAR(1024), "
-                    + "introduced_version VARCHAR(64), "
-                    + "removed_version VARCHAR(64), "
-                    + "introduced_at BIGINT"
-                    + ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
-
-            s.executeUpdate("CREATE TABLE " + t.players() + " ("
-                    + "uuid BINARY(16) PRIMARY KEY, "
-                    + "current_name VARCHAR(32), "
-                    + "first_seen BIGINT NOT NULL, "
-                    + "last_seen BIGINT NOT NULL, "
-                    + "INDEX idx_" + t.players() + "_name_lower ((LOWER(current_name)))"
-                    + ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
-
-            s.executeUpdate("CREATE TABLE " + t.sessions() + " ("
-                    + "session_id BINARY(16) PRIMARY KEY, "
-                    + "player_uuid BINARY(16) NOT NULL, "
-                    + "server_name VARCHAR(64), "
-                    + "started_at BIGINT NOT NULL, "
-                    + "last_activity BIGINT NOT NULL, "
-                    + "closed_at BIGINT NULL, "
-                    + "grim_version VARCHAR(64), "
-                    + "client_brand VARCHAR(64), "
-                    + "client_version_pvn INT NOT NULL DEFAULT -1, "
-                    + "server_version VARCHAR(64), "
-                    + "replay_clips_json MEDIUMTEXT, "
-                    + "INDEX idx_" + t.sessions() + "_player_started (player_uuid, started_at DESC)"
-                    + ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
-
-            s.executeUpdate("CREATE TABLE " + t.violations() + " ("
-                    + "id BIGINT AUTO_INCREMENT PRIMARY KEY, "
-                    + "session_id BINARY(16) NOT NULL, "
-                    + "player_uuid BINARY(16) NOT NULL, "
-                    + "check_id INT NOT NULL, "
-                    + "vl DOUBLE NOT NULL, "
-                    + "occurred_at BIGINT NOT NULL, "
-                    + "verbose MEDIUMTEXT, "
-                    + "verbose_format INT NOT NULL DEFAULT 0, "
-                    + "metadata MEDIUMTEXT, "
-                    + "INDEX idx_" + t.violations() + "_session_time (session_id, occurred_at), "
-                    + "INDEX idx_" + t.violations() + "_player (player_uuid)"
-                    + ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
-
-            s.executeUpdate("CREATE TABLE " + t.settings() + " ("
-                    + "scope VARCHAR(16) NOT NULL, "
-                    + "scope_key VARCHAR(128) NOT NULL, "
-                    + "`key` VARCHAR(128) NOT NULL, "
-                    + "value LONGBLOB NOT NULL, "
-                    + "updated_at BIGINT NOT NULL, "
-                    + "PRIMARY KEY (scope, scope_key, `key`)"
-                    + ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+            dialect.applyBaseline(s, t);
         }
     }
 }
