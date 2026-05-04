@@ -105,6 +105,34 @@ bus.get(FlagEvent.class)
    .onFlag(grim, (u, c, v, cancelled) -> true, /*priority*/ 10, /*ignoreCancelled*/ false);
 ```
 
+`api.getGrimPlugin(...)` is the modern replacement for examples that manually
+created `BasicGrimPlugin`. Pass the native owner object from your platform and
+let Grim construct the wrapper. Supported contexts include Bukkit/Paper
+`JavaPlugin` / `Plugin`, Fabric `ModInitializer`, Fabric `ModContainer`, a
+Fabric mod id string, or a `Class<?>` from your plugin/mod.
+
+For cross-platform plugins, keep the Grim registration code in a shared class
+and call it from each platform bootstrap:
+
+```java
+public final class GrimHooks {
+    public static void register(Object platformOwner) {
+        GrimAbstractAPI api = GrimAPIProvider.get();
+        GrimPlugin grim = api.getGrimPlugin(platformOwner);
+        EventBus bus = api.getEventBus();
+
+        bus.get(FlagEvent.class).onFlag(grim, (user, check, verbose, cancelled) -> {
+            grim.getLogger().info(user.getName() + " flagged " + check.getCheckName());
+            return cancelled;
+        });
+    }
+}
+```
+
+`BasicGrimPlugin` remains available for unusual integrations without a native
+platform owner, but it should not be used in ordinary Bukkit, Paper, Fabric, or
+cross-platform plugin setup.
+
 If you really don't want to hold a `GrimPlugin` reference, every `onX(...)`
 has a `@Deprecated` `onX(Object pluginContext, Handler, …)` overload that
 resolves the context through the bus's plugin resolver:
