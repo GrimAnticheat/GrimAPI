@@ -105,6 +105,7 @@ public final class RingRegistry {
     private static <E> E resetIfKnown(E event) {
         if (event instanceof ac.grim.grimac.api.storage.event.ViolationEvent v) { v.reset(); return (E) v; }
         if (event instanceof ac.grim.grimac.api.storage.event.SessionEvent s) { s.reset(); return (E) s; }
+        if (event instanceof ac.grim.grimac.api.storage.event.BlobEvent b) { b.reset(); return (E) b; }
         if (event instanceof ac.grim.grimac.api.storage.event.PlayerIdentityEvent p) { p.reset(); return (E) p; }
         if (event instanceof ac.grim.grimac.api.storage.event.SettingEvent s) { s.reset(); return (E) s; }
         return event;

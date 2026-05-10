@@ -454,7 +454,7 @@ public final class SqliteBackend implements Backend {
                     s.startedEpochMs(), s.lastActivityEpochMs(), s.closedAtEpochMs(),
                     s.grimVersion(), s.clientBrand(), s.clientVersion(),
                     s.serverVersionString(),
-                    s.replayClips().isEmpty() ? "[]" : serializeReplayClipsShim());
+                    s.sessionBlobs().isEmpty() ? "[]" : serializeSessionBlobsShim());
         }
 
         @Override
@@ -512,10 +512,10 @@ public final class SqliteBackend implements Backend {
         }
     }
 
-    private static String serializeReplayClipsShim() {
+    private static String serializeSessionBlobsShim() {
         throw new UnsupportedOperationException(
-                "replay-clip serialisation isn't implemented by this backend; "
-                        + "sessions with non-empty replayClips cannot be stored");
+                "session-blob serialisation isn't implemented by this backend; "
+                        + "sessions with non-empty sessionBlobs cannot be stored");
     }
 
     // --- migration / bulk-load path (bypasses rings, shared writeConn) ------
@@ -576,7 +576,7 @@ public final class SqliteBackend implements Backend {
                         s.startedEpochMs(), s.lastActivityEpochMs(), s.closedAtEpochMs(),
                         s.grimVersion(), s.clientBrand(), s.clientVersion(),
                         s.serverVersionString(),
-                        s.replayClips().isEmpty() ? "[]" : serializeReplayClipsShim());
+                        s.sessionBlobs().isEmpty() ? "[]" : serializeSessionBlobsShim());
             }
             u.executeBatch();
         }

@@ -25,7 +25,7 @@ public interface SessionUpserter extends AutoCloseable {
                   String clientBrand,
                   int clientVersionPvn,
                   String serverVersionString,
-                  String replayClipsJson) throws SQLException;
+                  String sessionBlobsJson) throws SQLException;
 
     void executeBatch() throws SQLException;
 

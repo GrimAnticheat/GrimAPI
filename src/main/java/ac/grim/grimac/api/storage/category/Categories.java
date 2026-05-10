@@ -1,11 +1,12 @@
 package ac.grim.grimac.api.storage.category;
 
+import ac.grim.grimac.api.storage.event.BlobEvent;
 import ac.grim.grimac.api.storage.event.PlayerIdentityEvent;
 import ac.grim.grimac.api.storage.event.SessionEvent;
 import ac.grim.grimac.api.storage.event.SettingEvent;
 import ac.grim.grimac.api.storage.event.ViolationEvent;
-import ac.grim.grimac.api.storage.model.BlobRef;
 import ac.grim.grimac.api.storage.model.PlayerIdentity;
+import ac.grim.grimac.api.storage.model.SessionBlobRecord;
 import ac.grim.grimac.api.storage.model.SessionRecord;
 import ac.grim.grimac.api.storage.model.SettingRecord;
 import ac.grim.grimac.api.storage.model.ViolationRecord;
@@ -51,16 +52,15 @@ public final class Categories {
             AccessPattern.INDEXED_KV);
 
     /**
-     * Blob category. Declared on the surface for shape-consistency with the
-     * other categories, but no producer currently publishes to it and the
-     * event factory refuses to construct slots — a future recorder feature
-     * will hook it up.
+     * Session-attached blob metadata. Blob bytes themselves live in the
+     * configured {@code BlobStore}; this category only stores the small
+     * session/player/timeline attachment record.
      */
-    public static final Category<BlobRef> BLOB = new Builtin<>(
+    public static final Category<BlobEvent> BLOB = new Builtin<>(
             "blob",
-            BlobRef.class,
-            () -> { throw new UnsupportedOperationException("BLOB category has no event factory"); },
-            BlobRef.class,
+            BlobEvent.class,
+            BlobEvent::new,
+            SessionBlobRecord.class,
             EnumSet.of(Capability.BLOB),
             AccessPattern.BLOB_REF);
 

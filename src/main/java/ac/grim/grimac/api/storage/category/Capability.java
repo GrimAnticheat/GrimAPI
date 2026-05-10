@@ -14,5 +14,6 @@ public enum Capability {
     HISTORY,
     SETTINGS,
     REPLAY,
-    PLAYER_IDENTITY
+    PLAYER_IDENTITY,
+    EXTENSION_STORAGE
 }

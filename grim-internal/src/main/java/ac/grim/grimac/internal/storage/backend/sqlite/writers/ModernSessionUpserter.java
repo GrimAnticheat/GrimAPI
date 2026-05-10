@@ -44,7 +44,7 @@ final class ModernSessionUpserter implements SessionUpserter {
                          String clientBrand,
                          int clientVersionPvn,
                          String serverVersionString,
-                         String replayClipsJson) throws SQLException {
+                         String sessionBlobsJson) throws SQLException {
         upsert.setBytes(1, UuidCodec.toBytes(sessionId));
         upsert.setBytes(2, UuidCodec.toBytes(playerUuid));
         upsert.setString(3, serverName);
@@ -56,7 +56,7 @@ final class ModernSessionUpserter implements SessionUpserter {
         upsert.setString(8, clientBrand);
         upsert.setInt(9, clientVersionPvn);
         upsert.setString(10, serverVersionString);
-        upsert.setString(11, replayClipsJson);
+        upsert.setString(11, sessionBlobsJson);
         upsert.addBatch();
     }
 

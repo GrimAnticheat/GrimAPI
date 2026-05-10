@@ -162,7 +162,7 @@ public final class InMemoryBackend implements Backend {
                     e.startedEpochMs(), e.lastActivityEpochMs(),
                     closedAt,
                     e.grimVersion(), e.clientBrand(), e.clientVersion(),
-                    e.serverVersionString(), List.copyOf(e.replayClips()));
+                    e.serverVersionString(), List.copyOf(e.sessionBlobs()));
             sessions.put(s.sessionId(), s);
             if (prev != null) {
                 List<SessionRecord> existing = sessionsByPlayer.get(prev.playerUuid());
@@ -399,7 +399,7 @@ public final class InMemoryBackend implements Backend {
                         s.startedEpochMs(), s.lastActivityEpochMs(),
                         s.lastActivityEpochMs(),
                         s.grimVersion(), s.clientBrand(), s.clientVersion(),
-                        s.serverVersionString(), s.replayClips());
+                        s.serverVersionString(), s.sessionBlobs());
                 e.setValue(swept);
                 java.util.List<SessionRecord> byPlayer = sessionsByPlayer.get(s.playerUuid());
                 if (byPlayer != null) {

@@ -1,6 +1,6 @@
 package ac.grim.grimac.api.storage.event;
 
-import ac.grim.grimac.api.storage.model.ReplayClip;
+import ac.grim.grimac.api.storage.model.SessionBlobRecord;
 import ac.grim.grimac.api.storage.model.SessionRecord;
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
@@ -22,10 +22,9 @@ import java.util.UUID;
  * no PacketEvents dependency; renderers resolve back to display names via PE
  * at the point where chat components are built.
  * <p>
- * {@code replayClips} is an internally mutable list held on the event. It is
- * cleared on {@link #reset()}; producers append via {@link #addReplayClip(ReplayClip)}
- * or {@link #replaceReplayClips(List)}. The current built-in SQLite backend
- * does not persist non-empty clip lists — a future recorder feature will.
+ * {@code sessionBlobs} is an internally mutable list held on the event. It is
+ * cleared on {@link #reset()}; producers append via {@link #addSessionBlob(SessionBlobRecord)}
+ * or {@link #replaceSessionBlobs(List)}.
  */
 @ApiStatus.Experimental
 public final class SessionEvent {
@@ -40,7 +39,7 @@ public final class SessionEvent {
     private @Nullable String clientBrand;
     private int clientVersion = -1;
     private @Nullable String serverVersionString;
-    private final List<ReplayClip> replayClips = new ArrayList<>();
+    private final List<SessionBlobRecord> sessionBlobs = new ArrayList<>();
 
     public @NotNull UUID sessionId() { return sessionId; }
     public @NotNull SessionEvent sessionId(@NotNull UUID v) { this.sessionId = v; return this; }
@@ -81,16 +80,16 @@ public final class SessionEvent {
     public @Nullable String serverVersionString() { return serverVersionString; }
     public @NotNull SessionEvent serverVersionString(@Nullable String v) { this.serverVersionString = v; return this; }
 
-    public @NotNull List<ReplayClip> replayClips() { return replayClips; }
+    public @NotNull List<SessionBlobRecord> sessionBlobs() { return sessionBlobs; }
 
-    public @NotNull SessionEvent addReplayClip(@NotNull ReplayClip clip) {
-        replayClips.add(clip);
+    public @NotNull SessionEvent addSessionBlob(@NotNull SessionBlobRecord blob) {
+        sessionBlobs.add(blob);
         return this;
     }
 
-    public @NotNull SessionEvent replaceReplayClips(@Nullable List<ReplayClip> clips) {
-        replayClips.clear();
-        if (clips != null) replayClips.addAll(clips);
+    public @NotNull SessionEvent replaceSessionBlobs(@Nullable List<SessionBlobRecord> blobs) {
+        sessionBlobs.clear();
+        if (blobs != null) sessionBlobs.addAll(blobs);
         return this;
     }
 
@@ -105,6 +104,6 @@ public final class SessionEvent {
         clientBrand = null;
         clientVersion = -1;
         serverVersionString = null;
-        replayClips.clear();
+        sessionBlobs.clear();
     }
 }

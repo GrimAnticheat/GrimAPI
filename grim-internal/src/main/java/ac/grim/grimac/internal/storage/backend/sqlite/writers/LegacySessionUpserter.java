@@ -51,7 +51,7 @@ final class LegacySessionUpserter implements SessionUpserter {
                          String clientBrand,
                          int clientVersionPvn,
                          String serverVersionString,
-                         String replayClipsJson) throws SQLException {
+                         String sessionBlobsJson) throws SQLException {
         byte[] sessionIdBytes = UuidCodec.toBytes(sessionId);
 
         insertIgnore.setBytes(1, sessionIdBytes);
@@ -65,7 +65,7 @@ final class LegacySessionUpserter implements SessionUpserter {
         insertIgnore.setString(8, clientBrand);
         insertIgnore.setInt(9, clientVersionPvn);
         insertIgnore.setString(10, serverVersionString);
-        insertIgnore.setString(11, replayClipsJson);
+        insertIgnore.setString(11, sessionBlobsJson);
         insertIgnore.addBatch();
 
         update.setString(1, serverName);
@@ -76,7 +76,7 @@ final class LegacySessionUpserter implements SessionUpserter {
         update.setString(5, clientBrand);
         update.setInt(6, clientVersionPvn);
         update.setString(7, serverVersionString);
-        update.setString(8, replayClipsJson);
+        update.setString(8, sessionBlobsJson);
         update.setBytes(9, sessionIdBytes);
         update.addBatch();
     }

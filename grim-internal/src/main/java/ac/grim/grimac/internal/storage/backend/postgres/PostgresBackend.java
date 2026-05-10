@@ -273,7 +273,7 @@ public final class PostgresBackend implements Backend {
             ps.setString(8, s.clientBrand());
             ps.setInt(9, s.clientVersion());
             ps.setString(10, s.serverVersionString());
-            ps.setString(11, s.replayClips().isEmpty() ? "[]" : serializeReplayClipsShim());
+            ps.setString(11, s.sessionBlobs().isEmpty() ? "[]" : serializeSessionBlobsShim());
         }
     }
 
@@ -302,10 +302,10 @@ public final class PostgresBackend implements Backend {
         }
     }
 
-    private static String serializeReplayClipsShim() {
+    private static String serializeSessionBlobsShim() {
         throw new UnsupportedOperationException(
-                "replay-clip serialisation isn't implemented by this backend; "
-                        + "sessions with non-empty replayClips cannot be stored");
+                "session-blob serialisation isn't implemented by this backend; "
+                        + "sessions with non-empty sessionBlobs cannot be stored");
     }
 
     @Override
@@ -360,7 +360,7 @@ public final class PostgresBackend implements Backend {
                 ps.setString(8, s.clientBrand());
                 ps.setInt(9, s.clientVersion());
                 ps.setString(10, s.serverVersionString());
-                ps.setString(11, s.replayClips().isEmpty() ? "[]" : serializeReplayClipsShim());
+                ps.setString(11, s.sessionBlobs().isEmpty() ? "[]" : serializeSessionBlobsShim());
                 ps.addBatch();
             }
             ps.executeBatch();

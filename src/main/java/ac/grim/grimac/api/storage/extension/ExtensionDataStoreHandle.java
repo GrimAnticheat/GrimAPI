@@ -38,6 +38,17 @@ public interface ExtensionDataStoreHandle {
             @NotNull AccessPattern ap,
             @NotNull EnumSet<Capability> required);
 
+    /**
+     * Declare a built-in binary extension category. This is the zero-reflection
+     * path supported by Grim's bundled backends: extensions encode their own
+     * value bytes and Grim handles ring publication, batching, retention, and
+     * scoped queries.
+     */
+    @NotNull Category<ExtensionStorageEvent> declareBinaryCategory(
+            @NotNull String localId,
+            @NotNull AccessPattern ap,
+            @NotNull EnumSet<Capability> required);
+
     <E> void submit(@NotNull Category<E> cat, @NotNull Consumer<E> configurer);
 
     @NotNull <R> CompletionStage<Page<R>> query(@NotNull Category<?> cat, @NotNull Query<R> q);

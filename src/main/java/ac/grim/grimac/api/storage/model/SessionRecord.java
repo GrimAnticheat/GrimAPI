@@ -34,11 +34,11 @@ public record SessionRecord(
         String clientBrand,
         int clientVersion,
         String serverVersionString,
-        List<ReplayClip> replayClips) {
+        List<SessionBlobRecord> sessionBlobs) {
 
     public SessionRecord {
         if (sessionId == null) throw new IllegalArgumentException("sessionId");
         if (playerUuid == null) throw new IllegalArgumentException("playerUuid");
-        replayClips = replayClips == null ? List.of() : List.copyOf(replayClips);
+        sessionBlobs = sessionBlobs == null ? List.of() : List.copyOf(sessionBlobs);
     }
 }

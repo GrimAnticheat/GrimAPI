@@ -269,10 +269,10 @@ public final class MongoBackend implements Backend {
     }
 
     private Document sessionUpdateFields(SessionEvent s) {
-        if (!s.replayClips().isEmpty()) {
+        if (!s.sessionBlobs().isEmpty()) {
             throw new UnsupportedOperationException(
-                    "replay-clip serialisation isn't implemented by this backend; "
-                            + "sessions with non-empty replayClips cannot be stored");
+                    "session-blob serialisation isn't implemented by this backend; "
+                            + "sessions with non-empty sessionBlobs cannot be stored");
         }
         Document fields = new Document()
                 .append("player_uuid", binUuid(s.playerUuid()))
@@ -286,7 +286,7 @@ public final class MongoBackend implements Backend {
                 .append("replay_clips", List.of());
         // closed_at: existing wins when non-null; event value when existing is null.
         fields.append("closed_at", new Document("$ifNull",
-                List.of("$closed_at", s.closedAtEpochMs())));
+                Arrays.asList("$closed_at", s.closedAtEpochMs())));
         return fields;
     }
 
@@ -350,8 +350,8 @@ public final class MongoBackend implements Backend {
                                        String serverVersion, boolean emptyReplay) {
         if (!emptyReplay) {
             throw new UnsupportedOperationException(
-                    "replay-clip serialisation isn't implemented by this backend; "
-                            + "sessions with non-empty replayClips cannot be stored");
+                    "session-blob serialisation isn't implemented by this backend; "
+                            + "sessions with non-empty sessionBlobs cannot be stored");
         }
         Document d = new Document()
                 .append("_id", binUuid(session))
@@ -428,7 +428,7 @@ public final class MongoBackend implements Backend {
             Document doc = sessionDoc(s.sessionId(), s.playerUuid(), s.serverName(),
                     s.startedEpochMs(), s.lastActivityEpochMs(), s.closedAtEpochMs(),
                     s.grimVersion(), s.clientBrand(),
-                    s.clientVersion(), s.serverVersionString(), s.replayClips().isEmpty());
+                    s.clientVersion(), s.serverVersionString(), s.sessionBlobs().isEmpty());
             ops.add(new ReplaceOneModel<>(Filters.eq("_id", binUuid(s.sessionId())),
                     doc, new ReplaceOptions().upsert(true)));
         }

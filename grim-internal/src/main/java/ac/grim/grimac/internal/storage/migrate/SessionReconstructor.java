@@ -88,7 +88,7 @@ public final class SessionReconstructor {
                     currentSession.clientBrand(),
                     currentSession.clientVersion(),
                     currentSession.serverVersionString(),
-                    currentSession.replayClips());
+                    currentSession.sessionBlobs());
         }
 
         String legacyName = lookup.checkName(v.checkNameId());

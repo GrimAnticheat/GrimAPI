@@ -201,8 +201,8 @@ public final class RedisBackend implements Backend {
     }
 
     private void writeSession(SessionEvent s, long sequence, boolean endOfBatch) throws BackendException {
-        if (!s.replayClips().isEmpty()) {
-            throw new BackendException("replay-clip serialisation isn't implemented by this backend");
+        if (!s.sessionBlobs().isEmpty()) {
+            throw new BackendException("session-blob serialisation isn't implemented by this backend");
         }
         try (Jedis j = pool.getResource()) {
             String sessionHex = hex(s.sessionId());
