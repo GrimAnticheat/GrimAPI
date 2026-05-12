@@ -80,7 +80,7 @@ val baseVersion = project.findProperty("version") as String
 // --- Standard Project Configuration ---
 group = "ac.grim.grimac" // Or your desired group ID
 // VersionUtil appends commit/branch metadata if not a release build
-version = VersionUtil.compute(baseVersion)
+version = VersionUtil.compute(project, baseVersion)
 description = "GrimAPI"
 
 println("⚙️  Build flags     → release=${BuildFlags.release}")

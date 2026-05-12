@@ -1,18 +1,18 @@
 package versioning
 
-import java.io.ByteArrayOutputStream
+import org.gradle.api.Project
 
 /**
  * Builds a version string using:
  *   • base epoch versioning
- *   • git branch + short commit (via indra.git)
+ *   • git branch + short commit (via providers.exec for config-cache compat)
  *   • BuildFlags.release
  */
 object VersionUtil {
 
-    fun compute(baseVersion: String): String {
-        val branch = getGitBranch()
-        val commit = getGitCommitHash()
+    fun compute(project: Project, baseVersion: String): String {
+        val branch = getGitBranch(project)
+        val commit = getGitCommitHash(project)
 
         return when {
             BuildFlags.release                      -> baseVersion
@@ -23,40 +23,31 @@ object VersionUtil {
 }
 
 
-/**
- * Retrieves the current Git commit as a short hash.
- */
-private fun getGitCommitHash(): String {
-    val stdout = ByteArrayOutputStream()
-    ProcessBuilder("git", "rev-parse", "--short", "HEAD")
-        .redirectErrorStream(true)
-        .start()
-        .apply { waitFor() }
-        .inputStream
-        .use { stdout.writeBytes(it.readAllBytes()) }
-    return stdout.toString().trim()
+private fun getGitCommitHash(project: Project): String {
+    return try {
+        project.providers.exec {
+            commandLine("git", "rev-parse", "--short", "HEAD")
+            workingDir(project.projectDir)
+            isIgnoreExitValue = true
+        }.standardOutput.asText.get().trim()
+    } catch (e: Exception) {
+        "unknown"
+    }
 }
 
-/**
- * Returns the current Git branch, sanitised for use in file names.
- * If the branch is "main" or "2.0", returns null.
- *
- * Any slash (/) in the branch name is replaced with an underscore (_)
- * to avoid filesystem issues.
- */
-private fun getGitBranch(): String? {
-    val stdout = ByteArrayOutputStream()
-
-    ProcessBuilder("git", "rev-parse", "--abbrev-ref", "HEAD")
-        .redirectErrorStream(true)
-        .start()
-        .apply { waitFor() }
-        .inputStream.use { stdout.writeBytes(it.readAllBytes()) }
-
-    val branch = stdout.toString().trim()
+private fun getGitBranch(project: Project): String? {
+    val branch = try {
+        project.providers.exec {
+            commandLine("git", "rev-parse", "--abbrev-ref", "HEAD")
+            workingDir(project.projectDir)
+            isIgnoreExitValue = true
+        }.standardOutput.asText.get().trim()
+    } catch (e: Exception) {
+        return null
+    }
 
     return when (branch) {
-        "main", "2.0" -> null                    // ← ignore these branches
-        else           -> branch.replace("/", "_")
+        "main", "2.0" -> null
+        else -> branch.replace("/", "_")
     }
 }
