@@ -26,6 +26,7 @@ import ac.grim.grimac.api.storage.query.Page;
 import ac.grim.grimac.api.storage.query.Queries;
 import ac.grim.grimac.api.storage.query.Query;
 import ac.grim.grimac.internal.storage.util.UuidCodec;
+import ac.grim.grimac.internal.storage.util.UuidV7;
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
 import redis.clients.jedis.DefaultJedisClientConfig;
@@ -73,17 +74,23 @@ import java.util.logging.Logger;
  *   <li>{@code <prefix><players>:by-name-lower:<lc-name>}: string → current uuid-hex.</li>
  *   <li>{@code <prefix><sessions>:<session-hex>}: per-session hash.</li>
  *   <li>{@code <prefix><sessions>:by-player:<uuid-hex>}: ZSET, score=startedAt, member=session-hex.</li>
- *   <li>{@code <prefix><violations>:<id>}: per-violation hash.</li>
- *   <li>{@code <prefix><violations>:by-session:<session-hex>}: ZSET, score=occurredAt, member=violationId.</li>
- *   <li>{@code <prefix><violations>:by-player:<uuid-hex>}: ZSET, score=occurredAt, member=violationId.</li>
+ *   <li>{@code <prefix><violations>:<uuid-hex>}: per-violation hash.</li>
+ *   <li>{@code <prefix><violations>:by-session:<session-hex>}: ZSET, score=occurredAt, member=uuid-hex.</li>
+ *   <li>{@code <prefix><violations>:by-player:<uuid-hex>}: ZSET, score=occurredAt, member=uuid-hex.</li>
  *   <li>{@code <prefix><settings>:<scope>:<scope_key>:<key>}: hash holding value+updated_at.</li>
  * </ul>
- * Violation ids are monotonic longs minted via {@code HINCRBY meta violation_id_seq 1}.
+ * Violation ids are UUIDv7 minted producer-side by the default
+ * {@code DataStore.submit} path. The timestamp prefix keeps ids k-sortable;
+ * Redis pages violations by {@code occurred_at} score with id as the
+ * same-score tie-breaker.
  */
 @ApiStatus.Internal
 public final class RedisBackend implements Backend {
 
     public static final String ID = "redis";
+
+    /** Bumped on every breaking shape change. {@code migrateSchema} walks forward steps. */
+    static final int CURRENT_SCHEMA_VERSION = 6;
 
     private final RedisBackendConfig config;
     private JedisPool pool;
@@ -133,9 +140,18 @@ public final class RedisBackend implements Backend {
             poolConfig.setMaxTotal(16);
             this.pool = new JedisPool(poolConfig, new HostAndPort(config.host(), config.port()), b.build());
             try (Jedis j = pool.getResource()) {
-                j.hsetnx(metaKey(), "schema_version", "5");
-                j.hsetnx(metaKey(), "grim_core_version", "phase1");
-                j.hsetnx(metaKey(), "violation_id_seq", "0");
+                String existingVer = j.hget(metaKey(), "schema_version");
+                if (existingVer == null) {
+                    // Fresh DB — stamp the current version and we're done.
+                    j.hset(metaKey(), Map.of(
+                            "schema_version", Integer.toString(CURRENT_SCHEMA_VERSION),
+                            "grim_core_version", "phase1"));
+                } else {
+                    int existing;
+                    try { existing = Integer.parseInt(existingVer); }
+                    catch (NumberFormatException nfe) { existing = 0; }
+                    if (existing < CURRENT_SCHEMA_VERSION) migrateSchema(j, existing);
+                }
             }
             if (config.warnOnHistory()) {
                 // Pre-format the String so java.util.logging's MessageFormat
@@ -149,6 +165,71 @@ public final class RedisBackend implements Backend {
         } catch (RuntimeException e) {
             throw new BackendException("failed to initialise Redis backend", e);
         }
+    }
+
+    /**
+     * Forward-only Redis schema migration. {@code v5} ids were monotonic
+     * longs minted via {@code HINCRBY meta violation_id_seq 1}; {@code v6}
+     * makes them UUIDv7s minted producer-side. Each legacy violation row
+     * gets a synthesised UUIDv7 derived from its {@code occurred_at}, and
+     * the per-session / per-player ZSETs are rewritten with the new
+     * member ids.
+     */
+    private void migrateSchema(Jedis j, int existing) {
+        if (existing < 6) migrateV5ToV6(j);
+        j.hset(metaKey(), "schema_version", Integer.toString(CURRENT_SCHEMA_VERSION));
+        j.hdel(metaKey(), "violation_id_seq");
+    }
+
+    private void migrateV5ToV6(Jedis j) {
+        logger.info("[grim-datastore] migrating Redis violations id long→UUIDv7 …");
+        String prefix = tableKey(config.tableNames().violations()) + ":";
+        String pattern = prefix + "*";
+        ScanParams sp = new ScanParams().match(pattern).count(500);
+        String cursor = ScanParams.SCAN_POINTER_START;
+        long migrated = 0;
+        do {
+            redis.clients.jedis.resps.ScanResult<String> res = j.scan(cursor, sp);
+            cursor = res.getCursor();
+            for (String oldKey : res.getResult()) {
+                // Skip the secondary indexes — only direct violation hashes
+                // need rewriting.
+                if (oldKey.contains(":by-session:") || oldKey.contains(":by-player:")) continue;
+                Map<String, String> h = j.hgetAll(oldKey);
+                if (h.isEmpty()) continue;
+                String oldId = h.get("id");
+                if (oldId == null) continue;
+                // Already-migrated rows have a UUID-shaped id (32 hex chars).
+                if (oldId.length() == 32 && oldId.matches("[0-9a-fA-F]+")) continue;
+                String occurredStr = h.get("occurred_at");
+                long occurred = occurredStr == null ? 0L : Long.parseLong(occurredStr);
+                long legacyId;
+                try { legacyId = Long.parseLong(oldId); }
+                catch (NumberFormatException ignored) { legacyId = 0L; }
+                UUID newId = UuidV7.fromTimestampMs(occurred, legacyId);
+                String newIdHex = hex(newId);
+                String newKey = prefix + newIdHex;
+                String sessionHex = h.get("session_id");
+                String playerHex = h.get("player_uuid");
+                h.put("id", newIdHex);
+                Pipeline p = j.pipelined();
+                p.hset(newKey, h);
+                p.del(oldKey);
+                if (sessionHex != null) {
+                    String zSession = tableKey(config.tableNames().violations()) + ":by-session:" + sessionHex;
+                    p.zrem(zSession, oldId);
+                    p.zadd(zSession, occurred, newIdHex);
+                }
+                if (playerHex != null) {
+                    String zPlayer = tableKey(config.tableNames().violations()) + ":by-player:" + playerHex;
+                    p.zrem(zPlayer, oldId);
+                    p.zadd(zPlayer, occurred, newIdHex);
+                }
+                p.sync();
+                migrated++;
+            }
+        } while (!ScanParams.SCAN_POINTER_START.equals(cursor));
+        logger.info("[grim-datastore] migrated " + migrated + " violation rows to UUIDv7 id");
     }
 
     @Override public void flush() {}
@@ -177,14 +258,15 @@ public final class RedisBackend implements Backend {
 
     private void writeViolation(ViolationEvent v, long sequence, boolean endOfBatch) throws BackendException {
         try (Jedis j = pool.getResource()) {
-            long id = j.hincrBy(metaKey(), "violation_id_seq", 1);
-            String hex = hex(v.sessionId());
-            String phex = hex(v.playerUuid());
-            String recordKey = tableKey(config.tableNames().violations()) + ":" + id;
+            UUID id = v.id();
+            String idHex = hex(id);
+            String sessionHex = hex(v.sessionId());
+            String playerHex = hex(v.playerUuid());
+            String recordKey = tableKey(config.tableNames().violations()) + ":" + idHex;
             Map<String, String> h = new HashMap<>();
-            h.put("id", Long.toString(id));
-            h.put("session_id", hex);
-            h.put("player_uuid", phex);
+            h.put("id", idHex);
+            h.put("session_id", sessionHex);
+            h.put("player_uuid", playerHex);
             h.put("check_id", Integer.toString(v.checkId()));
             h.put("vl", Double.toString(v.vl()));
             h.put("occurred_at", Long.toString(v.occurredEpochMs()));
@@ -192,8 +274,8 @@ public final class RedisBackend implements Backend {
             h.put("verbose_format", Integer.toString(v.verboseFormat().code()));
             Pipeline p = j.pipelined();
             p.hset(recordKey, h);
-            p.zadd(tableKey(config.tableNames().violations()) + ":by-session:" + hex, v.occurredEpochMs(), Long.toString(id));
-            p.zadd(tableKey(config.tableNames().violations()) + ":by-player:" + phex, v.occurredEpochMs(), Long.toString(id));
+            p.zadd(tableKey(config.tableNames().violations()) + ":by-session:" + sessionHex, v.occurredEpochMs(), idHex);
+            p.zadd(tableKey(config.tableNames().violations()) + ":by-player:" + playerHex, v.occurredEpochMs(), idHex);
             p.sync();
         } catch (RuntimeException e) {
             throw new BackendException("violation write failed", e);
@@ -294,20 +376,16 @@ public final class RedisBackend implements Backend {
 
     private void bulkViolation(ViolationRecord v) {
         try (Jedis j = pool.getResource()) {
-            long id = v.id() > 0 ? v.id() : j.hincrBy(metaKey(), "violation_id_seq", 1);
-            // Keep the counter ahead of any operator-provided id so the next
-            // live write doesn't collide.
-            j.eval("if tonumber(redis.call('hget', KEYS[1], 'violation_id_seq') or '0') < tonumber(ARGV[1]) then "
-                    + "redis.call('hset', KEYS[1], 'violation_id_seq', ARGV[1]) end",
-                    Collections.singletonList(metaKey()),
-                    Collections.singletonList(Long.toString(id)));
-            String hex = hex(v.sessionId());
-            String phex = hex(v.playerUuid());
-            String key = tableKey(config.tableNames().violations()) + ":" + id;
+            // ViolationRecord.id is non-null by record contract — cross-backend
+            // bulkImport always carries an id through verbatim.
+            String idHex = hex(v.id());
+            String sessionHex = hex(v.sessionId());
+            String playerHex = hex(v.playerUuid());
+            String key = tableKey(config.tableNames().violations()) + ":" + idHex;
             Map<String, String> h = new HashMap<>();
-            h.put("id", Long.toString(id));
-            h.put("session_id", hex);
-            h.put("player_uuid", phex);
+            h.put("id", idHex);
+            h.put("session_id", sessionHex);
+            h.put("player_uuid", playerHex);
             h.put("check_id", Integer.toString(v.checkId()));
             h.put("vl", Double.toString(v.vl()));
             h.put("occurred_at", Long.toString(v.occurredEpochMs()));
@@ -315,8 +393,8 @@ public final class RedisBackend implements Backend {
             h.put("verbose_format", Integer.toString(v.verboseFormat().code()));
             Pipeline p = j.pipelined();
             p.hset(key, h);
-            p.zadd(tableKey(config.tableNames().violations()) + ":by-session:" + hex, v.occurredEpochMs(), Long.toString(id));
-            p.zadd(tableKey(config.tableNames().violations()) + ":by-player:" + phex, v.occurredEpochMs(), Long.toString(id));
+            p.zadd(tableKey(config.tableNames().violations()) + ":by-session:" + sessionHex, v.occurredEpochMs(), idHex);
+            p.zadd(tableKey(config.tableNames().violations()) + ":by-player:" + playerHex, v.occurredEpochMs(), idHex);
             p.sync();
         }
     }
@@ -426,17 +504,41 @@ public final class RedisBackend implements Backend {
     }
 
     private Page<ViolationRecord> listViolationsInSession(Jedis j, Queries.ListViolationsInSession q) {
-        long cursorOccurred = decodeViolationOccurredCursor(q.cursor(), Long.MIN_VALUE);
+        // ZSET score is occurred_at, member is the violation's UUIDv7 hex.
+        // Cursor carries both (score, id) so we can resume mid-burst: exclusive
+        // lower bound on score alone would skip every other row sharing the
+        // boundary score. Inclusive lower bound + in-client filter on (score,
+        // member) gets us back to (occurred_at, id) lexicographic ordering.
+        long cursorScore = decodeViolationOccurredCursor(q.cursor(), Long.MIN_VALUE);
+        UUID cursorId = decodeViolationIdCursor(q.cursor());
         String zsetKey = tableKey(config.tableNames().violations()) + ":by-session:" + hex(q.sessionId());
-        String min = q.cursor() == null ? "-inf" : "(" + cursorOccurred;
-        List<Tuple> members = j.zrangeByScoreWithScores(zsetKey, min, "+inf", 0, q.pageSize() + 1);
+        String min = cursorId == null ? "-inf" : Long.toString(cursorScore);
+        String cursorMemberHex = cursorId == null ? null : hex(cursorId);
+        // Fetch pageSize+1 *past* the cursor — but at the boundary score the
+        // ZSET may return rows we already shipped on the previous page, so we
+        // skip them in client until we move past (score, member). Worst case
+        // (huge same-score burst) is a couple extra ZRANGE calls; in practice
+        // bursts at a single ms are bounded by ring throughput.
         List<ViolationRecord> out = new ArrayList<>();
         boolean hasMore = false;
-        for (Tuple t : members) {
-            if (out.size() >= q.pageSize()) { hasMore = true; break; }
-            Map<String, String> h = j.hgetAll(tableKey(config.tableNames().violations()) + ":" + t.getElement());
-            if (h.isEmpty()) continue;
-            out.add(mapViolation(h));
+        boolean skipping = cursorId != null;
+        long offset = 0;
+        int wanted = q.pageSize() + 1;
+        while (out.size() < wanted) {
+            List<Tuple> members = j.zrangeByScoreWithScores(zsetKey, min, "+inf", (int) offset, wanted - out.size());
+            if (members.isEmpty()) break;
+            offset += members.size();
+            for (Tuple t : members) {
+                if (skipping) {
+                    if ((long) t.getScore() == cursorScore && t.getElement().compareTo(cursorMemberHex) <= 0) continue;
+                    skipping = false;
+                }
+                if (out.size() >= q.pageSize()) { hasMore = true; break; }
+                Map<String, String> h = j.hgetAll(tableKey(config.tableNames().violations()) + ":" + t.getElement());
+                if (h.isEmpty()) continue;
+                out.add(mapViolation(h));
+            }
+            if (hasMore || members.size() < wanted - out.size()) break;
         }
         Cursor next = null;
         if (hasMore && !out.isEmpty()) {
@@ -526,7 +628,7 @@ public final class RedisBackend implements Backend {
 
     private static ViolationRecord mapViolation(Map<String, String> h) {
         return new ViolationRecord(
-                Long.parseLong(h.get("id")),
+                fromHex(h.get("id")),
                 fromHex(h.get("session_id")),
                 fromHex(h.get("player_uuid")),
                 Integer.parseInt(h.get("check_id")),
@@ -786,16 +888,24 @@ public final class RedisBackend implements Backend {
         catch (NumberFormatException e) { return defaultVal; }
     }
 
-    private static Cursor encodeViolationCursor(long occurred, long id) {
-        return new Cursor("v:" + occurred + ":" + id);
+    private static Cursor encodeViolationCursor(long occurredAt, UUID id) {
+        return new Cursor("v:" + occurredAt + ":" + id);
     }
 
     private static long decodeViolationOccurredCursor(Cursor c, long defaultVal) {
         if (c == null) return defaultVal;
-        String[] parts = c.token().split(":");
-        if (parts.length < 3) return defaultVal;
+        String[] parts = c.token().split(":", 3);
+        if (parts.length < 3 || !"v".equals(parts[0])) return defaultVal;
         try { return Long.parseLong(parts[1]); }
         catch (NumberFormatException e) { return defaultVal; }
+    }
+
+    private static UUID decodeViolationIdCursor(Cursor c) {
+        if (c == null) return null;
+        String[] parts = c.token().split(":", 3);
+        if (parts.length < 3 || !"v".equals(parts[0])) return null;
+        try { return UUID.fromString(parts[2]); }
+        catch (IllegalArgumentException e) { return null; }
     }
 
     @ApiStatus.Internal

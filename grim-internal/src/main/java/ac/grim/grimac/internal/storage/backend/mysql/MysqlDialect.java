@@ -86,8 +86,12 @@ public interface MysqlDialect {
                 + "INDEX idx_" + t.sessions() + "_player_started (player_uuid, started_at DESC)"
                 + ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
 
+        // v9: id is a UUIDv7 stored as BINARY(16). The timestamp prefix keeps
+        // the PK B-tree append-friendly (same locality property AUTO_INCREMENT
+        // gave us) while letting many JVMs sharing one MySQL mint ids without
+        // a coordinator.
         s.executeUpdate("CREATE TABLE " + t.violations() + " ("
-                + "id BIGINT AUTO_INCREMENT PRIMARY KEY, "
+                + "id BINARY(16) PRIMARY KEY, "
                 + "session_id BINARY(16) NOT NULL, "
                 + "player_uuid BINARY(16) NOT NULL, "
                 + "check_id INT NOT NULL, "
@@ -96,7 +100,7 @@ public interface MysqlDialect {
                 + "verbose MEDIUMTEXT, "
                 + "verbose_format INT NOT NULL DEFAULT 0, "
                 + "metadata MEDIUMTEXT, "
-                + "INDEX idx_" + t.violations() + "_session_time (session_id, occurred_at), "
+                + "INDEX idx_" + t.violations() + "_session_time (session_id, occurred_at, id), "
                 + "INDEX idx_" + t.violations() + "_player (player_uuid)"
                 + ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
 

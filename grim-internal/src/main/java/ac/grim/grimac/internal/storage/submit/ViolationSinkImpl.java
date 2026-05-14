@@ -29,9 +29,7 @@ public final class ViolationSinkImpl implements ViolationSink {
     public @NotNull SubmitResult record(@NotNull Consumer<ViolationEvent> configurer) {
         if (closed) return SubmitResult.DROPPED_SHUTTING_DOWN;
         store.submit(Categories.VIOLATION, configurer);
-        // DataStoreImpl.submit is non-blocking; overflow is reflected in
-        // metrics().droppedOnOverflowTotal rather than returned here. We conservatively
-        // report QUEUED; a richer SubmitResult with queue-depth probing can follow.
+        // submit() is non-blocking; overflow is reported through metrics.
         return SubmitResult.QUEUED;
     }
 

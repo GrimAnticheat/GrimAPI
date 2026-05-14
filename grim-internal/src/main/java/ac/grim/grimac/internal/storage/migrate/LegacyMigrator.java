@@ -12,6 +12,7 @@ import ac.grim.grimac.api.storage.query.Page;
 import ac.grim.grimac.api.storage.query.Queries;
 import ac.grim.grimac.internal.storage.checks.CheckRegistry;
 import ac.grim.grimac.internal.storage.checks.StableKeyMapping;
+import ac.grim.grimac.internal.storage.util.UuidV7;
 import org.jetbrains.annotations.ApiStatus;
 
 import java.nio.charset.StandardCharsets;
@@ -136,7 +137,7 @@ public final class LegacyMigrator {
                         List<ViolationRecord> rows = new ArrayList<>(violations.size());
                         for (SessionReconstructor.ReconstructedViolation v : violations) {
                             rows.add(new ViolationRecord(
-                                    0,
+                                    UuidV7.fromTimestampMs(v.occurredEpochMs(), v.legacyId()),
                                     v.sessionId(),
                                     v.playerUuid(),
                                     v.checkId(),

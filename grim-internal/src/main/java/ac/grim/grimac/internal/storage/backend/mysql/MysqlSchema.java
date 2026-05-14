@@ -2,6 +2,8 @@ package ac.grim.grimac.internal.storage.backend.mysql;
 
 import ac.grim.grimac.api.storage.config.TableNames;
 import ac.grim.grimac.internal.storage.checks.LegacyKeyRenames;
+import ac.grim.grimac.internal.storage.util.UuidCodec;
+import ac.grim.grimac.internal.storage.util.UuidV7;
 import org.jetbrains.annotations.ApiStatus;
 
 import java.sql.Connection;
@@ -10,6 +12,7 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.Map;
+import java.util.UUID;
 
 /**
  * MySQL-family schema for the MySQL backend. New backends are born at the
@@ -29,7 +32,7 @@ import java.util.Map;
 @ApiStatus.Internal
 public final class MysqlSchema {
 
-    public static final int CURRENT_VERSION = 8;
+    public static final int CURRENT_VERSION = 9;
 
     private MysqlSchema() {}
 
@@ -71,10 +74,11 @@ public final class MysqlSchema {
                     + "; refusing to downgrade. Roll Grim forward.");
         }
 
-        // Forward migrations — additive only.
+        // Forward migrations.
         if (existing < 6) migrateV5ToV6(c, t);
         if (existing < 7) migrateV6ToV7(c, t);
         if (existing < 8) migrateV7ToV8(c, t, dialect);
+        if (existing < 9) migrateV8ToV9(c, t);
 
         if (existing < CURRENT_VERSION) {
             try (PreparedStatement ps = c.prepareStatement(
@@ -138,6 +142,104 @@ public final class MysqlSchema {
     private static void applyBaseline(Connection c, TableNames t, MysqlDialect dialect) throws SQLException {
         try (Statement s = c.createStatement()) {
             dialect.applyBaseline(s, t);
+        }
+    }
+
+    /**
+     * v8 → v9: violation {@code id} type changes from
+     * {@code BIGINT AUTO_INCREMENT PRIMARY KEY} to {@code BINARY(16) PRIMARY
+     * KEY} carrying a UUIDv7. MySQL/MariaDB can't compute UUIDv7 in pure SQL
+     * (the function is Postgres 18+ only and not portable here), so this
+     * does the same rebuild dance as the SQLite migration: create the new
+     * table, stream rows out, mint UUIDv7s in Java from each row's
+     * {@code occurred_at} and old numeric id, bulk-insert into the new table,
+     * swap names.
+     */
+    private static void migrateV8ToV9(Connection c, TableNames t) throws SQLException {
+        String oldTable = t.violations();
+        String newTable = t.violations() + "_uuid_v7_tmp";
+        String backupTable = t.violations() + "_pre_v9_backup";
+
+        // Crash-recovery: if the previous run crashed after the atomic swap
+        // but before the schema_version commit, oldTable already has BINARY(16)
+        // ids and the backup is still hanging around. Skip the rewrite and
+        // drop the leftover backup — meta bump in ensureInitialized finishes.
+        if (violationsIdIsBinary16(c, oldTable)) {
+            try (Statement s = c.createStatement()) {
+                s.executeUpdate("DROP TABLE IF EXISTS " + backupTable);
+            }
+            return;
+        }
+
+        // Stale tmp from an interrupted earlier attempt (crash during copy):
+        // safe to drop because oldTable still has BIGINT ids — i.e. the only
+        // canonical copy lives in oldTable.
+        try (Statement s = c.createStatement()) {
+            s.executeUpdate("DROP TABLE IF EXISTS " + newTable);
+            s.executeUpdate("DROP TABLE IF EXISTS " + backupTable);
+            s.executeUpdate("CREATE TABLE " + newTable + " ("
+                    + "id BINARY(16) PRIMARY KEY, "
+                    + "session_id BINARY(16) NOT NULL, "
+                    + "player_uuid BINARY(16) NOT NULL, "
+                    + "check_id INT NOT NULL, "
+                    + "vl DOUBLE NOT NULL, "
+                    + "occurred_at BIGINT NOT NULL, "
+                    + "verbose MEDIUMTEXT, "
+                    + "verbose_format INT NOT NULL DEFAULT 0, "
+                    + "metadata MEDIUMTEXT, "
+                    + "INDEX idx_" + oldTable + "_session_time (session_id, occurred_at, id), "
+                    + "INDEX idx_" + oldTable + "_player (player_uuid)"
+                    + ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+        }
+
+        try (PreparedStatement sel = c.prepareStatement(
+                "SELECT id, session_id, player_uuid, check_id, vl, occurred_at, verbose, verbose_format, metadata "
+                        + "FROM " + oldTable);
+             PreparedStatement ins = c.prepareStatement(
+                "INSERT INTO " + newTable + "(id, session_id, player_uuid, check_id, vl, occurred_at, verbose, verbose_format, metadata) "
+                        + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)");
+             ResultSet rs = sel.executeQuery()) {
+            int batched = 0;
+            while (rs.next()) {
+                long occurred = rs.getLong("occurred_at");
+                UUID newId = UuidV7.fromTimestampMs(occurred, rs.getLong("id"));
+                ins.setBytes(1, UuidCodec.toBytes(newId));
+                ins.setBytes(2, rs.getBytes("session_id"));
+                ins.setBytes(3, rs.getBytes("player_uuid"));
+                ins.setInt(4, rs.getInt("check_id"));
+                ins.setDouble(5, rs.getDouble("vl"));
+                ins.setLong(6, occurred);
+                ins.setString(7, rs.getString("verbose"));
+                ins.setInt(8, rs.getInt("verbose_format"));
+                ins.setString(9, rs.getString("metadata"));
+                ins.addBatch();
+                if (++batched % 1024 == 0) ins.executeBatch();
+            }
+            ins.executeBatch();
+        }
+
+        // Atomic multi-table swap: oldTable → backup AND newTable → oldTable
+        // happen as one operation. Crash during this statement → both rename
+        // ops abort, both tables still exist with their original names.
+        try (Statement s = c.createStatement()) {
+            s.executeUpdate("RENAME TABLE " + oldTable + " TO " + backupTable + ", "
+                    + newTable + " TO " + oldTable);
+            // Best-effort drop the backup on the happy path. If we crash
+            // between the rename and this drop, the early-return branch up
+            // top will pick it up on the next boot.
+            s.executeUpdate("DROP TABLE IF EXISTS " + backupTable);
+        }
+    }
+
+    private static boolean violationsIdIsBinary16(Connection c, String table) throws SQLException {
+        try (PreparedStatement ps = c.prepareStatement(
+                "SELECT DATA_TYPE FROM INFORMATION_SCHEMA.COLUMNS "
+                        + "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = 'id'")) {
+            ps.setString(1, table);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (!rs.next()) return false;
+                return "binary".equalsIgnoreCase(rs.getString(1));
+            }
         }
     }
 }

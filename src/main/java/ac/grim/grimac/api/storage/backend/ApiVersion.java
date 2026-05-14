@@ -6,8 +6,9 @@ import org.jetbrains.annotations.ApiStatus;
 public record ApiVersion(int major, int minor) implements Comparable<ApiVersion> {
 
     public static final ApiVersion V1_0 = new ApiVersion(1, 0);
+    public static final ApiVersion V2_0 = new ApiVersion(2, 0);
 
-    public static final ApiVersion CURRENT = V1_0;
+    public static final ApiVersion CURRENT = V2_0;
 
     public boolean isCompatibleWith(ApiVersion required) {
         if (this.major != required.major) return false;

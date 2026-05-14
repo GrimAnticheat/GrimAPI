@@ -5,6 +5,11 @@ import ac.grim.grimac.api.storage.backend.BackendException;
 import ac.grim.grimac.api.storage.backend.StorageEventHandler;
 import ac.grim.grimac.api.storage.category.Category;
 import ac.grim.grimac.api.storage.config.WritePathConfig;
+import ac.grim.grimac.api.storage.event.BlobEvent;
+import ac.grim.grimac.api.storage.event.PlayerIdentityEvent;
+import ac.grim.grimac.api.storage.event.SessionEvent;
+import ac.grim.grimac.api.storage.event.SettingEvent;
+import ac.grim.grimac.api.storage.event.ViolationEvent;
 import com.lmax.disruptor.BatchEventProcessor;
 import com.lmax.disruptor.EventTranslatorOneArg;
 import com.lmax.disruptor.RingBuffer;
@@ -103,11 +108,11 @@ public final class RingRegistry {
      */
     @SuppressWarnings("unchecked")
     private static <E> E resetIfKnown(E event) {
-        if (event instanceof ac.grim.grimac.api.storage.event.ViolationEvent v) { v.reset(); return (E) v; }
-        if (event instanceof ac.grim.grimac.api.storage.event.SessionEvent s) { s.reset(); return (E) s; }
-        if (event instanceof ac.grim.grimac.api.storage.event.BlobEvent b) { b.reset(); return (E) b; }
-        if (event instanceof ac.grim.grimac.api.storage.event.PlayerIdentityEvent p) { p.reset(); return (E) p; }
-        if (event instanceof ac.grim.grimac.api.storage.event.SettingEvent s) { s.reset(); return (E) s; }
+        if (event instanceof ViolationEvent v) { v.reset(); return (E) v; }
+        if (event instanceof SessionEvent s) { s.reset(); return (E) s; }
+        if (event instanceof BlobEvent b) { b.reset(); return (E) b; }
+        if (event instanceof PlayerIdentityEvent p) { p.reset(); return (E) p; }
+        if (event instanceof SettingEvent s) { s.reset(); return (E) s; }
         return event;
     }
 

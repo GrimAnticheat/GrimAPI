@@ -8,11 +8,13 @@ import ac.grim.grimac.api.storage.backend.BackendException;
 import ac.grim.grimac.api.storage.category.Categories;
 import ac.grim.grimac.api.storage.category.Category;
 import ac.grim.grimac.api.storage.config.WritePathConfig;
+import ac.grim.grimac.api.storage.event.ViolationEvent;
 import ac.grim.grimac.api.storage.query.DeleteCriteria;
 import ac.grim.grimac.api.storage.query.Deletes;
 import ac.grim.grimac.api.storage.query.Page;
 import ac.grim.grimac.api.storage.query.Queries;
 import ac.grim.grimac.api.storage.query.Query;
+import ac.grim.grimac.internal.storage.util.UuidV7;
 import org.jetbrains.annotations.ApiStatus;
 
 import java.util.UUID;
@@ -76,7 +78,19 @@ public final class DataStoreImpl implements DataStore {
     @Override
     public <E> void submit(Category<E> cat, Consumer<E> configurer) {
         if (closed) return;
+        if (cat == Categories.VIOLATION) {
+            submitViolation(configurer);
+            return;
+        }
         rings.submit(cat, configurer);
+    }
+
+    @SuppressWarnings("unchecked")
+    private <E> void submitViolation(Consumer<E> configurer) {
+        rings.submit(Categories.VIOLATION, event -> {
+            ((Consumer<ViolationEvent>) configurer).accept(event);
+            if (event.id() == null) event.id(UuidV7.next());
+        });
     }
 
     @Override

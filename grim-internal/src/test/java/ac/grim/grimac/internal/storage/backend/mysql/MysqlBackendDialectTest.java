@@ -18,6 +18,7 @@ import ac.grim.grimac.api.storage.model.VerboseFormat;
 import ac.grim.grimac.api.storage.model.ViolationRecord;
 import ac.grim.grimac.api.storage.query.Page;
 import ac.grim.grimac.api.storage.query.Queries;
+import ac.grim.grimac.internal.storage.util.UuidV7;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -118,8 +119,8 @@ class MysqlBackendDialectTest {
             StorageEventHandler<ViolationEvent> vh = b.eventHandlerFor(Categories.VIOLATION);
             for (int i = 0; i < 5; i++) {
                 ViolationEvent v = new ViolationEvent();
-                v.sessionId(session).playerUuid(player).checkId(42 + i).vl(1.0 + i)
-                        .occurredEpochMs(t0 + i).verbose("v" + i).verboseFormat(VerboseFormat.TEXT);
+                v.id(UuidV7.fromTimestampMs(t0, i + 1L)).sessionId(session).playerUuid(player).checkId(42 + i).vl(1.0 + i)
+                        .occurredEpochMs(t0).verbose("v" + i).verboseFormat(VerboseFormat.TEXT);
                 vh.onEvent(v, i, i == 4);
             }
 
@@ -187,15 +188,15 @@ class MysqlBackendDialectTest {
      * {@code current_name_lower} column, schema_version=7), then boots
      * MysqlBackend and verifies the v7→v8 migration ran: the gen col exists
      * and is auto-populated, the new plain index is in place, the old
-     * functional index is gone, schema_version is 8, and read queries
-     * still work end-to-end.
+     * functional index is gone, schema_version reaches current, and read
+     * queries still work end-to-end.
      * <p>
      * MariaDB-only: skipped on MariaDB because no v7 MariaDB schema ever
      * existed (the dialect failed to initialise pre-this-PR; new MariaDB
      * deployments are born at v8 directly via the unified baseline).
      */
     @org.junit.jupiter.api.Test
-    @DisplayName("MySQL v7→v8 migration — gen col + index swap on existing database")
+    @DisplayName("MySQL v7→current migration — gen col/index swap and UUID violation ids")
     void v7ToV8Migration(@TempDir Path tempDir) throws Exception {
         Flavor flavor = Flavor.MYSQL;
         assumeTrue(reachable(flavor), "Skipping; mysql fixture not reachable");
@@ -270,7 +271,21 @@ class MysqlBackendDialectTest {
                  Statement s = c.createStatement()) {
                 try (ResultSet rs = s.executeQuery("SELECT schema_version FROM grim.grim_meta WHERE id = 0")) {
                     org.junit.jupiter.api.Assertions.assertTrue(rs.next());
-                    assertEquals(8, rs.getInt(1), "schema_version bumped to 8");
+                    // v7 seed → migration walks all forward steps (v7→v8 player
+                    // gen col swap, then v8→v9 violation id long→UUIDv7).
+                    assertEquals(MysqlSchema.CURRENT_VERSION, rs.getInt(1),
+                            "schema_version walks forward to current");
+                }
+                // Verify the v8→v9 step also ran: violations.id is now BINARY(16).
+                try (ResultSet rs = s.executeQuery(
+                        "SELECT DATA_TYPE, COLUMN_TYPE FROM information_schema.COLUMNS "
+                                + "WHERE TABLE_SCHEMA = 'grim' AND TABLE_NAME = 'grim_violations' "
+                                + "AND COLUMN_NAME = 'id'")) {
+                    org.junit.jupiter.api.Assertions.assertTrue(rs.next());
+                    assertEquals("binary", rs.getString(1).toLowerCase(java.util.Locale.ROOT),
+                            "violations.id is BINARY after v8→v9");
+                    assertEquals("binary(16)", rs.getString(2).toLowerCase(java.util.Locale.ROOT),
+                            "violations.id is BINARY(16) after v8→v9");
                 }
                 try (ResultSet rs = s.executeQuery(
                         "SELECT current_name_lower FROM grim.grim_players WHERE uuid = UNHEX('0000000000000000000000000000007F')")) {

@@ -51,7 +51,7 @@ import static ac.grim.grimac.internal.storage.backend.postgres.PostgresSchema.qu
  *   <li>UUIDs stored as {@code BYTEA} (Postgres's native byte array). The
  *       alternative was the dedicated {@code UUID} type, but that would
  *       require a different binding path than the rest of the backends.</li>
- *   <li>Auto-increment via {@code BIGSERIAL} instead of {@code AUTO_INCREMENT}.</li>
+ *   <li>Violation ids are UUIDv7 bytes generated before insert.</li>
  *   <li>All identifiers quoted with {@code "…"} so custom
  *       {@link TableNames} that happen to overlap a Postgres reserved word
  *       (e.g. {@code "user"}) still work.</li>
@@ -75,8 +75,8 @@ public final class PostgresBackend implements Backend {
         this.config = config;
         TableNames t = config.tableNames();
         this.insertViolations =
-                "INSERT INTO " + quoteId(t.violations()) + "(session_id, player_uuid, check_id, vl, occurred_at, \"verbose\", verbose_format) "
-                        + "VALUES (?, ?, ?, ?, ?, ?, ?)";
+                "INSERT INTO " + quoteId(t.violations()) + "(id, session_id, player_uuid, check_id, vl, occurred_at, \"verbose\", verbose_format) "
+                        + "VALUES (?, ?, ?, ?, ?, ?, ?, ?)";
         this.upsertSessions =
                 "INSERT INTO " + quoteId(t.sessions()) + "(session_id, player_uuid, server_name, started_at, last_activity, closed_at, "
                         + "grim_version, client_brand, client_version_pvn, server_version, replay_clips_json) "
@@ -247,13 +247,15 @@ public final class PostgresBackend implements Backend {
         @Override protected String categoryId() { return "violation"; }
         @Override
         protected void bind(PreparedStatement ps, ViolationEvent v) throws SQLException {
-            ps.setBytes(1, UuidCodec.toBytes(v.sessionId()));
-            ps.setBytes(2, UuidCodec.toBytes(v.playerUuid()));
-            ps.setInt(3, v.checkId());
-            ps.setDouble(4, v.vl());
-            ps.setLong(5, v.occurredEpochMs());
-            ps.setString(6, v.verbose());
-            ps.setInt(7, v.verboseFormat().code());
+            UUID id = v.id();
+            ps.setBytes(1, UuidCodec.toBytes(id));
+            ps.setBytes(2, UuidCodec.toBytes(v.sessionId()));
+            ps.setBytes(3, UuidCodec.toBytes(v.playerUuid()));
+            ps.setInt(4, v.checkId());
+            ps.setDouble(5, v.vl());
+            ps.setLong(6, v.occurredEpochMs());
+            ps.setString(7, v.verbose());
+            ps.setInt(8, v.verboseFormat().code());
         }
     }
 
@@ -333,13 +335,14 @@ public final class PostgresBackend implements Backend {
     private void writeViolationRecords(List<ViolationRecord> rows) throws SQLException {
         try (PreparedStatement ps = writeConn.prepareStatement(insertViolations)) {
             for (ViolationRecord v : rows) {
-                ps.setBytes(1, UuidCodec.toBytes(v.sessionId()));
-                ps.setBytes(2, UuidCodec.toBytes(v.playerUuid()));
-                ps.setInt(3, v.checkId());
-                ps.setDouble(4, v.vl());
-                ps.setLong(5, v.occurredEpochMs());
-                ps.setString(6, v.verbose());
-                ps.setInt(7, v.verboseFormat().code());
+                ps.setBytes(1, UuidCodec.toBytes(v.id()));
+                ps.setBytes(2, UuidCodec.toBytes(v.sessionId()));
+                ps.setBytes(3, UuidCodec.toBytes(v.playerUuid()));
+                ps.setInt(4, v.checkId());
+                ps.setDouble(5, v.vl());
+                ps.setLong(6, v.occurredEpochMs());
+                ps.setString(7, v.verbose());
+                ps.setInt(8, v.verboseFormat().code());
                 ps.addBatch();
             }
             ps.executeBatch();
@@ -457,8 +460,12 @@ public final class PostgresBackend implements Backend {
     }
 
     private Page<ViolationRecord> listViolationsInSession(Connection c, Queries.ListViolationsInSession q) throws SQLException {
+        // Order by (occurred_at, id) — id is wall-clock at mint time and can drift
+        // from event time when callers pre-set event.id(), when ring slots sit
+        // before the sink runs, or when bulkImport carries through original ids.
+        // Id stays as the tiebreaker for same-ms bursts.
         long lastOccurred = decodeViolationOccurredCursor(q.cursor(), Long.MIN_VALUE);
-        long lastId = decodeViolationIdCursor(q.cursor());
+        byte[] lastId = decodeViolationIdCursor(q.cursor());
         try (PreparedStatement ps = c.prepareStatement(
                 "SELECT id, session_id, player_uuid, check_id, vl, occurred_at, \"verbose\", verbose_format "
                         + "FROM " + quoteId(config.tableNames().violations()) + " "
@@ -468,7 +475,7 @@ public final class PostgresBackend implements Backend {
             ps.setBytes(1, UuidCodec.toBytes(q.sessionId()));
             ps.setLong(2, lastOccurred);
             ps.setLong(3, lastOccurred);
-            ps.setLong(4, lastId);
+            ps.setBytes(4, lastId);
             ps.setInt(5, q.pageSize() + 1);
             try (ResultSet rs = ps.executeQuery()) {
                 List<ViolationRecord> out = new ArrayList<>();
@@ -570,7 +577,7 @@ public final class PostgresBackend implements Backend {
 
     private static ViolationRecord mapViolation(ResultSet rs) throws SQLException {
         return new ViolationRecord(
-                rs.getLong("id"),
+                UuidCodec.fromBytes(rs.getBytes("id")),
                 UuidCodec.fromBytes(rs.getBytes("session_id")),
                 UuidCodec.fromBytes(rs.getBytes("player_uuid")),
                 rs.getInt("check_id"),
@@ -733,24 +740,24 @@ public final class PostgresBackend implements Backend {
         return out;
     }
 
-    private static Cursor encodeViolationCursor(long occurred, long id) {
-        return new Cursor("v:" + occurred + ":" + id);
+    private static Cursor encodeViolationCursor(long occurredAt, UUID id) {
+        return new Cursor("v:" + occurredAt + ":" + id);
     }
 
     private static long decodeViolationOccurredCursor(Cursor c, long defaultVal) {
         if (c == null) return defaultVal;
-        String[] parts = c.token().split(":");
-        if (parts.length < 3) return defaultVal;
+        String[] parts = c.token().split(":", 3);
+        if (parts.length < 3 || !"v".equals(parts[0])) return defaultVal;
         try { return Long.parseLong(parts[1]); }
         catch (NumberFormatException e) { return defaultVal; }
     }
 
-    private static long decodeViolationIdCursor(Cursor c) {
-        if (c == null) return Long.MIN_VALUE;
-        String[] parts = c.token().split(":");
-        if (parts.length < 3) return Long.MIN_VALUE;
-        try { return Long.parseLong(parts[2]); }
-        catch (NumberFormatException e) { return Long.MIN_VALUE; }
+    private static byte[] decodeViolationIdCursor(Cursor c) {
+        if (c == null) return new byte[16];
+        String[] parts = c.token().split(":", 3);
+        if (parts.length < 3 || !"v".equals(parts[0])) return new byte[16];
+        try { return UuidCodec.toBytes(UUID.fromString(parts[2])); }
+        catch (IllegalArgumentException e) { return new byte[16]; }
     }
 
     @ApiStatus.Internal

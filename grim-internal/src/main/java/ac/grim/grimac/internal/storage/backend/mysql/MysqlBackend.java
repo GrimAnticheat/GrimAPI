@@ -88,8 +88,8 @@ public final class MysqlBackend implements Backend {
         TableNames t = config.tableNames();
         // Flavor-agnostic — plain INSERT, no ON DUPLICATE KEY clause.
         this.insertViolations =
-                "INSERT INTO " + t.violations() + "(session_id, player_uuid, check_id, vl, occurred_at, verbose, verbose_format) "
-                        + "VALUES (?, ?, ?, ?, ?, ?, ?)";
+                "INSERT INTO " + t.violations() + "(id, session_id, player_uuid, check_id, vl, occurred_at, verbose, verbose_format) "
+                        + "VALUES (?, ?, ?, ?, ?, ?, ?, ?)";
     }
 
     @Override public @NotNull String id() { return ID; }
@@ -343,13 +343,15 @@ public final class MysqlBackend implements Backend {
         @Override protected String categoryId() { return "violation"; }
         @Override
         protected void bind(PreparedStatement ps, ViolationEvent v) throws SQLException {
-            ps.setBytes(1, UuidCodec.toBytes(v.sessionId()));
-            ps.setBytes(2, UuidCodec.toBytes(v.playerUuid()));
-            ps.setInt(3, v.checkId());
-            ps.setDouble(4, v.vl());
-            ps.setLong(5, v.occurredEpochMs());
-            ps.setString(6, v.verbose());
-            ps.setInt(7, v.verboseFormat().code());
+            UUID id = v.id();
+            ps.setBytes(1, UuidCodec.toBytes(id));
+            ps.setBytes(2, UuidCodec.toBytes(v.sessionId()));
+            ps.setBytes(3, UuidCodec.toBytes(v.playerUuid()));
+            ps.setInt(4, v.checkId());
+            ps.setDouble(5, v.vl());
+            ps.setLong(6, v.occurredEpochMs());
+            ps.setString(7, v.verbose());
+            ps.setInt(8, v.verboseFormat().code());
         }
     }
 
@@ -431,13 +433,14 @@ public final class MysqlBackend implements Backend {
     private void writeViolationRecords(List<ViolationRecord> rows) throws SQLException {
         try (PreparedStatement ps = writeConn.prepareStatement(insertViolations)) {
             for (ViolationRecord v : rows) {
-                ps.setBytes(1, UuidCodec.toBytes(v.sessionId()));
-                ps.setBytes(2, UuidCodec.toBytes(v.playerUuid()));
-                ps.setInt(3, v.checkId());
-                ps.setDouble(4, v.vl());
-                ps.setLong(5, v.occurredEpochMs());
-                ps.setString(6, v.verbose());
-                ps.setInt(7, v.verboseFormat().code());
+                ps.setBytes(1, UuidCodec.toBytes(v.id()));
+                ps.setBytes(2, UuidCodec.toBytes(v.sessionId()));
+                ps.setBytes(3, UuidCodec.toBytes(v.playerUuid()));
+                ps.setInt(4, v.checkId());
+                ps.setDouble(5, v.vl());
+                ps.setLong(6, v.occurredEpochMs());
+                ps.setString(7, v.verbose());
+                ps.setInt(8, v.verboseFormat().code());
                 ps.addBatch();
             }
             ps.executeBatch();
@@ -557,8 +560,12 @@ public final class MysqlBackend implements Backend {
     }
 
     private Page<ViolationRecord> listViolationsInSession(Connection c, Queries.ListViolationsInSession q) throws SQLException {
+        // Order by (occurred_at, id) — id is wall-clock at mint time and can drift
+        // from event time when callers pre-set event.id(), when ring slots sit
+        // before the sink runs, or when bulkImport carries through original ids.
+        // Id stays as the tiebreaker for same-ms bursts.
         long lastOccurred = decodeViolationOccurredCursor(q.cursor(), Long.MIN_VALUE);
-        long lastId = decodeViolationIdCursor(q.cursor());
+        byte[] lastId = decodeViolationIdCursor(q.cursor());
         try (PreparedStatement ps = c.prepareStatement(
                 "SELECT id, session_id, player_uuid, check_id, vl, occurred_at, verbose, verbose_format "
                         + "FROM " + config.tableNames().violations() + " "
@@ -568,7 +575,7 @@ public final class MysqlBackend implements Backend {
             ps.setBytes(1, UuidCodec.toBytes(q.sessionId()));
             ps.setLong(2, lastOccurred);
             ps.setLong(3, lastOccurred);
-            ps.setLong(4, lastId);
+            ps.setBytes(4, lastId);
             ps.setInt(5, q.pageSize() + 1);
             try (ResultSet rs = ps.executeQuery()) {
                 List<ViolationRecord> out = new ArrayList<>();
@@ -665,7 +672,7 @@ public final class MysqlBackend implements Backend {
 
     private static ViolationRecord mapViolation(ResultSet rs) throws SQLException {
         return new ViolationRecord(
-                rs.getLong("id"),
+                UuidCodec.fromBytes(rs.getBytes("id")),
                 UuidCodec.fromBytes(rs.getBytes("session_id")),
                 UuidCodec.fromBytes(rs.getBytes("player_uuid")),
                 rs.getInt("check_id"),
@@ -829,24 +836,24 @@ public final class MysqlBackend implements Backend {
         return out;
     }
 
-    private static Cursor encodeViolationCursor(long occurred, long id) {
-        return new Cursor("v:" + occurred + ":" + id);
+    private static Cursor encodeViolationCursor(long occurredAt, UUID id) {
+        return new Cursor("v:" + occurredAt + ":" + id);
     }
 
     private static long decodeViolationOccurredCursor(Cursor c, long defaultVal) {
         if (c == null) return defaultVal;
-        String[] parts = c.token().split(":");
-        if (parts.length < 3) return defaultVal;
+        String[] parts = c.token().split(":", 3);
+        if (parts.length < 3 || !"v".equals(parts[0])) return defaultVal;
         try { return Long.parseLong(parts[1]); }
         catch (NumberFormatException e) { return defaultVal; }
     }
 
-    private static long decodeViolationIdCursor(Cursor c) {
-        if (c == null) return Long.MIN_VALUE;
-        String[] parts = c.token().split(":");
-        if (parts.length < 3) return Long.MIN_VALUE;
-        try { return Long.parseLong(parts[2]); }
-        catch (NumberFormatException e) { return Long.MIN_VALUE; }
+    private static byte[] decodeViolationIdCursor(Cursor c) {
+        if (c == null) return new byte[16];
+        String[] parts = c.token().split(":", 3);
+        if (parts.length < 3 || !"v".equals(parts[0])) return new byte[16];
+        try { return UuidCodec.toBytes(UUID.fromString(parts[2])); }
+        catch (IllegalArgumentException e) { return new byte[16]; }
     }
 
     @ApiStatus.Internal

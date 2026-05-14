@@ -2,6 +2,8 @@ package ac.grim.grimac.internal.storage.backend.postgres;
 
 import ac.grim.grimac.api.storage.config.TableNames;
 import ac.grim.grimac.internal.storage.checks.LegacyKeyRenames;
+import ac.grim.grimac.internal.storage.util.UuidCodec;
+import ac.grim.grimac.internal.storage.util.UuidV7;
 import org.jetbrains.annotations.ApiStatus;
 
 import java.sql.Connection;
@@ -10,6 +12,7 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.Map;
+import java.util.UUID;
 
 /**
  * Postgres 14+ schema for the Postgres backend. Born at the v5 baseline — see
@@ -19,7 +22,7 @@ import java.util.Map;
 @ApiStatus.Internal
 public final class PostgresSchema {
 
-    public static final int CURRENT_VERSION = 7;
+    public static final int CURRENT_VERSION = 8;
 
     private PostgresSchema() {}
 
@@ -58,6 +61,7 @@ public final class PostgresSchema {
 
         if (existing < 6) migrateV5ToV6(c, t);
         if (existing < 7) migrateV6ToV7(c, t);
+        if (existing < 8) migrateV7ToV8(c, t);
 
         if (existing < CURRENT_VERSION) {
             try (PreparedStatement ps = c.prepareStatement(
@@ -138,8 +142,9 @@ public final class PostgresSchema {
             s.executeUpdate("CREATE INDEX " + quoteId("idx_" + t.sessions() + "_player_started")
                     + " ON " + quoteId(t.sessions()) + " (player_uuid, started_at DESC)");
 
+            // UUIDv7 ids preserve write locality without a database sequence.
             s.executeUpdate("CREATE TABLE " + quoteId(t.violations()) + " ("
-                    + "id BIGSERIAL PRIMARY KEY, "
+                    + "id BYTEA PRIMARY KEY, "
                     + "session_id BYTEA NOT NULL, "
                     + "player_uuid BYTEA NOT NULL, "
                     + "check_id INTEGER NOT NULL, "
@@ -152,7 +157,7 @@ public final class PostgresSchema {
                     + "metadata TEXT"
                     + ")");
             s.executeUpdate("CREATE INDEX " + quoteId("idx_" + t.violations() + "_session_time")
-                    + " ON " + quoteId(t.violations()) + " (session_id, occurred_at)");
+                    + " ON " + quoteId(t.violations()) + " (session_id, occurred_at, id)");
             s.executeUpdate("CREATE INDEX " + quoteId("idx_" + t.violations() + "_player")
                     + " ON " + quoteId(t.violations()) + " (player_uuid)");
 
@@ -164,6 +169,92 @@ public final class PostgresSchema {
                     + "updated_at BIGINT NOT NULL, "
                     + "PRIMARY KEY (scope, scope_key, key)"
                     + ")");
+        }
+    }
+
+    /**
+     * v7 → v8: violation {@code id} type changes from {@code BIGSERIAL} to
+     * {@code BYTEA} carrying a UUIDv7. Postgres &lt;18 has no native uuidv7()
+     * generator, so this does the same rebuild dance as the other backends:
+     * create a new table, stream rows out, mint UUIDv7 from each row's
+     * {@code occurred_at} and old numeric id in Java, bulk-insert into the new
+     * table, swap names.
+     *
+     * <p>Also drops the BIGSERIAL sequence (the old {@code id} column's
+     * default), which Postgres leaves behind when the table is dropped.
+     */
+    private static void migrateV7ToV8(Connection c, TableNames t) throws SQLException {
+        String oldTable = t.violations();
+        String newTable = t.violations() + "_uuid_v7_tmp";
+
+        // Postgres has transactional DDL: run the whole rewrite as one
+        // transaction so a crash anywhere short of COMMIT rolls back to v7
+        // shape with the canonical data untouched. ensureInitialized opens
+        // the connection with autocommit on by default; flip it for this
+        // migration only.
+        boolean priorAutoCommit = c.getAutoCommit();
+        c.setAutoCommit(false);
+        try {
+            try (Statement s = c.createStatement()) {
+                // Clean tmp from any prior aborted run — same transaction, so
+                // safe even if the canonical oldTable is the only data copy.
+                s.executeUpdate("DROP TABLE IF EXISTS " + quoteId(newTable));
+                s.executeUpdate("CREATE TABLE " + quoteId(newTable) + " ("
+                        + "id BYTEA PRIMARY KEY, "
+                        + "session_id BYTEA NOT NULL, "
+                        + "player_uuid BYTEA NOT NULL, "
+                        + "check_id INTEGER NOT NULL, "
+                        + "vl DOUBLE PRECISION NOT NULL, "
+                        + "occurred_at BIGINT NOT NULL, "
+                        + "\"verbose\" TEXT, "
+                        + "verbose_format INTEGER NOT NULL DEFAULT 0, "
+                        + "metadata TEXT"
+                        + ")");
+            }
+
+            try (PreparedStatement sel = c.prepareStatement(
+                    "SELECT id, session_id, player_uuid, check_id, vl, occurred_at, \"verbose\", verbose_format, metadata "
+                            + "FROM " + quoteId(oldTable));
+                 PreparedStatement ins = c.prepareStatement(
+                    "INSERT INTO " + quoteId(newTable) + "(id, session_id, player_uuid, check_id, vl, occurred_at, \"verbose\", verbose_format, metadata) "
+                            + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)");
+                 ResultSet rs = sel.executeQuery()) {
+                int batched = 0;
+                while (rs.next()) {
+                    long occurred = rs.getLong("occurred_at");
+                    UUID newId = UuidV7.fromTimestampMs(occurred, rs.getLong("id"));
+                    ins.setBytes(1, UuidCodec.toBytes(newId));
+                    ins.setBytes(2, rs.getBytes("session_id"));
+                    ins.setBytes(3, rs.getBytes("player_uuid"));
+                    ins.setInt(4, rs.getInt("check_id"));
+                    ins.setDouble(5, rs.getDouble("vl"));
+                    ins.setLong(6, occurred);
+                    ins.setString(7, rs.getString("verbose"));
+                    ins.setInt(8, rs.getInt("verbose_format"));
+                    ins.setString(9, rs.getString("metadata"));
+                    ins.addBatch();
+                    if (++batched % 1024 == 0) ins.executeBatch();
+                }
+                ins.executeBatch();
+            }
+
+            try (Statement s = c.createStatement()) {
+                // DROP CASCADE so the BIGSERIAL sequence on id goes with the
+                // table — Postgres won't auto-drop it otherwise.
+                s.executeUpdate("DROP TABLE " + quoteId(oldTable) + " CASCADE");
+                s.executeUpdate("ALTER TABLE " + quoteId(newTable) + " RENAME TO " + quoteId(oldTable));
+                s.executeUpdate("CREATE INDEX " + quoteId("idx_" + oldTable + "_session_time")
+                        + " ON " + quoteId(oldTable) + " (session_id, occurred_at, id)");
+                s.executeUpdate("CREATE INDEX " + quoteId("idx_" + oldTable + "_player")
+                        + " ON " + quoteId(oldTable) + " (player_uuid)");
+            }
+
+            c.commit();
+        } catch (SQLException e) {
+            try { c.rollback(); } catch (SQLException ignored) {}
+            throw e;
+        } finally {
+            c.setAutoCommit(priorAutoCommit);
         }
     }
 

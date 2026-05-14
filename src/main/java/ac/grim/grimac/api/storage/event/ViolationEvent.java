@@ -15,10 +15,15 @@ import java.util.UUID;
  * <p>
  * The immutable read-side counterpart is {@link ViolationRecord}, which backends
  * materialise on read from their native storage — never from an event.
+ * <p>
+ * Callers may pre-set {@code id()} to preserve an imported record id. Otherwise
+ * the default {@code DataStore.submit} path fills it before publishing. Backends
+ * expect a populated id when they receive the event.
  */
 @ApiStatus.Experimental
 public final class ViolationEvent {
 
+    private @Nullable UUID id;
     private UUID sessionId;
     private UUID playerUuid;
     private int checkId;
@@ -26,6 +31,9 @@ public final class ViolationEvent {
     private long occurredEpochMs;
     private @Nullable String verbose;
     private VerboseFormat verboseFormat = VerboseFormat.TEXT;
+
+    public @Nullable UUID id() { return id; }
+    public @NotNull ViolationEvent id(@Nullable UUID v) { this.id = v; return this; }
 
     public @NotNull UUID sessionId() { return sessionId; }
     public @NotNull ViolationEvent sessionId(@NotNull UUID v) { this.sessionId = v; return this; }
@@ -53,6 +61,7 @@ public final class ViolationEvent {
      * without leaking fields from the previous publish.
      */
     public void reset() {
+        id = null;
         sessionId = null;
         playerUuid = null;
         checkId = 0;
