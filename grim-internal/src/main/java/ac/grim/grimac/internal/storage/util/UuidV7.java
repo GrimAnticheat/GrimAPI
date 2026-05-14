@@ -4,6 +4,7 @@ import org.jetbrains.annotations.ApiStatus;
 
 import java.util.UUID;
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * RFC 9562 §5.7 UUIDv7 generator. Top 48 bits are unix-ms, the next 4 are
@@ -42,12 +43,16 @@ public final class UuidV7 {
     private static final long RAND_A_MASK = 0x0FFFL;
     private static final long RAND_B_MASK = 0x3FFFFFFFFFFFFFFFL;
     private static final int SEQ_MAX = 0x3FFF;
+    private static final int SEQ_BITS = 14;
+    private static final long SEQ_MASK = (1L << SEQ_BITS) - 1L;
 
-    // Same-ms monotonicity state. seq is a 14-bit counter — 12 bits in
-    // rand_a + top 2 bits of rand_b — so byte order strictly increases
-    // for each new mint within the same UUID timestamp.
-    private static long lastMs = -1L;
-    private static int seq;
+    // Same-ms monotonicity state packed into a single AtomicLong so concurrent
+    // next() calls advance the counter via lock-free CAS instead of fighting a
+    // monitor: high 48 bits = last UUID timestamp, low 14 bits = sequence.
+    // Initial state: lastMs = -1 so the first call always falls into the
+    // "now > lastMs" branch. Encodes as 0xFFFF_FFFF_FFFF_C000 once shifted, but
+    // we only read it via the unpack accessors so the sign is preserved.
+    private static final AtomicLong STATE = new AtomicLong(-1L << SEQ_BITS);
 
     private UuidV7() {}
 
@@ -59,24 +64,33 @@ public final class UuidV7 {
      * rather than wrapping and minting non-monotonic ids. The violation
      * record's {@code occurred_at} remains the authoritative event time.
      */
-    public static synchronized UUID next() {
+    public static UUID next() {
         long now = Math.min(System.currentTimeMillis(), TS_MASK);
-        if (now > lastMs) {
-            lastMs = now;
-            seq = 0;
-        } else if (seq < SEQ_MAX) {
-            seq++;
-        } else {
-            if (lastMs == TS_MASK) {
-                throw new IllegalStateException("UUIDv7 timestamp exhausted");
+        long ts;
+        int seq;
+        while (true) {
+            long packed = STATE.get();
+            long lastMs = packed >> SEQ_BITS;
+            int lastSeq = (int) (packed & SEQ_MASK);
+            if (now > lastMs) {
+                ts = now;
+                seq = 0;
+            } else if (lastSeq < SEQ_MAX) {
+                ts = lastMs;
+                seq = lastSeq + 1;
+            } else {
+                if (lastMs == TS_MASK) {
+                    throw new IllegalStateException("UUIDv7 timestamp exhausted");
+                }
+                ts = lastMs + 1;
+                seq = 0;
             }
-            lastMs++;
-            seq = 0;
+            if (STATE.compareAndSet(packed, (ts << SEQ_BITS) | seq)) break;
         }
         long randA = ((long) (seq >>> 2)) & RAND_A_MASK;                                // top 12 bits of seq
         long randBHigh = ((long) (seq & 0x3)) << 60;                                    // bottom 2 bits in rand_b MSBs
         long randBLow = ThreadLocalRandom.current().nextLong() & 0x0FFFFFFFFFFFFFFFL;   // remaining 60 random bits
-        long msb = (lastMs << 16) | VERSION_BITS | randA;
+        long msb = (ts << 16) | VERSION_BITS | randA;
         long lsb = VARIANT_BITS | randBHigh | randBLow;
         return new UUID(msb, lsb);
     }
