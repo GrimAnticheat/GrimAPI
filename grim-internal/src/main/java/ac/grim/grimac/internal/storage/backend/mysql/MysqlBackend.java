@@ -25,7 +25,6 @@ import ac.grim.grimac.api.storage.query.Page;
 import ac.grim.grimac.api.storage.query.Queries;
 import ac.grim.grimac.api.storage.query.Query;
 import ac.grim.grimac.internal.storage.util.UuidCodec;
-import ac.grim.grimac.internal.storage.util.UuidV7;
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
 
@@ -344,7 +343,7 @@ public final class MysqlBackend implements Backend {
         @Override protected String categoryId() { return "violation"; }
         @Override
         protected void bind(PreparedStatement ps, ViolationEvent v) throws SQLException {
-            UUID id = v.id() != null ? v.id() : UuidV7.next();
+            UUID id = v.id();
             ps.setBytes(1, UuidCodec.toBytes(id));
             ps.setBytes(2, UuidCodec.toBytes(v.sessionId()));
             ps.setBytes(3, UuidCodec.toBytes(v.playerUuid()));

@@ -23,7 +23,6 @@ import ac.grim.grimac.api.storage.query.Deletes;
 import ac.grim.grimac.api.storage.query.Page;
 import ac.grim.grimac.api.storage.query.Queries;
 import ac.grim.grimac.api.storage.query.Query;
-import ac.grim.grimac.internal.storage.util.UuidV7;
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
 
@@ -139,7 +138,7 @@ public final class InMemoryBackend implements Backend {
     }
 
     private void applyViolation(ViolationEvent v) {
-        UUID id = v.id() != null ? v.id() : UuidV7.next();
+        UUID id = v.id();
         ViolationRecord stored = new ViolationRecord(
                 id, v.sessionId(), v.playerUuid(), v.checkId(), v.vl(),
                 v.occurredEpochMs(), v.verbose(), v.verboseFormat());

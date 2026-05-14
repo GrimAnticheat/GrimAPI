@@ -28,7 +28,6 @@ import ac.grim.grimac.internal.storage.backend.sqlite.writers.SessionUpserter;
 import ac.grim.grimac.internal.storage.backend.sqlite.writers.SettingsUpserter;
 import ac.grim.grimac.internal.storage.backend.sqlite.writers.UpserterFactory;
 import ac.grim.grimac.internal.storage.util.UuidCodec;
-import ac.grim.grimac.internal.storage.util.UuidV7;
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
 
@@ -421,7 +420,7 @@ public final class SqliteBackend implements Backend {
         @Override
         protected void bindOne(ViolationEvent v) throws SQLException {
             if (stmt == null) stmt = conn.prepareStatement(insertViolations);
-            UUID id = v.id() != null ? v.id() : UuidV7.next();
+            UUID id = v.id();
             stmt.setBytes(1, UuidCodec.toBytes(id));
             stmt.setBytes(2, UuidCodec.toBytes(v.sessionId()));
             stmt.setBytes(3, UuidCodec.toBytes(v.playerUuid()));

@@ -16,12 +16,9 @@ import java.util.UUID;
  * The immutable read-side counterpart is {@link ViolationRecord}, which backends
  * materialise on read from their native storage — never from an event.
  * <p>
- * The {@code id} field is optional on the event: producers MAY pre-assign a
- * UUIDv7 (e.g. cross-backend bulk import preserving an upstream id), but the
- * common case is to leave it null and let the sink mint one before publishing.
- * Backends MUST honour {@code id()} if set; if null when the event reaches
- * the backend, the backend is free to mint its own (the default sink always
- * sets it, so the null path only triggers for bypass-the-sink test fixtures).
+ * Callers may pre-set {@code id()} to preserve an imported record id. Otherwise
+ * the default violation sink fills it before publishing. Backends expect a
+ * populated id when they receive the event.
  */
 @ApiStatus.Experimental
 public final class ViolationEvent {

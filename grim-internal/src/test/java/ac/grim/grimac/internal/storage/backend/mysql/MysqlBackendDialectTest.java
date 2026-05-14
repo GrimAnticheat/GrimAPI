@@ -18,6 +18,7 @@ import ac.grim.grimac.api.storage.model.VerboseFormat;
 import ac.grim.grimac.api.storage.model.ViolationRecord;
 import ac.grim.grimac.api.storage.query.Page;
 import ac.grim.grimac.api.storage.query.Queries;
+import ac.grim.grimac.internal.storage.util.UuidV7;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -118,7 +119,7 @@ class MysqlBackendDialectTest {
             StorageEventHandler<ViolationEvent> vh = b.eventHandlerFor(Categories.VIOLATION);
             for (int i = 0; i < 5; i++) {
                 ViolationEvent v = new ViolationEvent();
-                v.sessionId(session).playerUuid(player).checkId(42 + i).vl(1.0 + i)
+                v.id(UuidV7.fromTimestampMs(t0 + i)).sessionId(session).playerUuid(player).checkId(42 + i).vl(1.0 + i)
                         .occurredEpochMs(t0 + i).verbose("v" + i).verboseFormat(VerboseFormat.TEXT);
                 vh.onEvent(v, i, i == 4);
             }

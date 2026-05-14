@@ -291,9 +291,7 @@ public final class MongoBackend implements Backend {
         @Override protected String categoryId() { return "violation"; }
         @Override
         protected void append(ViolationEvent v) {
-            // Sink populates event.id() with a UUIDv7 in the normal path; the
-            // null branch is a backstop for fixtures that bypass the sink.
-            UUID id = v.id() != null ? v.id() : UuidV7.next();
+            UUID id = v.id();
             pending.add(new InsertOneModel<>(violationDoc(id, v.sessionId(), v.playerUuid(),
                     v.checkId(), v.vl(), v.occurredEpochMs(), v.verbose(), v.verboseFormat())));
         }

@@ -254,7 +254,7 @@ public final class RedisBackend implements Backend {
 
     private void writeViolation(ViolationEvent v, long sequence, boolean endOfBatch) throws BackendException {
         try (Jedis j = pool.getResource()) {
-            UUID id = v.id() != null ? v.id() : UuidV7.next();
+            UUID id = v.id();
             String idHex = hex(id);
             String sessionHex = hex(v.sessionId());
             String playerHex = hex(v.playerUuid());

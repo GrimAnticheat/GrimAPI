@@ -142,11 +142,7 @@ public final class PostgresSchema {
             s.executeUpdate("CREATE INDEX " + quoteId("idx_" + t.sessions() + "_player_started")
                     + " ON " + quoteId(t.sessions()) + " (player_uuid, started_at DESC)");
 
-            // v8: id is a UUIDv7 stored as BYTEA. Producer-side minted so
-            // multiple JVMs sharing one Postgres mint ids without coordinating
-            // through the BIGSERIAL sequence. The timestamp prefix keeps the
-            // PK B-tree append-friendly (same locality property BIGSERIAL gave
-            // us).
+            // UUIDv7 ids preserve write locality without a database sequence.
             s.executeUpdate("CREATE TABLE " + quoteId(t.violations()) + " ("
                     + "id BYTEA PRIMARY KEY, "
                     + "session_id BYTEA NOT NULL, "
