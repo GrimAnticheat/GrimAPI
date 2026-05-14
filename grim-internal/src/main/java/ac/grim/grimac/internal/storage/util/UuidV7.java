@@ -18,13 +18,15 @@ import java.util.concurrent.ThreadLocalRandom;
  *
  * <p>{@link #next()} is strictly monotonic within a single JVM, even
  * across calls that land in the same wall-clock millisecond (RFC 9562
- * §6.2 method 1, "monotonic random"). When consecutive calls hit the
- * same ms, a 14-bit per-ms sequence packed across rand_a and the top
- * of rand_b advances by one so each new id sorts strictly after the
- * previous. The Redis backend pages violations by ZSET score=occurred_at;
- * without this, two flags raised in the same ms could be returned in
- * UUID order opposite to their event order, breaking the by-id
- * monotonic-paging contract the SQL backends rely on.
+ * §6.2 method 1). For a given UUID timestamp, a 14-bit sequence packed
+ * across rand_a and the top of rand_b advances by one so each new id
+ * sorts strictly after the previous; the remaining 60 bits stay random.
+ * If the sequence is exhausted before the wall clock advances, the UUID
+ * timestamp advances logically by 1 ms rather than wrapping the counter.
+ * The Redis backend pages violations by ZSET score=occurred_at; without
+ * this, two flags raised in the same ms could be returned in UUID order
+ * opposite to their event order, breaking the by-id monotonic-paging
+ * contract the SQL backends rely on.
  *
  * <p>{@link #fromTimestampMs(long)} stays fully random — it's only used
  * during schema migration to synthesise replacement ids from legacy
@@ -39,11 +41,11 @@ public final class UuidV7 {
     private static final long VARIANT_BITS = 0x2L << 62;
     private static final long RAND_A_MASK = 0x0FFFL;
     private static final long RAND_B_MASK = 0x3FFFFFFFFFFFFFFFL;
+    private static final int SEQ_MAX = 0x3FFF;
 
     // Same-ms monotonicity state. seq is a 14-bit counter — 12 bits in
     // rand_a + top 2 bits of rand_b — so byte order strictly increases
-    // for each new mint within the same ms (up to 16384 mints/ms before
-    // the counter would wrap; far above realistic load).
+    // for each new mint within the same UUID timestamp.
     private static long lastMs = -1L;
     private static int seq;
 
@@ -52,26 +54,29 @@ public final class UuidV7 {
     /**
      * Mint a UUIDv7 from the current wall clock. Strictly monotonic
      * within a single JVM. If the system clock steps backwards (NTP),
-     * the previous ms is held until wall-clock catches up rather than
-     * minting non-monotonic ids.
+     * the previous UUID timestamp is held; if more than 16384 ids are
+     * minted for one timestamp, the UUID timestamp advances logically
+     * rather than wrapping and minting non-monotonic ids. The violation
+     * record's {@code occurred_at} remains the authoritative event time.
      */
     public static synchronized UUID next() {
-        long now = System.currentTimeMillis();
-        long ts;
+        long now = Math.min(System.currentTimeMillis(), TS_MASK);
         if (now > lastMs) {
             lastMs = now;
-            // Seed each ms with a fresh random starting point so two JVMs
-            // minting in the same ms still produce non-overlapping id ranges.
-            seq = ThreadLocalRandom.current().nextInt() & 0x3FFF;
-            ts = now;
+            seq = 0;
+        } else if (seq < SEQ_MAX) {
+            seq++;
         } else {
-            seq = (seq + 1) & 0x3FFF;
-            ts = lastMs;
+            if (lastMs == TS_MASK) {
+                throw new IllegalStateException("UUIDv7 timestamp exhausted");
+            }
+            lastMs++;
+            seq = 0;
         }
         long randA = ((long) (seq >>> 2)) & RAND_A_MASK;                                // top 12 bits of seq
         long randBHigh = ((long) (seq & 0x3)) << 60;                                    // bottom 2 bits in rand_b MSBs
         long randBLow = ThreadLocalRandom.current().nextLong() & 0x0FFFFFFFFFFFFFFFL;   // remaining 60 random bits
-        long msb = (ts << 16) | VERSION_BITS | randA;
+        long msb = (lastMs << 16) | VERSION_BITS | randA;
         long lsb = VARIANT_BITS | randBHigh | randBLow;
         return new UUID(msb, lsb);
     }
