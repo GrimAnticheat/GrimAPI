@@ -26,6 +26,7 @@ import ac.grim.grimac.api.storage.query.Page;
 import ac.grim.grimac.api.storage.query.Queries;
 import ac.grim.grimac.api.storage.query.Query;
 import ac.grim.grimac.internal.storage.util.UuidCodec;
+import ac.grim.grimac.internal.storage.util.UuidV7;
 import com.mongodb.MongoWriteException;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
@@ -56,7 +57,6 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 import java.util.UUID;
-import java.util.concurrent.atomic.AtomicLong;
 import java.util.logging.Logger;
 
 /**
@@ -67,14 +67,22 @@ import java.util.logging.Logger;
  * <p>
  * Binary fields (UUIDs, setting values) are stored as
  * {@link org.bson.BsonBinary} with subtype 4 (UUID) for id-like fields and
- * subtype 0 (generic) for opaque byte-arrays. Violations use a monotonic
- * {@code id} long (auto-incremented via a counter doc in {@code meta}) instead
- * of ObjectId — keeps the cursor scheme identical to the SQL backends.
+ * subtype 0 (generic) for opaque byte-arrays. Violations key off a UUIDv7
+ * {@code id} (also UUID-binary) minted producer-side so multiple JVMs can
+ * share one MongoDB cluster without coordinating an allocator. The
+ * timestamp prefix on UUIDv7 keeps the unique-index B-tree append-friendly
+ * and gives the cursor a single-column ordering ({@code WHERE id > ? ORDER BY id}).
  */
 @ApiStatus.Internal
 public final class MongoBackend implements Backend {
 
     public static final String ID = "mongo";
+
+    /**
+     * Bumped on every breaking shape change; {@link #migrateSchema(int)}
+     * runs forward migrations for any older value found in the meta doc.
+     */
+    static final int CURRENT_SCHEMA_VERSION = 6;
 
     private final MongoBackendConfig config;
     private final List<BatchingHandler<?>> handlers = new ArrayList<>();
@@ -82,8 +90,6 @@ public final class MongoBackend implements Backend {
     private MongoDatabase db;
     private MongoCollection<Document> meta, players, sessions, violations, settings;
     private Logger logger;
-    /** Monotonic violation id; seeded from the current max at init(). */
-    private final AtomicLong violationIdSeq = new AtomicLong();
 
     public MongoBackend(MongoBackendConfig config) {
         this.config = config;
@@ -128,12 +134,21 @@ public final class MongoBackend implements Backend {
             this.sessions = db.getCollection(t.sessions());
             this.violations = db.getCollection(t.violations());
             this.settings = db.getCollection(t.settings());
-            ensureIndexes();
+            int existingVersion = readSchemaVersion();
             ensureMetaDoc();
-            seedViolationIdSeq();
+            if (existingVersion >= 0 && existingVersion < CURRENT_SCHEMA_VERSION) {
+                migrateSchema(existingVersion);
+            }
+            ensureIndexes();
         } catch (RuntimeException e) {
             throw new BackendException("failed to initialise Mongo backend", e);
         }
+    }
+
+    private int readSchemaVersion() {
+        Document metaDoc = meta.find(Filters.eq("_id", 0)).first();
+        if (metaDoc == null) return -1;
+        return metaDoc.getInteger("schema_version", 0);
     }
 
     private void ensureIndexes() {
@@ -153,26 +168,61 @@ public final class MongoBackend implements Backend {
         if (metaDoc == null) {
             long now = System.currentTimeMillis();
             meta.insertOne(new Document("_id", 0)
-                    .append("schema_version", 5)
+                    .append("schema_version", CURRENT_SCHEMA_VERSION)
                     .append("grim_core_version", "phase1")
                     .append("initialized_at", now)
-                    .append("last_migration_at", now)
-                    .append("violation_id_seq", 0L));
+                    .append("last_migration_at", now));
         }
     }
 
-    private void seedViolationIdSeq() {
-        // Pick up where the last run left off. Prefer the counter on the meta doc
-        // (bumped on every insert); fall back to SELECT max(id) on the violations
-        // collection if the counter is stale because an operator bulk-imported
-        // rows by hand.
-        Document metaDoc = meta.find(Filters.eq("_id", 0)).first();
-        long seq = metaDoc != null && metaDoc.get("violation_id_seq") != null
-                ? metaDoc.getLong("violation_id_seq")
-                : 0L;
-        Document top = violations.find().sort(new Document("id", -1)).limit(1).first();
-        long top_id = top == null ? 0L : top.getLong("id");
-        violationIdSeq.set(Math.max(seq, top_id));
+    /**
+     * Forward-only schema migrations. Each step is idempotent (gated on
+     * {@code existing < N}) and updates {@code schema_version} on success.
+     */
+    private void migrateSchema(int existing) {
+        if (existing < 6) migrateV5ToV6();
+        meta.updateOne(Filters.eq("_id", 0),
+                Updates.combine(
+                        Updates.set("schema_version", CURRENT_SCHEMA_VERSION),
+                        Updates.set("last_migration_at", System.currentTimeMillis()),
+                        Updates.unset("violation_id_seq")));
+    }
+
+    /**
+     * v5 → v6: violation {@code id} type changes from {@code long} to UUID
+     * (UUIDv7, stored as {@link BsonBinary} subtype 4). Each legacy row's
+     * replacement id is synthesised from {@code occurred_at} so chronological
+     * ordering is preserved. The unique index on {@code id} is rebuilt
+     * afterwards because index entries reference the now-replaced byte values.
+     */
+    private void migrateV5ToV6() {
+        logger.info("[grim-datastore] migrating Mongo violations id long→UUIDv7 …");
+        try {
+            violations.dropIndex(Indexes.ascending("id"));
+        } catch (RuntimeException ignore) {
+            // Index may not exist (fresh-ish DB); ensureIndexes() recreates it.
+        }
+        long count = 0;
+        List<WriteModel<Document>> ops = new ArrayList<>();
+        for (Document d : violations.find().projection(new Document("_id", 1).append("id", 1).append("occurred_at", 1))) {
+            Object idObj = d.get("id");
+            // Already migrated rows have BsonBinary / Binary ids — skip.
+            if (idObj instanceof org.bson.types.Binary || idObj instanceof BsonBinary) continue;
+            long occurred = d.getLong("occurred_at") == null ? 0L : d.getLong("occurred_at");
+            UUID newId = UuidV7.fromTimestampMs(occurred);
+            ops.add(new UpdateOneModel<>(Filters.eq("_id", d.get("_id")),
+                    Updates.set("id", binUuid(newId))));
+            if (ops.size() >= 1024) {
+                violations.bulkWrite(ops);
+                count += ops.size();
+                ops.clear();
+            }
+        }
+        if (!ops.isEmpty()) {
+            violations.bulkWrite(ops);
+            count += ops.size();
+        }
+        logger.info("[grim-datastore] migrated " + count + " violation rows to UUIDv7 id");
     }
 
     @Override public void flush() {}
@@ -241,12 +291,11 @@ public final class MongoBackend implements Backend {
         @Override protected String categoryId() { return "violation"; }
         @Override
         protected void append(ViolationEvent v) {
-            long id = violationIdSeq.incrementAndGet();
+            // Sink populates event.id() with a UUIDv7 in the normal path; the
+            // null branch is a backstop for fixtures that bypass the sink.
+            UUID id = v.id() != null ? v.id() : UuidV7.next();
             pending.add(new InsertOneModel<>(violationDoc(id, v.sessionId(), v.playerUuid(),
                     v.checkId(), v.vl(), v.occurredEpochMs(), v.verbose(), v.verboseFormat())));
-            // Bump the counter on meta so seedViolationIdSeq picks up on restart.
-            // Single-writer per handler → safe without $inc atomicity concerns.
-            meta.updateOne(Filters.eq("_id", 0), Updates.set("violation_id_seq", id));
         }
     }
 
@@ -330,11 +379,11 @@ public final class MongoBackend implements Backend {
         return new BsonBinary(UuidCodec.toBytes(u));
     }
 
-    private static Document violationDoc(long id, UUID session, UUID player, int checkId,
+    private static Document violationDoc(UUID id, UUID session, UUID player, int checkId,
                                          double vl, long occurred, String verbose,
                                          VerboseFormat fmt) {
         return new Document()
-                .append("id", id)
+                .append("id", binUuid(id))
                 .append("session_id", binUuid(session))
                 .append("player_uuid", binUuid(player))
                 .append("check_id", checkId)
@@ -404,16 +453,15 @@ public final class MongoBackend implements Backend {
     }
 
     private void bulkViolations(List<ViolationRecord> rows) {
+        // ViolationRecord.id is non-null by record contract — bulkImport from
+        // any backend preserves the upstream id verbatim, no mint needed.
         List<Document> docs = new ArrayList<>(rows.size());
         for (ViolationRecord v : rows) {
-            long id = v.id() > 0 ? v.id() : violationIdSeq.incrementAndGet();
-            docs.add(violationDoc(id, v.sessionId(), v.playerUuid(), v.checkId(), v.vl(),
+            docs.add(violationDoc(v.id(), v.sessionId(), v.playerUuid(), v.checkId(), v.vl(),
                     v.occurredEpochMs(), v.verbose(), v.verboseFormat()));
         }
         if (!docs.isEmpty()) {
             violations.insertMany(docs, new InsertManyOptions().ordered(false));
-            long maxId = docs.stream().mapToLong(d -> d.getLong("id")).max().orElse(0);
-            meta.updateOne(Filters.eq("_id", 0), Updates.max("violation_id_seq", maxId));
         }
     }
 
@@ -513,18 +561,24 @@ public final class MongoBackend implements Backend {
     }
 
     private Page<ViolationRecord> listViolationsInSession(Queries.ListViolationsInSession q) {
+        // Order by (occurred_at, id) — id is wall-clock at mint time and can
+        // drift from event time when callers pre-set event.id(), when ring
+        // slots sit before the sink runs, or when bulkImport carries through
+        // original ids. Id stays as the tiebreaker for same-ms bursts.
         long lastOccurred = decodeViolationOccurredCursor(q.cursor(), Long.MIN_VALUE);
-        long lastId = decodeViolationIdCursor(q.cursor());
+        UUID lastId = decodeViolationIdCursor(q.cursor());
         Bson sessionEq = Filters.eq("session_id", binUuid(q.sessionId()));
-        Bson pageFilter = Filters.or(
-                Filters.gt("occurred_at", lastOccurred),
-                Filters.and(Filters.eq("occurred_at", lastOccurred),
-                        Filters.gt("id", lastId)));
+        Bson finalFilter = lastId == null
+                ? sessionEq
+                : Filters.and(sessionEq, Filters.or(
+                        Filters.gt("occurred_at", lastOccurred),
+                        Filters.and(Filters.eq("occurred_at", lastOccurred),
+                                Filters.gt("id", binUuid(lastId)))));
         List<ViolationRecord> out = new ArrayList<>();
         boolean hasMore = false;
         List<Document> docs = new ArrayList<>();
         for (Document d : violations
-                .find(Filters.and(sessionEq, pageFilter))
+                .find(finalFilter)
                 .sort(new Document("occurred_at", 1).append("id", 1))
                 .limit(q.pageSize() + 1)) {
             docs.add(d);
@@ -608,7 +662,7 @@ public final class MongoBackend implements Backend {
 
     private static ViolationRecord mapViolation(Document d) {
         return new ViolationRecord(
-                d.getLong("id"),
+                UuidCodec.fromBytes(binBytes(d.get("id"))),
                 UuidCodec.fromBytes(binBytes(d.get("session_id"))),
                 UuidCodec.fromBytes(binBytes(d.get("player_uuid"))),
                 d.getInteger("check_id"),
@@ -749,24 +803,24 @@ public final class MongoBackend implements Backend {
         return out;
     }
 
-    private static Cursor encodeViolationCursor(long occurred, long id) {
-        return new Cursor("v:" + occurred + ":" + id);
+    private static Cursor encodeViolationCursor(long occurredAt, UUID id) {
+        return new Cursor("v:" + occurredAt + ":" + id);
     }
 
     private static long decodeViolationOccurredCursor(Cursor c, long defaultVal) {
         if (c == null) return defaultVal;
-        String[] parts = c.token().split(":");
-        if (parts.length < 3) return defaultVal;
+        String[] parts = c.token().split(":", 3);
+        if (parts.length < 3 || !"v".equals(parts[0])) return defaultVal;
         try { return Long.parseLong(parts[1]); }
         catch (NumberFormatException e) { return defaultVal; }
     }
 
-    private static long decodeViolationIdCursor(Cursor c) {
-        if (c == null) return Long.MIN_VALUE;
-        String[] parts = c.token().split(":");
-        if (parts.length < 3) return Long.MIN_VALUE;
-        try { return Long.parseLong(parts[2]); }
-        catch (NumberFormatException e) { return Long.MIN_VALUE; }
+    private static UUID decodeViolationIdCursor(Cursor c) {
+        if (c == null) return null;
+        String[] parts = c.token().split(":", 3);
+        if (parts.length < 3 || !"v".equals(parts[0])) return null;
+        try { return UUID.fromString(parts[2]); }
+        catch (IllegalArgumentException e) { return null; }
     }
 
     @ApiStatus.Internal

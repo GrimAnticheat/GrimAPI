@@ -23,6 +23,7 @@ import ac.grim.grimac.api.storage.query.Deletes;
 import ac.grim.grimac.api.storage.query.Page;
 import ac.grim.grimac.api.storage.query.Queries;
 import ac.grim.grimac.api.storage.query.Query;
+import ac.grim.grimac.internal.storage.util.UuidV7;
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
 
@@ -33,7 +34,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
-import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * In-memory reference backend. Used by tests and as a sanity-bar for other
@@ -53,7 +53,6 @@ public final class InMemoryBackend implements Backend {
 
     public record Config() implements BackendConfig {}
 
-    private final AtomicLong violationIdSeq = new AtomicLong(1);
     private final Object writeMutex = new Object();
     private final HashMap<UUID, List<ViolationRecord>> violationsBySession = new HashMap<>();
     private final HashMap<UUID, List<ViolationRecord>> violationsByPlayer = new HashMap<>();
@@ -140,7 +139,7 @@ public final class InMemoryBackend implements Backend {
     }
 
     private void applyViolation(ViolationEvent v) {
-        long id = violationIdSeq.getAndIncrement();
+        UUID id = v.id() != null ? v.id() : UuidV7.next();
         ViolationRecord stored = new ViolationRecord(
                 id, v.sessionId(), v.playerUuid(), v.checkId(), v.vl(),
                 v.occurredEpochMs(), v.verbose(), v.verboseFormat());
@@ -214,12 +213,10 @@ public final class InMemoryBackend implements Backend {
     }
 
     private void applyViolationRecord(ViolationRecord v) {
-        long id = v.id() == 0 ? violationIdSeq.getAndIncrement() : v.id();
-        ViolationRecord stored = new ViolationRecord(
-                id, v.sessionId(), v.playerUuid(), v.checkId(), v.vl(),
-                v.occurredEpochMs(), v.verbose(), v.verboseFormat());
-        violationsBySession.computeIfAbsent(stored.sessionId(), k -> new ArrayList<>()).add(stored);
-        violationsByPlayer.computeIfAbsent(stored.playerUuid(), k -> new ArrayList<>()).add(stored);
+        // ViolationRecord.id is non-null by record contract — cross-backend
+        // bulkImport / migrate paths always carry an id through.
+        violationsBySession.computeIfAbsent(v.sessionId(), k -> new ArrayList<>()).add(v);
+        violationsByPlayer.computeIfAbsent(v.playerUuid(), k -> new ArrayList<>()).add(v);
     }
 
     private void applySessionRecord(SessionRecord s) {
@@ -268,7 +265,10 @@ public final class InMemoryBackend implements Backend {
             }
             if (query instanceof Queries.ListViolationsInSession q) {
                 List<ViolationRecord> all = new ArrayList<>(violationsBySession.getOrDefault(q.sessionId(), List.of()));
-                all.sort(Comparator.comparingLong(ViolationRecord::occurredEpochMs));
+                // (occurred_at, id) ordering matches the SQL/Mongo backends —
+                // id is the tiebreaker for same-ms bursts.
+                all.sort(Comparator.comparingLong(ViolationRecord::occurredEpochMs)
+                        .thenComparing(ViolationRecord::id));
                 int skip = decodeSkipCursor(q.cursor());
                 int end = Math.min(skip + q.pageSize(), all.size());
                 List<ViolationRecord> slice = all.subList(skip, end);
@@ -327,7 +327,7 @@ public final class InMemoryBackend implements Backend {
                     if (v != null) {
                         for (ViolationRecord r : v) {
                             List<ViolationRecord> perSession = violationsBySession.get(r.sessionId());
-                            if (perSession != null) perSession.removeIf(x -> x.id() == r.id());
+                            if (perSession != null) perSession.removeIf(x -> x.id().equals(r.id()));
                         }
                     }
                 } else if (cat == Categories.SESSION) {

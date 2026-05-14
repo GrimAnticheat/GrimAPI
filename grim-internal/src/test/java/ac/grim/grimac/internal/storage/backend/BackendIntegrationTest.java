@@ -186,7 +186,13 @@ class BackendIntegrationTest {
             Page<ViolationRecord> second = b.read(Categories.VIOLATION,
                     new Queries.ListViolationsInSession(session, 2, first.nextCursor()));
             assertEquals(2, second.items().size(), label + ": page 2");
-            assertTrue(first.items().get(0).id() < second.items().get(0).id(), label + ": monotonic id");
+            // UUIDv7 ids are k-sortable by big-endian byte order — equivalent
+            // to chronological order for our purposes. UUID.compareTo() is
+            // signed-long-pair comparison which differs from byte order for
+            // top-bit values, but UUIDv7 timestamps stay well below the sign
+            // bit (year 10895), so compareTo gives the right ordering here.
+            assertTrue(first.items().get(0).id().compareTo(second.items().get(0).id()) < 0,
+                    label + ": monotonic id");
 
             // --- delete ---
             b.delete(Categories.SESSION, new Deletes.ByPlayer(player));

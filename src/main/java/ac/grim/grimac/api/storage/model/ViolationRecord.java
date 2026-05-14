@@ -7,7 +7,7 @@ import java.util.UUID;
 
 @ApiStatus.Experimental
 public record ViolationRecord(
-        long id,
+        UUID id,
         UUID sessionId,
         UUID playerUuid,
         int checkId,
@@ -17,6 +17,7 @@ public record ViolationRecord(
         VerboseFormat verboseFormat) {
 
     public ViolationRecord {
+        if (id == null) throw new IllegalArgumentException("id");
         if (sessionId == null) throw new IllegalArgumentException("sessionId");
         if (playerUuid == null) throw new IllegalArgumentException("playerUuid");
         if (verboseFormat == null) throw new IllegalArgumentException("verboseFormat");

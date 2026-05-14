@@ -270,7 +270,21 @@ class MysqlBackendDialectTest {
                  Statement s = c.createStatement()) {
                 try (ResultSet rs = s.executeQuery("SELECT schema_version FROM grim.grim_meta WHERE id = 0")) {
                     org.junit.jupiter.api.Assertions.assertTrue(rs.next());
-                    assertEquals(8, rs.getInt(1), "schema_version bumped to 8");
+                    // v7 seed → migration walks all forward steps (v7→v8 player
+                    // gen col swap, then v8→v9 violation id long→UUIDv7).
+                    assertEquals(MysqlSchema.CURRENT_VERSION, rs.getInt(1),
+                            "schema_version walks forward to current");
+                }
+                // Verify the v8→v9 step also ran: violations.id is now BINARY(16).
+                try (ResultSet rs = s.executeQuery(
+                        "SELECT DATA_TYPE, COLUMN_TYPE FROM information_schema.COLUMNS "
+                                + "WHERE TABLE_SCHEMA = 'grim' AND TABLE_NAME = 'grim_violations' "
+                                + "AND COLUMN_NAME = 'id'")) {
+                    org.junit.jupiter.api.Assertions.assertTrue(rs.next());
+                    assertEquals("binary", rs.getString(1).toLowerCase(java.util.Locale.ROOT),
+                            "violations.id is BINARY after v8→v9");
+                    assertEquals("binary(16)", rs.getString(2).toLowerCase(java.util.Locale.ROOT),
+                            "violations.id is BINARY(16) after v8→v9");
                 }
                 try (ResultSet rs = s.executeQuery(
                         "SELECT current_name_lower FROM grim.grim_players WHERE uuid = UNHEX('0000000000000000000000000000007F')")) {

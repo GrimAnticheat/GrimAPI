@@ -136,7 +136,12 @@ public final class LegacyMigrator {
                         List<ViolationRecord> rows = new ArrayList<>(violations.size());
                         for (SessionReconstructor.ReconstructedViolation v : violations) {
                             rows.add(new ViolationRecord(
-                                    0,
+                                    // Synthesise a UUIDv7 from occurred_at so the
+                                    // migrated row's id is monotonic with its
+                                    // peers and lex-sortable as the v1 backend
+                                    // expects. The legacy long id isn't carried
+                                    // forward — only the chronology is.
+                                    ac.grim.grimac.internal.storage.util.UuidV7.fromTimestampMs(v.occurredEpochMs()),
                                     v.sessionId(),
                                     v.playerUuid(),
                                     v.checkId(),
