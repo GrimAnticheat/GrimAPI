@@ -74,7 +74,7 @@ public final class MysqlSchema {
                     + "; refusing to downgrade. Roll Grim forward.");
         }
 
-        // Forward migrations — additive only.
+        // Forward migrations.
         if (existing < 6) migrateV5ToV6(c, t);
         if (existing < 7) migrateV6ToV7(c, t);
         if (existing < 8) migrateV7ToV8(c, t, dialect);
@@ -152,7 +152,8 @@ public final class MysqlSchema {
      * (the function is Postgres 18+ only and not portable here), so this
      * does the same rebuild dance as the SQLite migration: create the new
      * table, stream rows out, mint UUIDv7s in Java from each row's
-     * {@code occurred_at}, bulk-insert into the new table, swap names.
+     * {@code occurred_at} and old numeric id, bulk-insert into the new table,
+     * swap names.
      */
     private static void migrateV8ToV9(Connection c, TableNames t) throws SQLException {
         String oldTable = t.violations();
@@ -186,13 +187,13 @@ public final class MysqlSchema {
                     + "verbose MEDIUMTEXT, "
                     + "verbose_format INT NOT NULL DEFAULT 0, "
                     + "metadata MEDIUMTEXT, "
-                    + "INDEX idx_" + oldTable + "_session_time (session_id, occurred_at), "
+                    + "INDEX idx_" + oldTable + "_session_time (session_id, occurred_at, id), "
                     + "INDEX idx_" + oldTable + "_player (player_uuid)"
                     + ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
         }
 
         try (PreparedStatement sel = c.prepareStatement(
-                "SELECT session_id, player_uuid, check_id, vl, occurred_at, verbose, verbose_format, metadata "
+                "SELECT id, session_id, player_uuid, check_id, vl, occurred_at, verbose, verbose_format, metadata "
                         + "FROM " + oldTable);
              PreparedStatement ins = c.prepareStatement(
                 "INSERT INTO " + newTable + "(id, session_id, player_uuid, check_id, vl, occurred_at, verbose, verbose_format, metadata) "
@@ -201,7 +202,7 @@ public final class MysqlSchema {
             int batched = 0;
             while (rs.next()) {
                 long occurred = rs.getLong("occurred_at");
-                UUID newId = UuidV7.fromTimestampMs(occurred);
+                UUID newId = UuidV7.fromTimestampMs(occurred, rs.getLong("id"));
                 ins.setBytes(1, UuidCodec.toBytes(newId));
                 ins.setBytes(2, rs.getBytes("session_id"));
                 ins.setBytes(3, rs.getBytes("player_uuid"));

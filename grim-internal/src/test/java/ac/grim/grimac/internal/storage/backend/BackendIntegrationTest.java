@@ -138,8 +138,8 @@ class BackendIntegrationTest {
             StorageEventHandler<ViolationEvent> vh = b.eventHandlerFor(Categories.VIOLATION);
             for (int i = 0; i < 5; i++) {
                 ViolationEvent v = new ViolationEvent();
-                v.id(UuidV7.fromTimestampMs(now + i)).sessionId(session).playerUuid(player).checkId(42 + i).vl(1.0 + i)
-                        .occurredEpochMs(now + i).verbose("v" + i).verboseFormat(VerboseFormat.TEXT);
+                v.id(UuidV7.fromTimestampMs(now, i + 1L)).sessionId(session).playerUuid(player).checkId(42 + i).vl(1.0 + i)
+                        .occurredEpochMs(now).verbose("v" + i).verboseFormat(VerboseFormat.TEXT);
                 vh.onEvent(v, i, i == 4);
             }
 
@@ -187,7 +187,7 @@ class BackendIntegrationTest {
             Page<ViolationRecord> second = b.read(Categories.VIOLATION,
                     new Queries.ListViolationsInSession(session, 2, first.nextCursor()));
             assertEquals(2, second.items().size(), label + ": page 2");
-            // UUIDv7 compareTo order matches these test timestamps.
+            // Same-ms rows page by deterministic UUIDv7 sequence.
             assertTrue(first.items().get(0).id().compareTo(second.items().get(0).id()) < 0,
                     label + ": monotonic id");
 

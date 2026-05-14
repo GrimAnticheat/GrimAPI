@@ -8,14 +8,13 @@ import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * RFC 9562 §5.7 UUIDv7 generator. Top 48 bits are unix-ms, the next 4 are
- * version 7, then 12 bits of random ("rand_a"), the variant nibble, and 62
- * bits of random ("rand_b"). The time prefix makes UUIDv7s k-sortable, so
- * unique-index B-trees stay write-friendly and cursor paging works with a
- * single {@code WHERE id > ?} predicate.
+ * version 7, then rand_a, the variant bits, and rand_b. The time prefix makes
+ * UUIDv7s k-sortable, so unique-index B-trees stay write-friendly and the id
+ * remains a stable tie-breaker for cursor paging.
  *
- * <p>Used by {@code ViolationSink} to mint ids producer-side and by the
- * per-backend schema migrations to synthesise stable replacement ids from
- * legacy {@code occurred_at} timestamps.
+ * <p>Used by the default {@code DataStore.submit} path to mint ids
+ * producer-side and by the per-backend schema migrations to synthesise stable
+ * replacement ids from legacy {@code occurred_at} timestamps.
  *
  * <p>{@link #next()} is strictly monotonic within a single JVM, even
  * across calls that land in the same wall-clock millisecond (RFC 9562
@@ -29,9 +28,9 @@ import java.util.concurrent.atomic.AtomicLong;
  * opposite to their event order, breaking the by-id monotonic-paging
  * contract the SQL backends rely on.
  *
- * <p>{@link #fromTimestampMs(long)} stays fully random — it's only used
- * during schema migration to synthesise replacement ids from legacy
- * rows, where the {@code occurred_at} field already encodes order.
+ * <p>{@link #fromTimestampMs(long)} keeps random suffix bits for tests and
+ * ad-hoc synthesis. Migration code uses {@link #fromTimestampMs(long, long)}
+ * so same-millisecond legacy rows keep their old numeric-id order.
  */
 @ApiStatus.Internal
 public final class UuidV7 {
@@ -42,6 +41,7 @@ public final class UuidV7 {
     private static final long VARIANT_BITS = 0x2L << 62;
     private static final long RAND_A_MASK = 0x0FFFL;
     private static final long RAND_B_MASK = 0x3FFFFFFFFFFFFFFFL;
+    private static final long DETERMINISTIC_LOW_MASK = (1L << 51) - 1L;
     private static final int SEQ_MAX = 0x3FFF;
     private static final int SEQ_BITS = 14;
     private static final long SEQ_MASK = (1L << SEQ_BITS) - 1L;
@@ -98,17 +98,36 @@ public final class UuidV7 {
     /**
      * Mint a UUIDv7 whose timestamp prefix encodes {@code tsMs} (clamped into
      * the 48-bit unsigned range). Used for migration: a legacy {@code long id}
-     * row's replacement UUID is synthesised from its {@code occurred_at} so
-     * the new ids preserve the original chronological ordering.
+     * row's replacement UUID can be synthesised from its {@code occurred_at}.
      *
      * <p>Bogus inputs (negative ts, ts past year ~10895) are clamped rather
      * than rejected so a single bad legacy row doesn't abort migration.
      */
     public static UUID fromTimestampMs(long tsMs) {
-        long ts = Math.max(0L, tsMs) & TS_MASK;
+        long ts = clampTimestamp(tsMs);
         ThreadLocalRandom r = ThreadLocalRandom.current();
         long msb = (ts << 16) | VERSION_BITS | (r.nextLong() & RAND_A_MASK);
         long lsb = VARIANT_BITS | (r.nextLong() & RAND_B_MASK);
         return new UUID(msb, lsb);
+    }
+
+    /**
+     * Mint a deterministic UUIDv7 for migration. {@code sequence} is encoded
+     * after the timestamp prefix, so for rows with the same {@code tsMs},
+     * UUID byte order follows the old monotonic numeric id order.
+     */
+    public static UUID fromTimestampMs(long tsMs, long sequence) {
+        long ts = clampTimestamp(tsMs);
+        long seq = sequence & Long.MAX_VALUE;
+        long randA = (seq >>> 51) & RAND_A_MASK;
+        long randB = seq & DETERMINISTIC_LOW_MASK;
+        long msb = (ts << 16) | VERSION_BITS | randA;
+        long lsb = VARIANT_BITS | randB;
+        return new UUID(msb, lsb);
+    }
+
+    private static long clampTimestamp(long tsMs) {
+        if (tsMs <= 0L) return 0L;
+        return Math.min(tsMs, TS_MASK);
     }
 }

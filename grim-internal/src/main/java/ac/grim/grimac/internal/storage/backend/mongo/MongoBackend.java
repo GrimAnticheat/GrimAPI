@@ -70,8 +70,9 @@ import java.util.logging.Logger;
  * subtype 0 (generic) for opaque byte-arrays. Violations key off a UUIDv7
  * {@code id} (also UUID-binary) minted producer-side so multiple JVMs can
  * share one MongoDB cluster without coordinating an allocator. The
- * timestamp prefix on UUIDv7 keeps the unique-index B-tree append-friendly
- * and gives the cursor a single-column ordering ({@code WHERE id > ? ORDER BY id}).
+ * timestamp prefix on UUIDv7 keeps the unique-index B-tree append-friendly;
+ * violation paging orders by {@code (occurred_at, id)} so event time remains
+ * authoritative and the UUID is a stable tie-breaker.
  */
 @ApiStatus.Internal
 public final class MongoBackend implements Backend {
@@ -155,7 +156,8 @@ public final class MongoBackend implements Backend {
         players.createIndex(Indexes.ascending("current_name_lower"));
         sessions.createIndex(Indexes.descending("started_at"));
         sessions.createIndex(Indexes.compoundIndex(Indexes.ascending("player_uuid"), Indexes.descending("started_at")));
-        violations.createIndex(Indexes.compoundIndex(Indexes.ascending("session_id"), Indexes.ascending("occurred_at")));
+        violations.createIndex(Indexes.compoundIndex(
+                Indexes.ascending("session_id"), Indexes.ascending("occurred_at"), Indexes.ascending("id")));
         violations.createIndex(Indexes.ascending("player_uuid"));
         violations.createIndex(Indexes.ascending("id"), new IndexOptions().unique(true));
         settings.createIndex(Indexes.compoundIndex(
@@ -191,9 +193,10 @@ public final class MongoBackend implements Backend {
     /**
      * v5 → v6: violation {@code id} type changes from {@code long} to UUID
      * (UUIDv7, stored as {@link BsonBinary} subtype 4). Each legacy row's
-     * replacement id is synthesised from {@code occurred_at} so chronological
-     * ordering is preserved. The unique index on {@code id} is rebuilt
-     * afterwards because index entries reference the now-replaced byte values.
+     * replacement id is synthesised from {@code occurred_at} and the old
+     * numeric id so same-millisecond ordering is preserved. The unique index
+     * on {@code id} is rebuilt afterwards because index entries reference the
+     * now-replaced byte values.
      */
     private void migrateV5ToV6() {
         logger.info("[grim-datastore] migrating Mongo violations id long→UUIDv7 …");
@@ -209,7 +212,8 @@ public final class MongoBackend implements Backend {
             // Already migrated rows have BsonBinary / Binary ids — skip.
             if (idObj instanceof org.bson.types.Binary || idObj instanceof BsonBinary) continue;
             long occurred = d.getLong("occurred_at") == null ? 0L : d.getLong("occurred_at");
-            UUID newId = UuidV7.fromTimestampMs(occurred);
+            long legacyId = idObj instanceof Number n ? n.longValue() : 0L;
+            UUID newId = UuidV7.fromTimestampMs(occurred, legacyId);
             ops.add(new UpdateOneModel<>(Filters.eq("_id", d.get("_id")),
                     Updates.set("id", binUuid(newId))));
             if (ops.size() >= 1024) {

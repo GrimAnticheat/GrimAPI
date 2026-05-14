@@ -17,8 +17,8 @@ import java.util.UUID;
  * materialise on read from their native storage — never from an event.
  * <p>
  * Callers may pre-set {@code id()} to preserve an imported record id. Otherwise
- * the default violation sink fills it before publishing. Backends expect a
- * populated id when they receive the event.
+ * the default {@code DataStore.submit} path fills it before publishing. Backends
+ * expect a populated id when they receive the event.
  */
 @ApiStatus.Experimental
 public final class ViolationEvent {

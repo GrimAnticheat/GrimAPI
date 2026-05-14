@@ -5,6 +5,12 @@ import org.jetbrains.annotations.Nullable;
 
 import java.util.UUID;
 
+/**
+ * Immutable read-side violation row. The {@code id} is a UUIDv7 generated on
+ * the write path; its timestamp prefix gives storage engines a sortable,
+ * globally unique tie-breaker while {@code occurredEpochMs} remains the event
+ * time used for history ordering.
+ */
 @ApiStatus.Experimental
 public record ViolationRecord(
         UUID id,

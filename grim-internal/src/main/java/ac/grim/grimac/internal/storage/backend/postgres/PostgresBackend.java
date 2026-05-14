@@ -51,7 +51,7 @@ import static ac.grim.grimac.internal.storage.backend.postgres.PostgresSchema.qu
  *   <li>UUIDs stored as {@code BYTEA} (Postgres's native byte array). The
  *       alternative was the dedicated {@code UUID} type, but that would
  *       require a different binding path than the rest of the backends.</li>
- *   <li>Auto-increment via {@code BIGSERIAL} instead of {@code AUTO_INCREMENT}.</li>
+ *   <li>Violation ids are UUIDv7 bytes generated before insert.</li>
  *   <li>All identifiers quoted with {@code "…"} so custom
  *       {@link TableNames} that happen to overlap a Postgres reserved word
  *       (e.g. {@code "user"}) still work.</li>

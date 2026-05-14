@@ -157,7 +157,7 @@ public final class PostgresSchema {
                     + "metadata TEXT"
                     + ")");
             s.executeUpdate("CREATE INDEX " + quoteId("idx_" + t.violations() + "_session_time")
-                    + " ON " + quoteId(t.violations()) + " (session_id, occurred_at)");
+                    + " ON " + quoteId(t.violations()) + " (session_id, occurred_at, id)");
             s.executeUpdate("CREATE INDEX " + quoteId("idx_" + t.violations() + "_player")
                     + " ON " + quoteId(t.violations()) + " (player_uuid)");
 
@@ -177,7 +177,8 @@ public final class PostgresSchema {
      * {@code BYTEA} carrying a UUIDv7. Postgres &lt;18 has no native uuidv7()
      * generator, so this does the same rebuild dance as the other backends:
      * create a new table, stream rows out, mint UUIDv7 from each row's
-     * {@code occurred_at} in Java, bulk-insert into the new table, swap names.
+     * {@code occurred_at} and old numeric id in Java, bulk-insert into the new
+     * table, swap names.
      *
      * <p>Also drops the BIGSERIAL sequence (the old {@code id} column's
      * default), which Postgres leaves behind when the table is dropped.
@@ -212,7 +213,7 @@ public final class PostgresSchema {
             }
 
             try (PreparedStatement sel = c.prepareStatement(
-                    "SELECT session_id, player_uuid, check_id, vl, occurred_at, \"verbose\", verbose_format, metadata "
+                    "SELECT id, session_id, player_uuid, check_id, vl, occurred_at, \"verbose\", verbose_format, metadata "
                             + "FROM " + quoteId(oldTable));
                  PreparedStatement ins = c.prepareStatement(
                     "INSERT INTO " + quoteId(newTable) + "(id, session_id, player_uuid, check_id, vl, occurred_at, \"verbose\", verbose_format, metadata) "
@@ -221,7 +222,7 @@ public final class PostgresSchema {
                 int batched = 0;
                 while (rs.next()) {
                     long occurred = rs.getLong("occurred_at");
-                    UUID newId = UuidV7.fromTimestampMs(occurred);
+                    UUID newId = UuidV7.fromTimestampMs(occurred, rs.getLong("id"));
                     ins.setBytes(1, UuidCodec.toBytes(newId));
                     ins.setBytes(2, rs.getBytes("session_id"));
                     ins.setBytes(3, rs.getBytes("player_uuid"));
@@ -243,7 +244,7 @@ public final class PostgresSchema {
                 s.executeUpdate("DROP TABLE " + quoteId(oldTable) + " CASCADE");
                 s.executeUpdate("ALTER TABLE " + quoteId(newTable) + " RENAME TO " + quoteId(oldTable));
                 s.executeUpdate("CREATE INDEX " + quoteId("idx_" + oldTable + "_session_time")
-                        + " ON " + quoteId(oldTable) + " (session_id, occurred_at)");
+                        + " ON " + quoteId(oldTable) + " (session_id, occurred_at, id)");
                 s.executeUpdate("CREATE INDEX " + quoteId("idx_" + oldTable + "_player")
                         + " ON " + quoteId(oldTable) + " (player_uuid)");
             }

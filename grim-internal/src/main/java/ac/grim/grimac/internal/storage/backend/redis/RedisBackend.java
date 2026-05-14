@@ -79,9 +79,10 @@ import java.util.logging.Logger;
  *   <li>{@code <prefix><violations>:by-player:<uuid-hex>}: ZSET, score=occurredAt, member=uuid-hex.</li>
  *   <li>{@code <prefix><settings>:<scope>:<scope_key>:<key>}: hash holding value+updated_at.</li>
  * </ul>
- * Violation ids are UUIDv7 minted producer-side by {@code ViolationSinkImpl};
- * the timestamp prefix means they're k-sortable and the lookup keys stay
- * append-friendly to Redis's hash index.
+ * Violation ids are UUIDv7 minted producer-side by the default
+ * {@code DataStore.submit} path. The timestamp prefix keeps ids k-sortable;
+ * Redis pages violations by {@code occurred_at} score with id as the
+ * same-score tie-breaker.
  */
 @ApiStatus.Internal
 public final class RedisBackend implements Backend {
@@ -202,7 +203,10 @@ public final class RedisBackend implements Backend {
                 if (oldId.length() == 32 && oldId.matches("[0-9a-fA-F]+")) continue;
                 String occurredStr = h.get("occurred_at");
                 long occurred = occurredStr == null ? 0L : Long.parseLong(occurredStr);
-                UUID newId = UuidV7.fromTimestampMs(occurred);
+                long legacyId;
+                try { legacyId = Long.parseLong(oldId); }
+                catch (NumberFormatException ignored) { legacyId = 0L; }
+                UUID newId = UuidV7.fromTimestampMs(occurred, legacyId);
                 String newIdHex = hex(newId);
                 String newKey = prefix + newIdHex;
                 String sessionHex = h.get("session_id");

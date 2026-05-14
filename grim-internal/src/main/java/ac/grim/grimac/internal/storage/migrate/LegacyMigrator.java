@@ -137,7 +137,7 @@ public final class LegacyMigrator {
                         List<ViolationRecord> rows = new ArrayList<>(violations.size());
                         for (SessionReconstructor.ReconstructedViolation v : violations) {
                             rows.add(new ViolationRecord(
-                                    UuidV7.fromTimestampMs(v.occurredEpochMs()),
+                                    UuidV7.fromTimestampMs(v.occurredEpochMs(), v.legacyId()),
                                     v.sessionId(),
                                     v.playerUuid(),
                                     v.checkId(),

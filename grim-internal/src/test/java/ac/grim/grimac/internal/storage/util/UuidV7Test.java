@@ -12,6 +12,26 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class UuidV7Test {
 
     @Test
+    void deterministicMigrationIdsPreserveSameTimestampSequenceOrder() {
+        long ts = 1_700_000_000_000L;
+
+        UUID first = UuidV7.fromTimestampMs(ts, 41L);
+        UUID second = UuidV7.fromTimestampMs(ts, 42L);
+
+        assertTrue(first.compareTo(second) < 0);
+        assertEquals(first, UuidV7.fromTimestampMs(ts, 41L));
+        assertEquals(ts, timestampMs(first));
+    }
+
+    @Test
+    void timestampClampDoesNotWrapFutureValues() {
+        long max = (1L << 48) - 1L;
+
+        assertEquals(0L, timestampMs(UuidV7.fromTimestampMs(-1L)));
+        assertEquals(max, timestampMs(UuidV7.fromTimestampMs(max + 1L)));
+    }
+
+    @Test
     void sequenceOverflowAdvancesLogicalTimestamp() throws Exception {
         // Force the internal state to (fixedMs, seq=0x3FFE) so the next two
         // calls hit (a) the last slot of the current ms and (b) the overflow

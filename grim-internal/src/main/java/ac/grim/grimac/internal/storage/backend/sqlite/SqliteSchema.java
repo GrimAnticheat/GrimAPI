@@ -70,8 +70,7 @@ public final class SqliteSchema {
                     + "; refusing to downgrade. Roll Grim forward.");
         }
 
-        // Forward migrations — additive only; each step is idempotent and
-        // gated on its target version.
+        // Forward migrations; each step is idempotent and gated on its target version.
         if (existing < 2) migrateV1ToV2(c, t);
         if (existing < 3) migrateV2ToV3(c, t);
         if (existing < 4) migrateV3ToV4(c, t);
@@ -125,8 +124,9 @@ public final class SqliteSchema {
      * KEY AUTOINCREMENT} to {@code BLOB PRIMARY KEY} carrying a 16-byte
      * UUIDv7. SQLite can't change a column's type in-place, so this
      * rebuilds the table: stream existing rows out, mint a UUIDv7 from each
-     * row's {@code occurred_at} (preserves chronological order), bulk-insert
-     * into a fresh table, then atomically swap.
+     * row's {@code occurred_at} and old numeric id (preserves
+     * same-millisecond order), bulk-insert into a fresh table, then
+     * atomically swap.
      *
      * <p>Bogus {@code occurred_at} values (negative, missing) clamp to 0 in
      * {@link UuidV7#fromTimestampMs} rather than aborting migration — the
@@ -161,7 +161,7 @@ public final class SqliteSchema {
             }
 
             try (PreparedStatement sel = c.prepareStatement(
-                    "SELECT session_id, player_uuid, check_id, vl, occurred_at, verbose, verbose_format, metadata "
+                    "SELECT id, session_id, player_uuid, check_id, vl, occurred_at, verbose, verbose_format, metadata "
                             + "FROM " + oldTable);
                  PreparedStatement ins = c.prepareStatement(
                     "INSERT INTO " + newTable + "(id, session_id, player_uuid, check_id, vl, occurred_at, verbose, verbose_format, metadata) "
@@ -170,7 +170,7 @@ public final class SqliteSchema {
                 int batched = 0;
                 while (rs.next()) {
                     long occurred = rs.getLong("occurred_at");
-                    UUID newId = UuidV7.fromTimestampMs(occurred);
+                    UUID newId = UuidV7.fromTimestampMs(occurred, rs.getLong("id"));
                     ins.setBytes(1, UuidCodec.toBytes(newId));
                     ins.setBytes(2, rs.getBytes("session_id"));
                     ins.setBytes(3, rs.getBytes("player_uuid"));
@@ -189,7 +189,7 @@ public final class SqliteSchema {
             try (Statement s = c.createStatement()) {
                 s.executeUpdate("DROP TABLE " + oldTable);
                 s.executeUpdate("ALTER TABLE " + newTable + " RENAME TO " + oldTable);
-                s.executeUpdate("CREATE INDEX idx_" + oldTable + "_session_time ON " + oldTable + "(session_id, occurred_at)");
+                s.executeUpdate("CREATE INDEX idx_" + oldTable + "_session_time ON " + oldTable + "(session_id, occurred_at, id)");
                 s.executeUpdate("CREATE INDEX idx_" + oldTable + "_player ON " + oldTable + "(player_uuid)");
             }
 
@@ -270,7 +270,7 @@ public final class SqliteSchema {
                     + "verbose_format INTEGER NOT NULL DEFAULT 0, "
                     + "metadata TEXT"
                     + ")");
-            s.executeUpdate("CREATE INDEX idx_" + t.violations() + "_session_time ON " + t.violations() + "(session_id, occurred_at)");
+            s.executeUpdate("CREATE INDEX idx_" + t.violations() + "_session_time ON " + t.violations() + "(session_id, occurred_at, id)");
             s.executeUpdate("CREATE INDEX idx_" + t.violations() + "_player ON " + t.violations() + "(player_uuid)");
 
             s.executeUpdate("CREATE TABLE " + t.settings() + " ("

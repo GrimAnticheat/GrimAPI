@@ -100,7 +100,7 @@ public interface MysqlDialect {
                 + "verbose MEDIUMTEXT, "
                 + "verbose_format INT NOT NULL DEFAULT 0, "
                 + "metadata MEDIUMTEXT, "
-                + "INDEX idx_" + t.violations() + "_session_time (session_id, occurred_at), "
+                + "INDEX idx_" + t.violations() + "_session_time (session_id, occurred_at, id), "
                 + "INDEX idx_" + t.violations() + "_player (player_uuid)"
                 + ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
 

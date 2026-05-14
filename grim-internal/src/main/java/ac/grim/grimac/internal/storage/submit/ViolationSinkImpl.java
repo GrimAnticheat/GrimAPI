@@ -5,7 +5,6 @@ import ac.grim.grimac.api.storage.category.Categories;
 import ac.grim.grimac.api.storage.event.ViolationEvent;
 import ac.grim.grimac.api.storage.submit.SubmitResult;
 import ac.grim.grimac.api.storage.submit.ViolationSink;
-import ac.grim.grimac.internal.storage.util.UuidV7;
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
 
@@ -29,10 +28,7 @@ public final class ViolationSinkImpl implements ViolationSink {
     @Override
     public @NotNull SubmitResult record(@NotNull Consumer<ViolationEvent> configurer) {
         if (closed) return SubmitResult.DROPPED_SHUTTING_DOWN;
-        store.submit(Categories.VIOLATION, event -> {
-            configurer.accept(event);
-            if (event.id() == null) event.id(UuidV7.next());
-        });
+        store.submit(Categories.VIOLATION, configurer);
         // submit() is non-blocking; overflow is reported through metrics.
         return SubmitResult.QUEUED;
     }

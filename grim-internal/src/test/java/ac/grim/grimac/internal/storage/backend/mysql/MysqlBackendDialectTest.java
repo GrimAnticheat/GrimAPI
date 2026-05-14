@@ -119,8 +119,8 @@ class MysqlBackendDialectTest {
             StorageEventHandler<ViolationEvent> vh = b.eventHandlerFor(Categories.VIOLATION);
             for (int i = 0; i < 5; i++) {
                 ViolationEvent v = new ViolationEvent();
-                v.id(UuidV7.fromTimestampMs(t0 + i)).sessionId(session).playerUuid(player).checkId(42 + i).vl(1.0 + i)
-                        .occurredEpochMs(t0 + i).verbose("v" + i).verboseFormat(VerboseFormat.TEXT);
+                v.id(UuidV7.fromTimestampMs(t0, i + 1L)).sessionId(session).playerUuid(player).checkId(42 + i).vl(1.0 + i)
+                        .occurredEpochMs(t0).verbose("v" + i).verboseFormat(VerboseFormat.TEXT);
                 vh.onEvent(v, i, i == 4);
             }
 
@@ -188,15 +188,15 @@ class MysqlBackendDialectTest {
      * {@code current_name_lower} column, schema_version=7), then boots
      * MysqlBackend and verifies the v7→v8 migration ran: the gen col exists
      * and is auto-populated, the new plain index is in place, the old
-     * functional index is gone, schema_version is 8, and read queries
-     * still work end-to-end.
+     * functional index is gone, schema_version reaches current, and read
+     * queries still work end-to-end.
      * <p>
      * MariaDB-only: skipped on MariaDB because no v7 MariaDB schema ever
      * existed (the dialect failed to initialise pre-this-PR; new MariaDB
      * deployments are born at v8 directly via the unified baseline).
      */
     @org.junit.jupiter.api.Test
-    @DisplayName("MySQL v7→v8 migration — gen col + index swap on existing database")
+    @DisplayName("MySQL v7→current migration — gen col/index swap and UUID violation ids")
     void v7ToV8Migration(@TempDir Path tempDir) throws Exception {
         Flavor flavor = Flavor.MYSQL;
         assumeTrue(reachable(flavor), "Skipping; mysql fixture not reachable");
