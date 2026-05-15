@@ -9,6 +9,7 @@ import ac.grim.grimac.api.storage.backend.StorageEventHandler;
 import ac.grim.grimac.api.storage.category.Capability;
 import ac.grim.grimac.api.storage.category.Categories;
 import ac.grim.grimac.api.storage.category.Category;
+import ac.grim.grimac.api.storage.check.CheckCatalogPersistence;
 import ac.grim.grimac.api.storage.event.PlayerIdentityEvent;
 import ac.grim.grimac.api.storage.event.SessionEvent;
 import ac.grim.grimac.api.storage.event.SettingEvent;
@@ -23,6 +24,7 @@ import ac.grim.grimac.api.storage.query.Deletes;
 import ac.grim.grimac.api.storage.query.Page;
 import ac.grim.grimac.api.storage.query.Queries;
 import ac.grim.grimac.api.storage.query.Query;
+import ac.grim.grimac.internal.storage.checks.InMemoryCheckCatalogPersistence;
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
 
@@ -60,6 +62,7 @@ public final class InMemoryBackend implements Backend {
     private final HashMap<UUID, PlayerIdentity> identities = new HashMap<>();
     private final HashMap<String, PlayerIdentity> identityByName = new HashMap<>();
     private final HashMap<String, SettingRecord> settings = new HashMap<>();
+    private final CheckCatalogPersistence checkCatalog = new InMemoryCheckCatalogPersistence();
 
     @Override public @NotNull String id() { return ID; }
 
@@ -83,6 +86,8 @@ public final class InMemoryBackend implements Backend {
     }
 
     @Override public void init(@NotNull BackendContext ctx) {}
+
+    @Override public @NotNull CheckCatalogPersistence checkCatalog() { return checkCatalog; }
 
     @Override public void flush() {}
 

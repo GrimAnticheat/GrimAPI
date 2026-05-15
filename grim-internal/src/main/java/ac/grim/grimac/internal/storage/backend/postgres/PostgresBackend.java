@@ -8,6 +8,7 @@ import ac.grim.grimac.api.storage.backend.StorageEventHandler;
 import ac.grim.grimac.api.storage.category.Capability;
 import ac.grim.grimac.api.storage.category.Categories;
 import ac.grim.grimac.api.storage.category.Category;
+import ac.grim.grimac.api.storage.check.CheckCatalogPersistence;
 import ac.grim.grimac.api.storage.config.TableNames;
 import ac.grim.grimac.api.storage.event.PlayerIdentityEvent;
 import ac.grim.grimac.api.storage.event.SessionEvent;
@@ -24,6 +25,7 @@ import ac.grim.grimac.api.storage.query.Deletes;
 import ac.grim.grimac.api.storage.query.Page;
 import ac.grim.grimac.api.storage.query.Queries;
 import ac.grim.grimac.api.storage.query.Query;
+import ac.grim.grimac.internal.storage.checks.JdbcCheckCatalogPersistence;
 import ac.grim.grimac.internal.storage.util.UuidCodec;
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
@@ -150,6 +152,16 @@ public final class PostgresBackend implements Backend {
     private Connection openConnection() throws SQLException {
         return DriverManager.getConnection(config.jdbcUrl(), config.user(),
                 config.password() == null ? "" : config.password());
+    }
+
+    @Override
+    public @NotNull CheckCatalogPersistence checkCatalog() {
+        String table = config.tableNames().checks();
+        String quotedTable = quoteId(table);
+        String escapedTable = quotedTable.replace("'", "''");
+        String alignSequence = "SELECT setval(pg_get_serial_sequence('" + escapedTable + "', 'check_id'), "
+                + "GREATEST((SELECT COALESCE(MAX(check_id), 0) FROM " + quotedTable + "), 1), true)";
+        return new JdbcCheckCatalogPersistence(this::openConnection, quotedTable, alignSequence);
     }
 
     @Override public void flush() {}

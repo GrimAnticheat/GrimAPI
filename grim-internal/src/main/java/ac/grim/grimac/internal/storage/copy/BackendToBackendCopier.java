@@ -4,6 +4,7 @@ import ac.grim.grimac.api.storage.backend.Backend;
 import ac.grim.grimac.api.storage.backend.BackendException;
 import ac.grim.grimac.api.storage.category.Categories;
 import ac.grim.grimac.api.storage.category.Category;
+import ac.grim.grimac.api.storage.check.CheckCatalogRow;
 import ac.grim.grimac.api.storage.model.PlayerIdentity;
 import ac.grim.grimac.api.storage.model.SessionRecord;
 import ac.grim.grimac.api.storage.model.ViolationRecord;
@@ -24,9 +25,10 @@ import java.util.UUID;
 import java.util.function.LongConsumer;
 
 /**
- * One-shot v1-to-v1 copier. Streams SESSION + VIOLATION + PLAYER_IDENTITY records
- * from a source {@link Backend} into a destination via its {@link Backend#bulkImport}
- * escape hatch. No rings; synchronous; progress is reported through {@code onBatch}.
+ * One-shot v1-to-v1 copier. Copies the check catalog, then streams SESSION +
+ * VIOLATION + PLAYER_IDENTITY records from a source {@link Backend} into a
+ * destination via its {@link Backend#bulkImport} escape hatch. No rings;
+ * synchronous; progress is reported through {@code onBatch}.
  * <p>
  * Scans by player UUID: identity rows in the source define the set of players
  * to walk, then for each player we page sessions and (per session) page
@@ -65,6 +67,7 @@ public final class BackendToBackendCopier {
      */
     public Result run(LongConsumer onBatch) throws BackendException {
         long start = System.currentTimeMillis();
+        copyCheckCatalog();
         // Enumerate source players. The read API doesn't expose "list all identities"
         // today; we derive the player set from sessions (one per player-scoped
         // session listing) as a reasonable proxy. Sessions without an identity row
@@ -129,6 +132,12 @@ public final class BackendToBackendCopier {
         }
         return new Result(copiedSessions, copiedViolations, identities.size(),
                 System.currentTimeMillis() - start);
+    }
+
+    private void copyCheckCatalog() throws BackendException {
+        for (CheckCatalogRow row : src.checkCatalog().loadAll()) {
+            dst.checkCatalog().upsert(row);
+        }
     }
 
     /**

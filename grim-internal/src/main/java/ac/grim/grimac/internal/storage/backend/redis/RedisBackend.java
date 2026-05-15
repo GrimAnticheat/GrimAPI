@@ -8,6 +8,7 @@ import ac.grim.grimac.api.storage.backend.StorageEventHandler;
 import ac.grim.grimac.api.storage.category.Capability;
 import ac.grim.grimac.api.storage.category.Categories;
 import ac.grim.grimac.api.storage.category.Category;
+import ac.grim.grimac.api.storage.check.CheckCatalogPersistence;
 import ac.grim.grimac.api.storage.config.TableNames;
 import ac.grim.grimac.api.storage.event.PlayerIdentityEvent;
 import ac.grim.grimac.api.storage.event.SessionEvent;
@@ -165,6 +166,14 @@ public final class RedisBackend implements Backend {
         } catch (RuntimeException e) {
             throw new BackendException("failed to initialise Redis backend", e);
         }
+    }
+
+    @Override
+    public @NotNull CheckCatalogPersistence checkCatalog() {
+        return new RedisCheckCatalogPersistence(
+                pool,
+                metaKey(),
+                tableKey(config.tableNames().checks()));
     }
 
     /**

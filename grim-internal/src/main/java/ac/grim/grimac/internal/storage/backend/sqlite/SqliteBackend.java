@@ -8,6 +8,7 @@ import ac.grim.grimac.api.storage.backend.StorageEventHandler;
 import ac.grim.grimac.api.storage.category.Capability;
 import ac.grim.grimac.api.storage.category.Categories;
 import ac.grim.grimac.api.storage.category.Category;
+import ac.grim.grimac.api.storage.check.CheckCatalogPersistence;
 import ac.grim.grimac.api.storage.event.PlayerIdentityEvent;
 import ac.grim.grimac.api.storage.event.SessionEvent;
 import ac.grim.grimac.api.storage.event.SettingEvent;
@@ -27,6 +28,7 @@ import ac.grim.grimac.internal.storage.backend.sqlite.writers.IdentityUpserter;
 import ac.grim.grimac.internal.storage.backend.sqlite.writers.SessionUpserter;
 import ac.grim.grimac.internal.storage.backend.sqlite.writers.SettingsUpserter;
 import ac.grim.grimac.internal.storage.backend.sqlite.writers.UpserterFactory;
+import ac.grim.grimac.internal.storage.checks.JdbcCheckCatalogPersistence;
 import ac.grim.grimac.internal.storage.util.UuidCodec;
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
@@ -151,6 +153,11 @@ public final class SqliteBackend implements Backend {
                 throw new BackendException("failed to initialise SQLite backend", e);
             }
         }
+    }
+
+    @Override
+    public @NotNull CheckCatalogPersistence checkCatalog() {
+        return new JdbcCheckCatalogPersistence(this::openConnection, config.tableNames().checks());
     }
 
     /**

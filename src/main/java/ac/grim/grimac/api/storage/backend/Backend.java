@@ -2,6 +2,7 @@ package ac.grim.grimac.api.storage.backend;
 
 import ac.grim.grimac.api.storage.category.Capability;
 import ac.grim.grimac.api.storage.category.Category;
+import ac.grim.grimac.api.storage.check.CheckCatalogPersistence;
 import ac.grim.grimac.api.storage.query.DeleteCriteria;
 import ac.grim.grimac.api.storage.query.Page;
 import ac.grim.grimac.api.storage.query.Query;
@@ -42,6 +43,13 @@ public interface Backend {
     @NotNull Set<Category<?>> supportedCategories();
 
     void init(@NotNull BackendContext ctx) throws BackendException;
+
+    /**
+     * Durable check catalog for the same storage target. History reads need
+     * this to map {@code violation.check_id} back to stable keys and display
+     * names after restarts and across multi-server deployments.
+     */
+    @NotNull CheckCatalogPersistence checkCatalog();
 
     void flush() throws BackendException;
 

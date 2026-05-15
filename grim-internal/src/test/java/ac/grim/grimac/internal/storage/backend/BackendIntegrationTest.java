@@ -6,6 +6,8 @@ import ac.grim.grimac.api.storage.backend.BackendContext;
 import ac.grim.grimac.api.storage.backend.BackendException;
 import ac.grim.grimac.api.storage.backend.StorageEventHandler;
 import ac.grim.grimac.api.storage.category.Categories;
+import ac.grim.grimac.api.storage.check.CheckCatalogPersistence;
+import ac.grim.grimac.api.storage.check.CheckCatalogRow;
 import ac.grim.grimac.api.storage.config.TableNames;
 import ac.grim.grimac.api.storage.event.PlayerIdentityEvent;
 import ac.grim.grimac.api.storage.event.SessionEvent;
@@ -44,6 +46,7 @@ import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -116,6 +119,39 @@ class BackendIntegrationTest {
         b.init(ctx(b.id()));
 
         try {
+            CheckCatalogPersistence checks = b.checkCatalog();
+            int checkId = checks.insert("grim.test.reach", "Reach", "Reach test", "3.0-test", 123L);
+            assertEquals(checkId, checks.insert("grim.test.reach", "Reach", "Reach test", "3.0-test", 123L),
+                    label + ": check catalog insert is idempotent");
+            checks.updateDisplayAndDescription(checkId, "ReachA", "Updated reach test");
+            CheckCatalogRow checkRow = null;
+            for (CheckCatalogRow row : checks.loadAll()) {
+                if (row.checkId() == checkId) {
+                    checkRow = row;
+                    break;
+                }
+            }
+            assertNotNull(checkRow, label + ": check catalog row reloads");
+            assertEquals("grim.test.reach", checkRow.stableKey(), label + ": check stable key");
+            assertEquals("ReachA", checkRow.display(), label + ": check display update");
+            int importedId = checkId + 1000;
+            CheckCatalogRow imported = new CheckCatalogRow(
+                    importedId, "grim.test.copy_import", "CopyImport", "Copied check", "3.0-test", 456L);
+            checks.upsert(imported);
+            CheckCatalogRow importedRow = findCheck(checks, importedId);
+            assertNotNull(importedRow, label + ": upserted check catalog row reloads");
+            assertEquals("grim.test.copy_import", importedRow.stableKey(), label + ": upsert stable key");
+            assertThrows(IllegalStateException.class,
+                    () -> checks.upsert(new CheckCatalogRow(
+                            importedId + 1, "grim.test.copy_import", "Conflict", null, "3.0-test", 789L)),
+                    label + ": upsert rejects stable-key conflicts");
+            assertThrows(IllegalStateException.class,
+                    () -> checks.upsert(new CheckCatalogRow(
+                            importedId, "grim.test.other", "Conflict", null, "3.0-test", 789L)),
+                    label + ": upsert rejects check-id conflicts");
+            int afterImportId = checks.insert("grim.test.after_import", "AfterImport", null, "3.0-test", 789L);
+            assertTrue(afterImportId > importedId, label + ": check_id sequence advances past imported ids");
+
             UUID player = UUID.randomUUID();
             UUID session = UUID.randomUUID();
             long now = System.currentTimeMillis();
@@ -267,6 +303,13 @@ class BackendIntegrationTest {
             // Best-effort: leftover test data isn't worth failing a passing
             // round-trip over.
         }
+    }
+
+    private static CheckCatalogRow findCheck(CheckCatalogPersistence checks, int checkId) {
+        for (CheckCatalogRow row : checks.loadAll()) {
+            if (row.checkId() == checkId) return row;
+        }
+        return null;
     }
 
     // --- helpers ------------------------------------------------------------

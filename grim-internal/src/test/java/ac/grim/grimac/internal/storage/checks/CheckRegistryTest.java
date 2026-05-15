@@ -1,5 +1,7 @@
 package ac.grim.grimac.internal.storage.checks;
 
+import ac.grim.grimac.api.storage.check.CheckCatalogPersistence;
+import ac.grim.grimac.api.storage.check.CheckCatalogRow;
 import org.jetbrains.annotations.Nullable;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -20,6 +22,7 @@ import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -196,17 +199,37 @@ class CheckRegistryTest {
                 "unparseable version degrades to legacy/");
     }
 
+    @Test
+    void productionInMemoryPersistenceRejectsUpsertConflictsAndAdvancesSequence() {
+        InMemoryCheckCatalogPersistence checks = new InMemoryCheckCatalogPersistence();
+        CheckCatalogRow imported = new CheckCatalogRow(
+                50, "grim.copy.imported", "Imported", "Imported check", "3.0-test", 123L);
+
+        checks.upsert(imported);
+
+        assertThrows(IllegalStateException.class,
+                () -> checks.upsert(new CheckCatalogRow(
+                        51, "grim.copy.imported", "Conflict", null, "3.0-test", 456L)),
+                "stable-key conflicts should be rejected");
+        assertThrows(IllegalStateException.class,
+                () -> checks.upsert(new CheckCatalogRow(
+                        50, "grim.copy.other", "Conflict", null, "3.0-test", 456L)),
+                "check-id conflicts should be rejected");
+        int next = checks.insert("grim.copy.after_import", "AfterImport", null, "3.0-test", 456L);
+        assertTrue(next > imported.checkId(), "upsert should advance the next generated check_id");
+    }
+
     // ---- in-memory persistence ----
 
-    private static final class InMemoryPersistence implements CheckRegistry.CheckPersistence {
-        private final Map<Integer, CheckRegistry.CheckRow> rows = new ConcurrentHashMap<>();
+    private static final class InMemoryPersistence implements CheckCatalogPersistence {
+        private final Map<Integer, CheckCatalogRow> rows = new ConcurrentHashMap<>();
         private final Map<String, Integer> byKey = new ConcurrentHashMap<>();
         private final AtomicInteger nextId = new AtomicInteger(1);
         int insertCount = 0;
         int updateCount = 0;
 
         @Override
-        public Iterable<CheckRegistry.CheckRow> loadAll() {
+        public Iterable<CheckCatalogRow> loadAll() {
             return new ArrayList<>(rows.values());
         }
 
@@ -219,7 +242,7 @@ class CheckRegistryTest {
             Integer existing = byKey.get(stableKey);
             if (existing != null) return existing;
             int id = nextId.getAndIncrement();
-            rows.put(id, new CheckRegistry.CheckRow(
+            rows.put(id, new CheckCatalogRow(
                     id, stableKey, display, description, introducedVersion, introducedAt));
             byKey.put(stableKey, id);
             insertCount++;
@@ -227,12 +250,30 @@ class CheckRegistryTest {
         }
 
         @Override
+        public synchronized void upsert(CheckCatalogRow row) {
+            Integer existingId = byKey.get(row.stableKey());
+            if (existingId != null && existingId != row.checkId()) {
+                throw new IllegalStateException("stable key " + row.stableKey()
+                        + " already maps to check_id " + existingId + ", cannot import as " + row.checkId());
+            }
+            CheckCatalogRow existingRow = rows.get(row.checkId());
+            if (existingRow != null && !existingRow.stableKey().equals(row.stableKey())) {
+                throw new IllegalStateException("check_id " + row.checkId()
+                        + " already maps to stable key " + existingRow.stableKey()
+                        + ", cannot import " + row.stableKey());
+            }
+            rows.put(row.checkId(), row);
+            byKey.put(row.stableKey(), row.checkId());
+            nextId.updateAndGet(current -> Math.max(current, row.checkId() + 1));
+        }
+
+        @Override
         public synchronized void updateDisplayAndDescription(int checkId,
                                                              @Nullable String display,
                                                              @Nullable String description) {
-            CheckRegistry.CheckRow row = rows.get(checkId);
+            CheckCatalogRow row = rows.get(checkId);
             if (row == null) return;
-            rows.put(checkId, new CheckRegistry.CheckRow(
+            rows.put(checkId, new CheckCatalogRow(
                     row.checkId(), row.stableKey(), display, description,
                     row.introducedVersion(), row.introducedAt()));
             updateCount++;

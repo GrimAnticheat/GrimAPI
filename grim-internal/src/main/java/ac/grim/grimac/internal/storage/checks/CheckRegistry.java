@@ -1,5 +1,7 @@
 package ac.grim.grimac.internal.storage.checks;
 
+import ac.grim.grimac.api.storage.check.CheckCatalogPersistence;
+import ac.grim.grimac.api.storage.check.CheckCatalogRow;
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.Nullable;
 
@@ -10,10 +12,8 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Function;
 
 /**
- * In-memory {@code stable_key ↔ check_id} registry backed by a pluggable
- * {@link CheckPersistence}. The current built-in implementations are a
- * SQLite-backed one (for production) and an in-memory stub (for tests and
- * for setups without SQLite in their routing).
+ * In-memory {@code stable_key ↔ check_id} registry backed by the routed
+ * backend's {@link CheckCatalogPersistence}.
  * <p>
  * {@link #intern(String, String, String)} is atomic: if two threads interleave
  * on the same stable_key, one wins and the other sees the winner's check_id
@@ -29,28 +29,28 @@ import java.util.function.Function;
 @ApiStatus.Internal
 public final class CheckRegistry {
 
-    private final CheckPersistence persistence;
-    private final Map<String, CheckRow> byStableKey = new ConcurrentHashMap<>();
-    private final Map<Integer, CheckRow> byId = new ConcurrentHashMap<>();
+    private final CheckCatalogPersistence persistence;
+    private final Map<String, CheckCatalogRow> byStableKey = new ConcurrentHashMap<>();
+    private final Map<Integer, CheckCatalogRow> byId = new ConcurrentHashMap<>();
     /**
      * Secondary index for collision detection. A display name maps to the
-     * CheckRow that currently owns it. Updated in lock-step with the other
+     * check row that currently owns it. Updated in lock-step with the other
      * two maps; collisions are resolved under the intern synchronized lock.
      */
-    private final Map<String, CheckRow> byDisplay = new ConcurrentHashMap<>();
+    private final Map<String, CheckCatalogRow> byDisplay = new ConcurrentHashMap<>();
     /**
      * Resolves the prefix applied to an older row's display when a new
      * stable_key collides on display. Returns e.g. {@code "V2/"} for a row
      * whose introduced_version is {@code "2.3.61"}, or a static fallback if
      * the row has no recorded introduced_version.
      */
-    private final Function<CheckRow, String> collisionPrefixResolver;
+    private final Function<CheckCatalogRow, String> collisionPrefixResolver;
 
-    public CheckRegistry(CheckPersistence persistence) {
+    public CheckRegistry(CheckCatalogPersistence persistence) {
         this(persistence, DEFAULT_COLLISION_PREFIX);
     }
 
-    public CheckRegistry(CheckPersistence persistence, Function<CheckRow, String> collisionPrefixResolver) {
+    public CheckRegistry(CheckCatalogPersistence persistence, Function<CheckCatalogRow, String> collisionPrefixResolver) {
         this.persistence = persistence;
         this.collisionPrefixResolver = collisionPrefixResolver;
     }
@@ -59,7 +59,7 @@ public final class CheckRegistry {
         byStableKey.clear();
         byId.clear();
         byDisplay.clear();
-        for (CheckRow row : persistence.loadAll()) {
+        for (CheckCatalogRow row : persistence.loadAll()) {
             byStableKey.put(row.stableKey(), row);
             byId.put(row.checkId(), row);
             if (row.display() != null) {
@@ -98,7 +98,7 @@ public final class CheckRegistry {
                                    @Nullable String display,
                                    @Nullable String description,
                                    @Nullable String introducedVersion) {
-        CheckRow existing = byStableKey.get(stableKey);
+        CheckCatalogRow existing = byStableKey.get(stableKey);
         if (existing != null) {
             boolean displayChanged = display != null && !display.equals(existing.display());
             boolean descriptionChanged = description != null && !description.equals(existing.description());
@@ -106,7 +106,7 @@ public final class CheckRegistry {
                 String newDisplay = displayChanged ? display : existing.display();
                 String newDescription = descriptionChanged ? description : existing.description();
                 persistence.updateDisplayAndDescription(existing.checkId(), newDisplay, newDescription);
-                CheckRow renamed = new CheckRow(
+                CheckCatalogRow renamed = new CheckCatalogRow(
                         existing.checkId(), existing.stableKey(),
                         newDisplay, newDescription, existing.introducedVersion(), existing.introducedAt());
                 byStableKey.put(stableKey, renamed);
@@ -119,7 +119,7 @@ public final class CheckRegistry {
 
         // New stable_key. Check for display collision before inserting.
         if (display != null) {
-            CheckRow collider = byDisplay.get(display);
+            CheckCatalogRow collider = byDisplay.get(display);
             if (collider != null) {
                 // A different stable_key already owns this display. Prefix the
                 // older row so the letter is free. The prefix reflects when
@@ -129,7 +129,7 @@ public final class CheckRegistry {
                 String prefix = collisionPrefixResolver.apply(collider);
                 String prefixed = prefix + collider.display();
                 persistence.updateDisplayAndDescription(collider.checkId(), prefixed, collider.description());
-                CheckRow updated = new CheckRow(
+                CheckCatalogRow updated = new CheckCatalogRow(
                         collider.checkId(), collider.stableKey(),
                         prefixed, collider.description(),
                         collider.introducedVersion(), collider.introducedAt());
@@ -142,7 +142,7 @@ public final class CheckRegistry {
 
         long now = System.currentTimeMillis();
         int id = persistence.insert(stableKey, display, description, introducedVersion, now);
-        CheckRow row = new CheckRow(id, stableKey, display, description, introducedVersion, now);
+        CheckCatalogRow row = new CheckCatalogRow(id, stableKey, display, description, introducedVersion, now);
         byStableKey.put(stableKey, row);
         byId.put(id, row);
         if (display != null) byDisplay.put(display, row);
@@ -158,22 +158,22 @@ public final class CheckRegistry {
     }
 
     public Optional<Integer> getId(String stableKey) {
-        CheckRow r = byStableKey.get(stableKey);
+        CheckCatalogRow r = byStableKey.get(stableKey);
         return r == null ? Optional.empty() : Optional.of(r.checkId());
     }
 
     public Optional<String> displayFor(int checkId) {
-        CheckRow r = byId.get(checkId);
+        CheckCatalogRow r = byId.get(checkId);
         return r == null ? Optional.empty() : Optional.ofNullable(r.display());
     }
 
     public Optional<String> descriptionFor(int checkId) {
-        CheckRow r = byId.get(checkId);
+        CheckCatalogRow r = byId.get(checkId);
         return r == null ? Optional.empty() : Optional.ofNullable(r.description());
     }
 
     public Optional<String> stableKeyFor(int checkId) {
-        CheckRow r = byId.get(checkId);
+        CheckCatalogRow r = byId.get(checkId);
         return r == null ? Optional.empty() : Optional.of(r.stableKey());
     }
 
@@ -181,38 +181,12 @@ public final class CheckRegistry {
         return byStableKey.size();
     }
 
-    public interface CheckPersistence {
-
-        Iterable<CheckRow> loadAll();
-
-        /** Insert a new row, return the assigned check_id. */
-        int insert(String stableKey,
-                   @Nullable String display,
-                   @Nullable String description,
-                   @Nullable String introducedVersion,
-                   long introducedAt);
-
-        /** Single-row update covering both display and description. */
-        void updateDisplayAndDescription(int checkId,
-                                        @Nullable String display,
-                                        @Nullable String description);
-    }
-
-    public record CheckRow(
-            int checkId,
-            String stableKey,
-            @Nullable String display,
-            @Nullable String description,
-            @Nullable String introducedVersion,
-            long introducedAt) {
-    }
-
     /**
      * Default collision-prefix resolver: reads the major-version component
      * of {@code introducedVersion} and returns {@code "V<major>/"}. Falls
      * back to {@code "legacy/"} when the version is missing or unparseable.
      */
-    public static final Function<CheckRow, String> DEFAULT_COLLISION_PREFIX = row -> {
+    public static final Function<CheckCatalogRow, String> DEFAULT_COLLISION_PREFIX = row -> {
         String v = row.introducedVersion();
         if (v == null || v.isBlank()) return "legacy/";
         String trimmed = v.trim();
@@ -231,7 +205,7 @@ public final class CheckRegistry {
      * Fixed-string collision-prefix resolver for tests and for operators
      * who want a version-independent marker like {@code "(legacy) "}.
      */
-    public static Function<CheckRow, String> staticPrefix(String prefix) {
+    public static Function<CheckCatalogRow, String> staticPrefix(String prefix) {
         return row -> prefix;
     }
 }

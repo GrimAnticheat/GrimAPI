@@ -8,6 +8,7 @@ import ac.grim.grimac.api.storage.backend.StorageEventHandler;
 import ac.grim.grimac.api.storage.category.Capability;
 import ac.grim.grimac.api.storage.category.Categories;
 import ac.grim.grimac.api.storage.category.Category;
+import ac.grim.grimac.api.storage.check.CheckCatalogPersistence;
 import ac.grim.grimac.api.storage.config.TableNames;
 import ac.grim.grimac.api.storage.event.PlayerIdentityEvent;
 import ac.grim.grimac.api.storage.event.SessionEvent;
@@ -89,7 +90,7 @@ public final class MongoBackend implements Backend {
     private final List<BatchingHandler<?>> handlers = new ArrayList<>();
     private MongoClient client;
     private MongoDatabase db;
-    private MongoCollection<Document> meta, players, sessions, violations, settings;
+    private MongoCollection<Document> meta, checks, players, sessions, violations, settings;
     private Logger logger;
 
     public MongoBackend(MongoBackendConfig config) {
@@ -131,6 +132,7 @@ public final class MongoBackend implements Backend {
             this.db = client.getDatabase(config.database());
             TableNames t = config.tableNames();
             this.meta = db.getCollection(t.meta());
+            this.checks = db.getCollection(t.checks());
             this.players = db.getCollection(t.players());
             this.sessions = db.getCollection(t.sessions());
             this.violations = db.getCollection(t.violations());
@@ -141,9 +143,15 @@ public final class MongoBackend implements Backend {
                 migrateSchema(existingVersion);
             }
             ensureIndexes();
+            MongoCheckCatalogPersistence.alignCounterWithExistingRows(meta, checks);
         } catch (RuntimeException e) {
             throw new BackendException("failed to initialise Mongo backend", e);
         }
+    }
+
+    @Override
+    public @NotNull CheckCatalogPersistence checkCatalog() {
+        return new MongoCheckCatalogPersistence(meta, checks);
     }
 
     private int readSchemaVersion() {
@@ -153,6 +161,8 @@ public final class MongoBackend implements Backend {
     }
 
     private void ensureIndexes() {
+        checks.createIndex(Indexes.ascending("stable_key"), new IndexOptions().unique(true));
+        checks.createIndex(Indexes.ascending("check_id"), new IndexOptions().unique(true));
         players.createIndex(Indexes.ascending("current_name_lower"));
         sessions.createIndex(Indexes.descending("started_at"));
         sessions.createIndex(Indexes.compoundIndex(Indexes.ascending("player_uuid"), Indexes.descending("started_at")));

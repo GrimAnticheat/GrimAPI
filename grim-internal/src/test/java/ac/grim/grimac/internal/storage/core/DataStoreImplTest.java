@@ -8,12 +8,14 @@ import ac.grim.grimac.api.storage.backend.StorageEventHandler;
 import ac.grim.grimac.api.storage.category.Capability;
 import ac.grim.grimac.api.storage.category.Categories;
 import ac.grim.grimac.api.storage.category.Category;
+import ac.grim.grimac.api.storage.check.CheckCatalogPersistence;
 import ac.grim.grimac.api.storage.config.WaitStrategyType;
 import ac.grim.grimac.api.storage.config.WritePathConfig;
 import ac.grim.grimac.api.storage.event.ViolationEvent;
 import ac.grim.grimac.api.storage.query.DeleteCriteria;
 import ac.grim.grimac.api.storage.query.Page;
 import ac.grim.grimac.api.storage.query.Query;
+import ac.grim.grimac.internal.storage.checks.InMemoryCheckCatalogPersistence;
 import org.junit.jupiter.api.Test;
 
 import java.util.EnumSet;
@@ -70,6 +72,7 @@ class DataStoreImplTest {
         }
         @Override public Set<Category<?>> supportedCategories() { return Set.of(Categories.VIOLATION); }
         @Override public void init(BackendContext ctx) {}
+        @Override public CheckCatalogPersistence checkCatalog() { return new InMemoryCheckCatalogPersistence(); }
         @Override public void flush() {}
         @Override public void close() {}
 
