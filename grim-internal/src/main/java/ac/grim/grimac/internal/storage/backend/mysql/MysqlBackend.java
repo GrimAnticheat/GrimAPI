@@ -44,6 +44,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.TimeUnit;
 
 /**
  * MySQL-family backend. Same ring/handler model as the SQLite reference
@@ -69,6 +70,8 @@ import java.util.UUID;
 public final class MysqlBackend implements Backend {
 
     public static final String ID = "mysql";
+    private static final long CONNECTION_VALIDATE_AFTER_IDLE_MS = TimeUnit.SECONDS.toMillis(30);
+    private static final int CONNECTION_VALIDATION_TIMEOUT_SECONDS = 2;
 
     private final MysqlBackendConfig config;
     private final Object writeMutex = new Object();
@@ -275,6 +278,44 @@ public final class MysqlBackend implements Backend {
                 config.password() == null ? "" : config.password());
     }
 
+    private Connection ensureWriteConnectionLocked() throws SQLException {
+        if (isConnectionUsable(writeConn, 0L)) return writeConn;
+        closeQuietly(writeConn);
+        writeConn = openConnection();
+        return writeConn;
+    }
+
+    private static boolean isConnectionUsable(Connection connection, long lastUseMs) {
+        if (connection == null) return false;
+        try {
+            if (connection.isClosed()) return false;
+            long now = System.currentTimeMillis();
+            if (lastUseMs > 0L && now - lastUseMs < CONNECTION_VALIDATE_AFTER_IDLE_MS) return true;
+            return connection.isValid(CONNECTION_VALIDATION_TIMEOUT_SECONDS);
+        } catch (SQLException e) {
+            return false;
+        }
+    }
+
+    private static boolean isConnectionFailure(SQLException e) {
+        for (Throwable t = e; t != null; t = t.getCause()) {
+            if (t instanceof SQLException sql) {
+                String state = sql.getSQLState();
+                if (state != null && state.startsWith("08")) return true;
+            }
+            String className = t.getClass().getName();
+            if (className.contains("ConnectionIsClosed") || className.contains("CJCommunicationsException")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static void closeQuietly(AutoCloseable closeable) {
+        if (closeable == null) return;
+        try { closeable.close(); } catch (Exception ignored) {}
+    }
+
     @Override public void flush() {}
 
     @Override
@@ -311,12 +352,12 @@ public final class MysqlBackend implements Backend {
     private abstract class BatchingHandler<E> implements StorageEventHandler<E> {
         private Connection conn;
         private PreparedStatement stmt;
-        private int pending;
+        private final List<PendingWrite> pending = new ArrayList<>();
+        private long lastConnectionUseMs;
 
         void start() throws BackendException {
             try {
-                this.conn = openConnection();
-                conn.setAutoCommit(false);
+                reconnectLocked();
             } catch (SQLException e) {
                 throw new BackendException("init failed for " + categoryId(), e);
             }
@@ -324,61 +365,119 @@ public final class MysqlBackend implements Backend {
 
         @Override
         public synchronized void onEvent(E event, long sequence, boolean endOfBatch) throws BackendException {
-            if (conn == null) return;
             try {
-                if (stmt == null) stmt = conn.prepareStatement(sql());
-                bind(stmt, event);
-                stmt.addBatch();
-                pending++;
-                if (endOfBatch || pending >= config.batchFlushCap()) flushLocked();
+                pending.add(snapshot(event));
+                if (endOfBatch || pending.size() >= config.batchFlushCap()) flushLocked();
             } catch (SQLException e) {
-                abortLocked();
+                pending.clear();
                 throw new BackendException(categoryId() + " write failed", e);
             }
         }
 
         private void flushLocked() throws SQLException {
-            if (pending == 0) return;
-            stmt.executeBatch();
-            conn.commit();
-            pending = 0;
+            if (pending.isEmpty()) return;
+            try {
+                executePendingLocked();
+                pending.clear();
+            } catch (SQLException first) {
+                abortLocked(first);
+                if (!isConnectionFailure(first)) {
+                    pending.clear();
+                    throw first;
+                }
+                reconnectLocked();
+                try {
+                    executePendingLocked();
+                    pending.clear();
+                } catch (SQLException second) {
+                    abortLocked(second);
+                    pending.clear();
+                    throw second;
+                }
+            }
         }
 
-        private void abortLocked() {
+        private void executePendingLocked() throws SQLException {
+            ensureConnectionLocked();
+            if (stmt == null) stmt = conn.prepareStatement(sql());
+            for (PendingWrite write : pending) {
+                write.bind(stmt);
+                stmt.addBatch();
+            }
+            stmt.executeBatch();
+            conn.commit();
+            lastConnectionUseMs = System.currentTimeMillis();
+        }
+
+        private void abortLocked(SQLException cause) {
             try { if (conn != null) conn.rollback(); } catch (SQLException ignore) {}
-            try { if (stmt != null) { stmt.close(); stmt = null; } } catch (SQLException ignore) {}
-            pending = 0;
+            closeQuietly(stmt);
+            stmt = null;
+            if (isConnectionFailure(cause)) {
+                closeQuietly(conn);
+                conn = null;
+                lastConnectionUseMs = 0L;
+            }
+        }
+
+        private void ensureConnectionLocked() throws SQLException {
+            if (isConnectionUsable(conn, lastConnectionUseMs)) return;
+            reconnectLocked();
+        }
+
+        private void reconnectLocked() throws SQLException {
+            closeQuietly(stmt);
+            closeQuietly(conn);
+            stmt = null;
+            conn = openConnection();
+            conn.setAutoCommit(false);
+            lastConnectionUseMs = System.currentTimeMillis();
         }
 
         synchronized void shutDown() {
-            try { if (pending > 0 && stmt != null) { stmt.executeBatch(); conn.commit(); } }
+            try { flushLocked(); }
             catch (SQLException ignore) {}
-            try { if (stmt != null) stmt.close(); } catch (SQLException ignore) {}
-            try { if (conn != null) conn.close(); } catch (SQLException ignore) {}
+            closeQuietly(stmt);
+            closeQuietly(conn);
             stmt = null;
             conn = null;
-            pending = 0;
+            pending.clear();
+            lastConnectionUseMs = 0L;
         }
 
         protected abstract String sql();
         protected abstract String categoryId();
-        protected abstract void bind(PreparedStatement ps, E event) throws SQLException;
+        protected abstract PendingWrite snapshot(E event);
+    }
+
+    @FunctionalInterface
+    private interface PendingWrite {
+        void bind(PreparedStatement ps) throws SQLException;
     }
 
     private final class ViolationHandler extends BatchingHandler<ViolationEvent> {
         @Override protected String sql() { return insertViolations; }
         @Override protected String categoryId() { return "violation"; }
         @Override
-        protected void bind(PreparedStatement ps, ViolationEvent v) throws SQLException {
+        protected PendingWrite snapshot(ViolationEvent v) {
             UUID id = v.id();
-            ps.setBytes(1, UuidCodec.toBytes(id));
-            ps.setBytes(2, UuidCodec.toBytes(v.sessionId()));
-            ps.setBytes(3, UuidCodec.toBytes(v.playerUuid()));
-            ps.setInt(4, v.checkId());
-            ps.setDouble(5, v.vl());
-            ps.setLong(6, v.occurredEpochMs());
-            ps.setString(7, v.verbose());
-            ps.setInt(8, v.verboseFormat().code());
+            UUID sessionId = v.sessionId();
+            UUID playerUuid = v.playerUuid();
+            int checkId = v.checkId();
+            double vl = v.vl();
+            long occurredEpochMs = v.occurredEpochMs();
+            String verbose = v.verbose();
+            int verboseFormat = v.verboseFormat().code();
+            return ps -> {
+                ps.setBytes(1, UuidCodec.toBytes(id));
+                ps.setBytes(2, UuidCodec.toBytes(sessionId));
+                ps.setBytes(3, UuidCodec.toBytes(playerUuid));
+                ps.setInt(4, checkId);
+                ps.setDouble(5, vl);
+                ps.setLong(6, occurredEpochMs);
+                ps.setString(7, verbose);
+                ps.setInt(8, verboseFormat);
+            };
         }
     }
 
@@ -386,19 +485,32 @@ public final class MysqlBackend implements Backend {
         @Override protected String sql() { return upsertSessions; }
         @Override protected String categoryId() { return "session"; }
         @Override
-        protected void bind(PreparedStatement ps, SessionEvent s) throws SQLException {
-            ps.setBytes(1, UuidCodec.toBytes(s.sessionId()));
-            ps.setBytes(2, UuidCodec.toBytes(s.playerUuid()));
-            ps.setString(3, s.serverName());
-            ps.setLong(4, s.startedEpochMs());
-            ps.setLong(5, s.lastActivityEpochMs());
-            if (s.closedAtEpochMs() == null) ps.setNull(6, java.sql.Types.BIGINT);
-            else ps.setLong(6, s.closedAtEpochMs());
-            ps.setString(7, s.grimVersion());
-            ps.setString(8, s.clientBrand());
-            ps.setInt(9, s.clientVersion());
-            ps.setString(10, s.serverVersionString());
-            ps.setString(11, s.sessionBlobs().isEmpty() ? "[]" : serializeSessionBlobsShim());
+        protected PendingWrite snapshot(SessionEvent s) {
+            UUID sessionId = s.sessionId();
+            UUID playerUuid = s.playerUuid();
+            String serverName = s.serverName();
+            long startedEpochMs = s.startedEpochMs();
+            long lastActivityEpochMs = s.lastActivityEpochMs();
+            Long closedAtEpochMs = s.closedAtEpochMs();
+            String grimVersion = s.grimVersion();
+            String clientBrand = s.clientBrand();
+            int clientVersion = s.clientVersion();
+            String serverVersionString = s.serverVersionString();
+            boolean hasSessionBlobs = !s.sessionBlobs().isEmpty();
+            return ps -> {
+                ps.setBytes(1, UuidCodec.toBytes(sessionId));
+                ps.setBytes(2, UuidCodec.toBytes(playerUuid));
+                ps.setString(3, serverName);
+                ps.setLong(4, startedEpochMs);
+                ps.setLong(5, lastActivityEpochMs);
+                if (closedAtEpochMs == null) ps.setNull(6, java.sql.Types.BIGINT);
+                else ps.setLong(6, closedAtEpochMs);
+                ps.setString(7, grimVersion);
+                ps.setString(8, clientBrand);
+                ps.setInt(9, clientVersion);
+                ps.setString(10, serverVersionString);
+                ps.setString(11, hasSessionBlobs ? serializeSessionBlobsShim() : "[]");
+            };
         }
     }
 
@@ -406,11 +518,17 @@ public final class MysqlBackend implements Backend {
         @Override protected String sql() { return upsertIdentities; }
         @Override protected String categoryId() { return "player-identity"; }
         @Override
-        protected void bind(PreparedStatement ps, PlayerIdentityEvent e) throws SQLException {
-            ps.setBytes(1, UuidCodec.toBytes(e.uuid()));
-            ps.setString(2, e.currentName());
-            ps.setLong(3, e.firstSeenEpochMs());
-            ps.setLong(4, e.lastSeenEpochMs());
+        protected PendingWrite snapshot(PlayerIdentityEvent e) {
+            UUID uuid = e.uuid();
+            String currentName = e.currentName();
+            long firstSeenEpochMs = e.firstSeenEpochMs();
+            long lastSeenEpochMs = e.lastSeenEpochMs();
+            return ps -> {
+                ps.setBytes(1, UuidCodec.toBytes(uuid));
+                ps.setString(2, currentName);
+                ps.setLong(3, firstSeenEpochMs);
+                ps.setLong(4, lastSeenEpochMs);
+            };
         }
     }
 
@@ -418,12 +536,19 @@ public final class MysqlBackend implements Backend {
         @Override protected String sql() { return upsertSettings; }
         @Override protected String categoryId() { return "setting"; }
         @Override
-        protected void bind(PreparedStatement ps, SettingEvent s) throws SQLException {
-            ps.setString(1, s.scope().name());
-            ps.setString(2, s.scopeKey());
-            ps.setString(3, s.key());
-            ps.setBytes(4, s.value());
-            ps.setLong(5, s.updatedEpochMs());
+        protected PendingWrite snapshot(SettingEvent s) {
+            String scope = s.scope().name();
+            String scopeKey = s.scopeKey();
+            String key = s.key();
+            byte[] value = s.value().clone();
+            long updatedEpochMs = s.updatedEpochMs();
+            return ps -> {
+                ps.setString(1, scope);
+                ps.setString(2, scopeKey);
+                ps.setString(3, key);
+                ps.setBytes(4, value);
+                ps.setLong(5, updatedEpochMs);
+            };
         }
     }
 
@@ -439,8 +564,8 @@ public final class MysqlBackend implements Backend {
     public <R> void bulkImport(@NotNull Category<?> cat, @NotNull List<R> records) throws BackendException {
         if (records.isEmpty()) return;
         synchronized (writeMutex) {
-            if (writeConn == null) throw new BackendException("backend not initialised");
             try {
+                ensureWriteConnectionLocked();
                 writeConn.setAutoCommit(false);
                 if (cat == Categories.VIOLATION) writeViolationRecords((List<ViolationRecord>) records);
                 else if (cat == Categories.SESSION) writeSessionRecords((List<SessionRecord>) records);
@@ -449,10 +574,14 @@ public final class MysqlBackend implements Backend {
                 else throw new BackendException("unsupported category: " + cat.id());
                 writeConn.commit();
             } catch (SQLException e) {
-                try { writeConn.rollback(); } catch (SQLException ignore) {}
+                try { if (writeConn != null) writeConn.rollback(); } catch (SQLException ignore) {}
+                if (isConnectionFailure(e)) {
+                    closeQuietly(writeConn);
+                    writeConn = null;
+                }
                 throw new BackendException("bulkImport failed for " + cat.id(), e);
             } finally {
-                try { writeConn.setAutoCommit(true); } catch (SQLException ignore) {}
+                try { if (writeConn != null) writeConn.setAutoCommit(true); } catch (SQLException ignore) {}
             }
         }
     }
@@ -729,8 +858,8 @@ public final class MysqlBackend implements Backend {
     @Override
     public <E> void delete(@NotNull Category<E> cat, @NotNull DeleteCriteria criteria) throws BackendException {
         synchronized (writeMutex) {
-            if (writeConn == null) throw new BackendException("backend not initialised");
             try {
+                ensureWriteConnectionLocked();
                 writeConn.setAutoCommit(false);
                 TableNames t = config.tableNames();
                 if (criteria instanceof Deletes.ByPlayer d) {
@@ -779,10 +908,14 @@ public final class MysqlBackend implements Backend {
                 }
                 writeConn.commit();
             } catch (SQLException e) {
-                try { writeConn.rollback(); } catch (SQLException ignore) {}
+                try { if (writeConn != null) writeConn.rollback(); } catch (SQLException ignore) {}
+                if (isConnectionFailure(e)) {
+                    closeQuietly(writeConn);
+                    writeConn = null;
+                }
                 throw new BackendException("delete failed", e);
             } finally {
-                try { writeConn.setAutoCommit(true); } catch (SQLException ignore) {}
+                try { if (writeConn != null) writeConn.setAutoCommit(true); } catch (SQLException ignore) {}
             }
         }
     }
