@@ -3,14 +3,17 @@ package ac.grim.grimac.api.storage.backend;
 import ac.grim.grimac.api.storage.category.Capability;
 import ac.grim.grimac.api.storage.category.Category;
 import ac.grim.grimac.api.storage.check.CheckCatalogPersistence;
+import ac.grim.grimac.api.storage.check.CheckCatalogRepairResult;
 import ac.grim.grimac.api.storage.query.DeleteCriteria;
 import ac.grim.grimac.api.storage.query.Page;
 import ac.grim.grimac.api.storage.query.Query;
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
 
 import java.util.EnumSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -50,6 +53,22 @@ public interface Backend {
      * names after restarts and across multi-server deployments.
      */
     @NotNull CheckCatalogPersistence checkCatalog();
+
+    /**
+     * In-place repair for deployments that wrote violation {@code check_id}s
+     * from the old non-durable fallback ({@code stableKey.hashCode()}) before
+     * the backend-owned check catalog existed. Implementations rewrite
+     * violation rows according to {@code legacyToCatalogCheckIds}; when
+     * {@code introducedVersionReplacement} is non-null they also replace
+     * catalog rows stamped with the loader stub version.
+     *
+     * <p>Intended for explicit operator repair commands. The operation must be
+     * idempotent: rerunning with the same map should update zero additional
+     * rows after the first pass.
+     */
+    @NotNull CheckCatalogRepairResult repairCheckCatalog(
+            @NotNull Map<Integer, Integer> legacyToCatalogCheckIds,
+            @Nullable String introducedVersionReplacement) throws BackendException;
 
     void flush() throws BackendException;
 

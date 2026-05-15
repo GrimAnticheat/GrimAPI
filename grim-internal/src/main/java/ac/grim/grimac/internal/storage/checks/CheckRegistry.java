@@ -15,7 +15,7 @@ import java.util.function.Function;
  * In-memory {@code stable_key ↔ check_id} registry backed by the routed
  * backend's {@link CheckCatalogPersistence}.
  * <p>
- * {@link #intern(String, String, String)} is atomic: if two threads interleave
+ * {@link #intern(String, String, String, String)} is atomic: if two threads interleave
  * on the same stable_key, one wins and the other sees the winner's check_id
  * via a second load.
  * <p>

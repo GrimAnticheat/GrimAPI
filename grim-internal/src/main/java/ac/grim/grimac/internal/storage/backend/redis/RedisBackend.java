@@ -9,6 +9,7 @@ import ac.grim.grimac.api.storage.category.Capability;
 import ac.grim.grimac.api.storage.category.Categories;
 import ac.grim.grimac.api.storage.category.Category;
 import ac.grim.grimac.api.storage.check.CheckCatalogPersistence;
+import ac.grim.grimac.api.storage.check.CheckCatalogRepairResult;
 import ac.grim.grimac.api.storage.config.TableNames;
 import ac.grim.grimac.api.storage.event.PlayerIdentityEvent;
 import ac.grim.grimac.api.storage.event.SessionEvent;
@@ -53,6 +54,8 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.logging.Level;
 import java.util.logging.Logger;
+
+import static ac.grim.grimac.internal.storage.checks.JdbcCheckCatalogRepair.STUB_VERSION;
 
 /**
  * Redis 6+ backend. Operational caveats first:
@@ -174,6 +177,22 @@ public final class RedisBackend implements Backend {
                 pool,
                 metaKey(),
                 tableKey(config.tableNames().checks()));
+    }
+
+    @Override
+    public @NotNull CheckCatalogRepairResult repairCheckCatalog(
+            @NotNull Map<Integer, Integer> legacyToCatalogCheckIds,
+            String introducedVersionReplacement) throws BackendException {
+        try (Jedis j = pool.getResource()) {
+            long violationsUpdated = repairViolationCheckIds(j, legacyToCatalogCheckIds);
+            long versionsUpdated = repairStubCatalogVersions(j, introducedVersionReplacement);
+            return new CheckCatalogRepairResult(
+                    legacyToCatalogCheckIds.size(),
+                    violationsUpdated,
+                    versionsUpdated);
+        } catch (RuntimeException e) {
+            throw new BackendException("check catalog repair failed", e);
+        }
     }
 
     /**
@@ -789,6 +808,49 @@ public final class RedisBackend implements Backend {
             cursor = res.getCursor();
             for (String k : res.getResult()) j.del(k);
         } while (!cursor.equals(ScanParams.SCAN_POINTER_START));
+    }
+
+    private long repairViolationCheckIds(Jedis j, Map<Integer, Integer> legacyToCatalogCheckIds) {
+        if (legacyToCatalogCheckIds.isEmpty()) return 0L;
+        String violationsBase = tableKey(config.tableNames().violations());
+        String bySessionPrefix = violationsBase + ":by-session:";
+        String byPlayerPrefix = violationsBase + ":by-player:";
+        long updated = 0L;
+        ScanParams sp = new ScanParams().match(violationsBase + ":*").count(500);
+        String cursor = ScanParams.SCAN_POINTER_START;
+        do {
+            var res = j.scan(cursor, sp);
+            cursor = res.getCursor();
+            for (String key : res.getResult()) {
+                if (key.startsWith(bySessionPrefix) || key.startsWith(byPlayerPrefix)) continue;
+                String raw = j.hget(key, "check_id");
+                if (raw == null) continue;
+                int legacyId;
+                try {
+                    legacyId = Integer.parseInt(raw);
+                } catch (NumberFormatException ignored) {
+                    continue;
+                }
+                Integer catalogId = legacyToCatalogCheckIds.get(legacyId);
+                if (catalogId == null || catalogId == legacyId) continue;
+                j.hset(key, "check_id", Integer.toString(catalogId));
+                updated++;
+            }
+        } while (!cursor.equals(ScanParams.SCAN_POINTER_START));
+        return updated;
+    }
+
+    private long repairStubCatalogVersions(Jedis j, String introducedVersionReplacement) {
+        if (introducedVersionReplacement == null || introducedVersionReplacement.isBlank()) return 0L;
+        String checksBase = tableKey(config.tableNames().checks());
+        long updated = 0L;
+        for (String id : j.smembers(checksBase + ":ids")) {
+            String rowKey = checksBase + ":" + id;
+            if (!STUB_VERSION.equals(j.hget(rowKey, "introduced_version"))) continue;
+            j.hset(rowKey, "introduced_version", introducedVersionReplacement);
+            updated++;
+        }
+        return updated;
     }
 
     @Override

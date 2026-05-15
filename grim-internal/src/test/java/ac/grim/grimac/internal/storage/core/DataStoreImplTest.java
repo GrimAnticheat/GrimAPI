@@ -9,16 +9,23 @@ import ac.grim.grimac.api.storage.category.Capability;
 import ac.grim.grimac.api.storage.category.Categories;
 import ac.grim.grimac.api.storage.category.Category;
 import ac.grim.grimac.api.storage.check.CheckCatalogPersistence;
+import ac.grim.grimac.api.storage.check.CheckCatalogRepairResult;
+import ac.grim.grimac.api.storage.check.CheckCatalogRow;
 import ac.grim.grimac.api.storage.config.WaitStrategyType;
 import ac.grim.grimac.api.storage.config.WritePathConfig;
 import ac.grim.grimac.api.storage.event.ViolationEvent;
+import ac.grim.grimac.api.storage.model.VerboseFormat;
+import ac.grim.grimac.api.storage.model.ViolationRecord;
 import ac.grim.grimac.api.storage.query.DeleteCriteria;
 import ac.grim.grimac.api.storage.query.Page;
+import ac.grim.grimac.api.storage.query.Queries;
 import ac.grim.grimac.api.storage.query.Query;
+import ac.grim.grimac.internal.storage.backend.memory.InMemoryBackend;
 import ac.grim.grimac.internal.storage.checks.InMemoryCheckCatalogPersistence;
 import org.junit.jupiter.api.Test;
 
 import java.util.EnumSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
@@ -27,6 +34,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.logging.Logger;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -56,6 +64,41 @@ class DataStoreImplTest {
         }
     }
 
+    @Test
+    void inMemoryRepairRewritesLegacyHashCheckIdsAndStubVersions() throws Exception {
+        InMemoryBackend backend = new InMemoryBackend();
+        String stableKey = "grim.badpackets.invalid_interact_order";
+        int catalogId = backend.checkCatalog().insert(
+                stableKey, "BadPacketsM", "Invalid interact order", "0.0.0-stub", 1L);
+        int legacyHashId = stableKey.hashCode();
+        UUID session = UUID.randomUUID();
+        UUID player = UUID.randomUUID();
+
+        backend.bulkImport(Categories.VIOLATION, List.of(new ViolationRecord(
+                UUID.randomUUID(),
+                session,
+                player,
+                legacyHashId,
+                1.0,
+                1_700_000_000_000L,
+                "verbose",
+                VerboseFormat.TEXT)));
+
+        CheckCatalogRepairResult result = backend.repairCheckCatalog(
+                Map.of(legacyHashId, catalogId),
+                "3.0.152-test");
+
+        assertEquals(1, result.mappingsApplied());
+        assertEquals(1L, result.violationsUpdated());
+        assertEquals(1L, result.catalogVersionsUpdated());
+        Page<ViolationRecord> page = backend.read(
+                Categories.VIOLATION,
+                new Queries.ListViolationsInSession(session, 10, null));
+        assertEquals(catalogId, page.items().get(0).checkId());
+        CheckCatalogRow row = backend.checkCatalog().loadAll().iterator().next();
+        assertEquals("3.0.152-test", row.introducedVersion());
+    }
+
     private static final class CapturingViolationBackend implements Backend {
         private final CountDownLatch seen = new CountDownLatch(1);
         private final AtomicReference<UUID> id = new AtomicReference<>();
@@ -73,6 +116,12 @@ class DataStoreImplTest {
         @Override public Set<Category<?>> supportedCategories() { return Set.of(Categories.VIOLATION); }
         @Override public void init(BackendContext ctx) {}
         @Override public CheckCatalogPersistence checkCatalog() { return new InMemoryCheckCatalogPersistence(); }
+        @Override
+        public CheckCatalogRepairResult repairCheckCatalog(
+                Map<Integer, Integer> legacyToCatalogCheckIds,
+                String introducedVersionReplacement) {
+            return new CheckCatalogRepairResult(legacyToCatalogCheckIds.size(), 0L, 0L);
+        }
         @Override public void flush() {}
         @Override public void close() {}
 

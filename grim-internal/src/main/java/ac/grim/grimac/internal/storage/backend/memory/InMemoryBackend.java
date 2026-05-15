@@ -10,6 +10,8 @@ import ac.grim.grimac.api.storage.category.Capability;
 import ac.grim.grimac.api.storage.category.Categories;
 import ac.grim.grimac.api.storage.category.Category;
 import ac.grim.grimac.api.storage.check.CheckCatalogPersistence;
+import ac.grim.grimac.api.storage.check.CheckCatalogRepairResult;
+import ac.grim.grimac.api.storage.check.CheckCatalogRow;
 import ac.grim.grimac.api.storage.event.PlayerIdentityEvent;
 import ac.grim.grimac.api.storage.event.SessionEvent;
 import ac.grim.grimac.api.storage.event.SettingEvent;
@@ -27,6 +29,8 @@ import ac.grim.grimac.api.storage.query.Query;
 import ac.grim.grimac.internal.storage.checks.InMemoryCheckCatalogPersistence;
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
+
+import static ac.grim.grimac.internal.storage.checks.JdbcCheckCatalogRepair.STUB_VERSION;
 
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -88,6 +92,20 @@ public final class InMemoryBackend implements Backend {
     @Override public void init(@NotNull BackendContext ctx) {}
 
     @Override public @NotNull CheckCatalogPersistence checkCatalog() { return checkCatalog; }
+
+    @Override
+    public @NotNull CheckCatalogRepairResult repairCheckCatalog(
+            @NotNull Map<Integer, Integer> legacyToCatalogCheckIds,
+            String introducedVersionReplacement) {
+        synchronized (writeMutex) {
+            long violationsUpdated = repairViolationCheckIds(legacyToCatalogCheckIds);
+            long versionsUpdated = repairStubCatalogVersions(introducedVersionReplacement);
+            return new CheckCatalogRepairResult(
+                    legacyToCatalogCheckIds.size(),
+                    violationsUpdated,
+                    versionsUpdated);
+        }
+    }
 
     @Override public void flush() {}
 
@@ -221,6 +239,53 @@ public final class InMemoryBackend implements Backend {
         // bulkImport / migrate paths always carry an id through.
         violationsBySession.computeIfAbsent(v.sessionId(), k -> new ArrayList<>()).add(v);
         violationsByPlayer.computeIfAbsent(v.playerUuid(), k -> new ArrayList<>()).add(v);
+    }
+
+    private long repairViolationCheckIds(Map<Integer, Integer> legacyToCatalogCheckIds) {
+        if (legacyToCatalogCheckIds.isEmpty()) return 0L;
+        long updated = 0L;
+        for (Map.Entry<UUID, List<ViolationRecord>> entry : violationsBySession.entrySet()) {
+            List<ViolationRecord> rows = entry.getValue();
+            for (int i = 0; i < rows.size(); i++) {
+                ViolationRecord v = rows.get(i);
+                Integer catalogId = legacyToCatalogCheckIds.get(v.checkId());
+                if (catalogId == null || catalogId == v.checkId()) continue;
+                rows.set(i, new ViolationRecord(
+                        v.id(),
+                        v.sessionId(),
+                        v.playerUuid(),
+                        catalogId,
+                        v.vl(),
+                        v.occurredEpochMs(),
+                        v.verbose(),
+                        v.verboseFormat()));
+                updated++;
+            }
+        }
+        violationsByPlayer.clear();
+        for (List<ViolationRecord> rows : violationsBySession.values()) {
+            for (ViolationRecord v : rows) {
+                violationsByPlayer.computeIfAbsent(v.playerUuid(), k -> new ArrayList<>()).add(v);
+            }
+        }
+        return updated;
+    }
+
+    private long repairStubCatalogVersions(String introducedVersionReplacement) {
+        if (introducedVersionReplacement == null || introducedVersionReplacement.isBlank()) return 0L;
+        long updated = 0L;
+        for (CheckCatalogRow row : checkCatalog.loadAll()) {
+            if (!STUB_VERSION.equals(row.introducedVersion())) continue;
+            checkCatalog.upsert(new CheckCatalogRow(
+                    row.checkId(),
+                    row.stableKey(),
+                    row.display(),
+                    row.description(),
+                    introducedVersionReplacement,
+                    row.introducedAt()));
+            updated++;
+        }
+        return updated;
     }
 
     private void applySessionRecord(SessionRecord s) {

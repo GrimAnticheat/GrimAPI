@@ -9,6 +9,7 @@ import ac.grim.grimac.api.storage.category.Capability;
 import ac.grim.grimac.api.storage.category.Categories;
 import ac.grim.grimac.api.storage.category.Category;
 import ac.grim.grimac.api.storage.check.CheckCatalogPersistence;
+import ac.grim.grimac.api.storage.check.CheckCatalogRepairResult;
 import ac.grim.grimac.api.storage.event.PlayerIdentityEvent;
 import ac.grim.grimac.api.storage.event.SessionEvent;
 import ac.grim.grimac.api.storage.event.SettingEvent;
@@ -29,6 +30,7 @@ import ac.grim.grimac.internal.storage.backend.sqlite.writers.SessionUpserter;
 import ac.grim.grimac.internal.storage.backend.sqlite.writers.SettingsUpserter;
 import ac.grim.grimac.internal.storage.backend.sqlite.writers.UpserterFactory;
 import ac.grim.grimac.internal.storage.checks.JdbcCheckCatalogPersistence;
+import ac.grim.grimac.internal.storage.checks.JdbcCheckCatalogRepair;
 import ac.grim.grimac.internal.storage.util.UuidCodec;
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
@@ -44,6 +46,7 @@ import java.util.ArrayList;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 
@@ -158,6 +161,24 @@ public final class SqliteBackend implements Backend {
     @Override
     public @NotNull CheckCatalogPersistence checkCatalog() {
         return new JdbcCheckCatalogPersistence(this::openConnection, config.tableNames().checks());
+    }
+
+    @Override
+    public @NotNull CheckCatalogRepairResult repairCheckCatalog(
+            @NotNull Map<Integer, Integer> legacyToCatalogCheckIds,
+            String introducedVersionReplacement) throws BackendException {
+        try {
+            synchronized (writeMutex) {
+                return JdbcCheckCatalogRepair.run(
+                        this::openConnection,
+                        config.tableNames().checks(),
+                        config.tableNames().violations(),
+                        legacyToCatalogCheckIds,
+                        introducedVersionReplacement);
+            }
+        } catch (SQLException e) {
+            throw new BackendException("check catalog repair failed", e);
+        }
     }
 
     /**

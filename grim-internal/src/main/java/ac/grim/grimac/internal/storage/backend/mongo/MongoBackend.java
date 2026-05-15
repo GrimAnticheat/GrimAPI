@@ -9,6 +9,7 @@ import ac.grim.grimac.api.storage.category.Capability;
 import ac.grim.grimac.api.storage.category.Categories;
 import ac.grim.grimac.api.storage.category.Category;
 import ac.grim.grimac.api.storage.check.CheckCatalogPersistence;
+import ac.grim.grimac.api.storage.check.CheckCatalogRepairResult;
 import ac.grim.grimac.api.storage.config.TableNames;
 import ac.grim.grimac.api.storage.event.PlayerIdentityEvent;
 import ac.grim.grimac.api.storage.event.SessionEvent;
@@ -44,6 +45,7 @@ import com.mongodb.client.model.InsertOneModel;
 import com.mongodb.client.model.ReplaceOneModel;
 import com.mongodb.client.model.UpdateOneModel;
 import com.mongodb.client.model.UpdateOptions;
+import com.mongodb.client.result.UpdateResult;
 import org.bson.BsonBinary;
 import org.bson.Document;
 import org.bson.conversions.Bson;
@@ -56,9 +58,12 @@ import java.util.Arrays;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.logging.Logger;
+
+import static ac.grim.grimac.internal.storage.checks.JdbcCheckCatalogRepair.STUB_VERSION;
 
 /**
  * MongoDB 6.x+ backend. Each logical "table" from {@link TableNames} maps to a
@@ -152,6 +157,38 @@ public final class MongoBackend implements Backend {
     @Override
     public @NotNull CheckCatalogPersistence checkCatalog() {
         return new MongoCheckCatalogPersistence(meta, checks);
+    }
+
+    @Override
+    public @NotNull CheckCatalogRepairResult repairCheckCatalog(
+            @NotNull Map<Integer, Integer> legacyToCatalogCheckIds,
+            String introducedVersionReplacement) throws BackendException {
+        try {
+            long violationsUpdated = 0L;
+            for (Map.Entry<Integer, Integer> e : legacyToCatalogCheckIds.entrySet()) {
+                int legacyId = e.getKey();
+                int catalogId = e.getValue();
+                if (legacyId == catalogId) continue;
+                UpdateResult updated = violations.updateMany(
+                        Filters.eq("check_id", legacyId),
+                        Updates.set("check_id", catalogId));
+                violationsUpdated += updated.getModifiedCount();
+            }
+
+            long versionsUpdated = 0L;
+            if (introducedVersionReplacement != null && !introducedVersionReplacement.isBlank()) {
+                UpdateResult updated = checks.updateMany(
+                        Filters.eq("introduced_version", STUB_VERSION),
+                        Updates.set("introduced_version", introducedVersionReplacement));
+                versionsUpdated = updated.getModifiedCount();
+            }
+            return new CheckCatalogRepairResult(
+                    legacyToCatalogCheckIds.size(),
+                    violationsUpdated,
+                    versionsUpdated);
+        } catch (RuntimeException e) {
+            throw new BackendException("check catalog repair failed", e);
+        }
     }
 
     private int readSchemaVersion() {
