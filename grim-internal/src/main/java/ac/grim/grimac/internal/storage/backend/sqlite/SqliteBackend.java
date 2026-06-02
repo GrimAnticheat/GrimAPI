@@ -738,11 +738,12 @@ public final class SqliteBackend implements Backend {
         // Prefix match only — the index idx_<players>_name_lower is a B-tree
         // on current_name_lower so LIKE 'x%' stays sargable. Wildcards embedded
         // in the user-supplied prefix are escaped so '%' and '_' behave as
-        // literals in the match.
+        // literals in the match. Use ! rather than backslash for parity with
+        // the networked SQL backends' string-literal rules.
         String escaped = escapeLike(prefix);
         try (PreparedStatement ps = c.prepareStatement(
                 "SELECT uuid, current_name, first_seen, last_seen FROM " + config.tableNames().players() + " "
-                        + "WHERE current_name_lower LIKE ? ESCAPE '\\' "
+                        + "WHERE current_name_lower LIKE ? ESCAPE '!' "
                         + "ORDER BY last_seen DESC LIMIT ?")) {
             ps.setString(1, escaped + "%");
             ps.setInt(2, q.limit());
@@ -758,7 +759,7 @@ public final class SqliteBackend implements Backend {
         StringBuilder out = new StringBuilder(s.length());
         for (int i = 0; i < s.length(); i++) {
             char c = s.charAt(i);
-            if (c == '\\' || c == '%' || c == '_') out.append('\\');
+            if (c == '!' || c == '%' || c == '_') out.append('!');
             out.append(c);
         }
         return out.toString();

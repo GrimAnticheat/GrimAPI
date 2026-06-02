@@ -123,7 +123,12 @@ class BackendIntegrationTest {
             StorageEventHandler<PlayerIdentityEvent> ih = b.eventHandlerFor(Categories.PLAYER_IDENTITY);
             PlayerIdentityEvent ie = new PlayerIdentityEvent();
             ie.uuid(player).currentName("AlphaBravo").firstSeenEpochMs(now).lastSeenEpochMs(now);
-            ih.onEvent(ie, 0, true);
+            ih.onEvent(ie, 0, false);
+            UUID wildcardNamePlayer = UUID.randomUUID();
+            PlayerIdentityEvent wildcardName = new PlayerIdentityEvent();
+            wildcardName.uuid(wildcardNamePlayer).currentName("Alpha_Bravo%One")
+                    .firstSeenEpochMs(now).lastSeenEpochMs(now + 1);
+            ih.onEvent(wildcardName, 1, true);
 
             // --- session ---
             StorageEventHandler<SessionEvent> sh = b.eventHandlerFor(Categories.SESSION);
@@ -154,8 +159,23 @@ class BackendIntegrationTest {
             assertEquals(1, byUuid.items().size(), label + ": identity by uuid");
             assertEquals("AlphaBravo", byUuid.items().get(0).currentName(), label + ": identity name");
 
-            Page<PlayerIdentity> byName = b.read(Categories.PLAYER_IDENTITY, new Queries.GetPlayerIdentityByName("alphabravo"));
+            Page<PlayerIdentity> byName = b.read(Categories.PLAYER_IDENTITY, new Queries.GetPlayerIdentityByName("ALPHABRAVO"));
             assertEquals(1, byName.items().size(), label + ": identity by name (case-insensitive)");
+            assertEquals(player, byName.items().get(0).uuid(), label + ": identity by name uuid");
+
+            Page<PlayerIdentity> byPrefix = b.read(Categories.PLAYER_IDENTITY,
+                    Queries.listPlayersByNamePrefix("alpha", 10));
+            assertTrue(byPrefix.items().stream().anyMatch(p -> p.uuid().equals(player)),
+                    label + ": prefix lookup includes plain name");
+            assertTrue(byPrefix.items().stream().anyMatch(p -> p.uuid().equals(wildcardNamePlayer)),
+                    label + ": prefix lookup includes wildcard-like name");
+
+            Page<PlayerIdentity> literalUnderscorePrefix = b.read(Categories.PLAYER_IDENTITY,
+                    Queries.listPlayersByNamePrefix("alpha_", 10));
+            assertEquals(1, literalUnderscorePrefix.items().size(),
+                    label + ": underscore in prefix is literal, not LIKE wildcard");
+            assertEquals(wildcardNamePlayer, literalUnderscorePrefix.items().get(0).uuid(),
+                    label + ": literal underscore prefix resolves the right player");
 
             Page<SessionRecord> sbi = b.read(Categories.SESSION, new Queries.GetSessionById(session));
             assertEquals(1, sbi.items().size(), label + ": session by id");

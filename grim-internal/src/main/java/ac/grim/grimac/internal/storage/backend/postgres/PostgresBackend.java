@@ -510,7 +510,7 @@ public final class PostgresBackend implements Backend {
         String escaped = escapeLike(prefix);
         try (PreparedStatement ps = c.prepareStatement(
                 "SELECT uuid, current_name, first_seen, last_seen FROM " + quoteId(config.tableNames().players()) + " "
-                        + "WHERE lower(current_name) LIKE ? ESCAPE '\\' "
+                        + "WHERE lower(current_name) LIKE ? ESCAPE '!' "
                         + "ORDER BY last_seen DESC LIMIT ?")) {
             ps.setString(1, escaped + "%");
             ps.setInt(2, q.limit());
@@ -526,7 +526,7 @@ public final class PostgresBackend implements Backend {
         StringBuilder out = new StringBuilder(s.length());
         for (int i = 0; i < s.length(); i++) {
             char c = s.charAt(i);
-            if (c == '\\' || c == '%' || c == '_') out.append('\\');
+            if (c == '!' || c == '%' || c == '_') out.append('!');
             out.append(c);
         }
         return out.toString();

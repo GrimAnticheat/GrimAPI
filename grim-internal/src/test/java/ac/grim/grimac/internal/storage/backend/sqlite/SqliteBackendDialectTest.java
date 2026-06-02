@@ -73,7 +73,7 @@ class SqliteBackendDialectTest {
             // writes, and current_name overwritten to the second value.
             StorageEventHandler<PlayerIdentityEvent> ih = b.eventHandlerFor(Categories.PLAYER_IDENTITY);
             ih.onEvent(newIdentity(player, "AlphaBravo", t0 + 100, t0 + 100), 0, false);
-            ih.onEvent(newIdentity(player, "charlieDelta", t0, t0 + 500), 1, true);
+            ih.onEvent(newIdentity(player, "charlie_Delta%Final", t0, t0 + 500), 1, true);
 
             // --- session: two writes to exercise UPSERT's DO UPDATE branch ---
             StorageEventHandler<SessionEvent> sh = b.eventHandlerFor(Categories.SESSION);
@@ -98,17 +98,22 @@ class SqliteBackendDialectTest {
             Page<PlayerIdentity> idPage = b.read(Categories.PLAYER_IDENTITY, new Queries.GetPlayerIdentity(player));
             assertEquals(1, idPage.items().size(), "identity row count");
             PlayerIdentity id = idPage.items().get(0);
-            assertEquals("charlieDelta", id.currentName(), "current_name = latest write");
+            assertEquals("charlie_Delta%Final", id.currentName(), "current_name = latest write");
             assertEquals(t0, id.firstSeenEpochMs(), "first_seen = min of writes");
             assertEquals(t0 + 500, id.lastSeenEpochMs(), "last_seen = max of writes");
 
             Page<PlayerIdentity> byName = b.read(Categories.PLAYER_IDENTITY,
-                    new Queries.GetPlayerIdentityByName("charliedelta"));
+                    new Queries.GetPlayerIdentityByName("CHARLIE_DELTA%FINAL"));
             assertEquals(1, byName.items().size(), "case-insensitive name lookup");
 
             Page<PlayerIdentity> prefix = b.read(Categories.PLAYER_IDENTITY,
                     Queries.listPlayersByNamePrefix("char", 25));
             assertEquals(1, prefix.items().size(), "prefix search finds the identity");
+
+            Page<PlayerIdentity> literalUnderscorePrefix = b.read(Categories.PLAYER_IDENTITY,
+                    Queries.listPlayersByNamePrefix("charlie_", 25));
+            assertEquals(1, literalUnderscorePrefix.items().size(),
+                    "underscore in prefix is literal, not LIKE wildcard");
 
             Page<PlayerIdentity> prefixEmpty = b.read(Categories.PLAYER_IDENTITY,
                     Queries.listPlayersByNamePrefix("", 25));
