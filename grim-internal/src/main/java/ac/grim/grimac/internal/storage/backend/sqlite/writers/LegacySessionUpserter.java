@@ -46,7 +46,7 @@ final class LegacySessionUpserter implements SessionUpserter {
                          String serverName,
                          long startedEpochMs,
                          long lastActivityEpochMs,
-                         Long closedAtEpochMs,
+                         long closedAtEpochMs,
                          String grimVersion,
                          String clientBrand,
                          int clientVersionPvn,
@@ -59,7 +59,7 @@ final class LegacySessionUpserter implements SessionUpserter {
         insertIgnore.setString(3, serverName);
         insertIgnore.setLong(4, startedEpochMs);
         insertIgnore.setLong(5, lastActivityEpochMs);
-        if (closedAtEpochMs == null) insertIgnore.setNull(6, java.sql.Types.BIGINT);
+        if (closedAtEpochMs == 0L) insertIgnore.setNull(6, java.sql.Types.BIGINT);
         else insertIgnore.setLong(6, closedAtEpochMs);
         insertIgnore.setString(7, grimVersion);
         insertIgnore.setString(8, clientBrand);
@@ -70,7 +70,7 @@ final class LegacySessionUpserter implements SessionUpserter {
 
         update.setString(1, serverName);
         update.setLong(2, lastActivityEpochMs);
-        if (closedAtEpochMs == null) update.setNull(3, java.sql.Types.BIGINT);
+        if (closedAtEpochMs == 0L) update.setNull(3, java.sql.Types.BIGINT);
         else update.setLong(3, closedAtEpochMs);
         update.setString(4, grimVersion);
         update.setString(5, clientBrand);

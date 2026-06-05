@@ -24,6 +24,12 @@ public final class MysqlBackendProvider implements BackendProvider {
     @Override
     public @NotNull BackendConfig readConfig(@NotNull BackendConfigSource src) {
         String pw = src.getString("password", "");
+        int wtDefault = src.getInt("writer-threads.default", 1);
+        java.util.Map<String, Integer> wtPerCat = new java.util.LinkedHashMap<>();
+        for (String cat : new String[]{"violation", "session", "player-identity", "setting", "blob"}) {
+            int v = src.getInt("writer-threads." + cat, -1);
+            if (v > 0) wtPerCat.put(cat, v);
+        }
         return new MysqlBackendConfig(
                 src.getString("host", "localhost"),
                 src.getInt("port", 3306),
@@ -32,6 +38,7 @@ public final class MysqlBackendProvider implements BackendProvider {
                 pw.isEmpty() ? null : pw,
                 src.getString("extra-jdbc-params", ""),
                 src.getInt("batch-flush-cap", 256),
+                wtDefault, wtPerCat,
                 TableNames.readFrom(src));
     }
 

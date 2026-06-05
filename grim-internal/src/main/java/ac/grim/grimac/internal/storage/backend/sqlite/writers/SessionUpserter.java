@@ -20,7 +20,7 @@ public interface SessionUpserter extends AutoCloseable {
                   String serverName,
                   long startedEpochMs,
                   long lastActivityEpochMs,
-                  Long closedAtEpochMs, // null until the session ends
+                  long closedAtEpochMs, // 0L while the session is open (SessionRecord.OPEN)
                   String grimVersion,
                   String clientBrand,
                   int clientVersionPvn,

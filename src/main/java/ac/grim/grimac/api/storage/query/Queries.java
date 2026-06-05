@@ -10,7 +10,15 @@ import org.jetbrains.annotations.Nullable;
 
 import java.util.UUID;
 
+/**
+ * @deprecated Replaced by per-Kind operation menus. For example,
+ * {@code listSessionsByPlayer} becomes {@code SESSIONS.findByIndex("by_player_started", playerUuid, cursor, pageSize)};
+ * {@code listViolationsInSession} becomes {@code VIOLATIONS.page("session_id", sessionId, cursor, pageSize)};
+ * {@code getSetting} becomes {@code SETTINGS.get(scope, scopeKey, key)}.
+ * See {@code .docs/storage-redesign/01-data-kinds.md}.
+ */
 @ApiStatus.Experimental
+@Deprecated(forRemoval = true, since = "phase0")
 public final class Queries {
 
     private Queries() {}
@@ -62,4 +70,5 @@ public final class Queries {
     public record ListPlayersByNamePrefix(String lowerPrefix, int limit) implements Query<PlayerIdentity> {}
 
     public record GetSetting(SettingScope scope, String scopeKey, String key) implements Query<SettingRecord> {}
+
 }

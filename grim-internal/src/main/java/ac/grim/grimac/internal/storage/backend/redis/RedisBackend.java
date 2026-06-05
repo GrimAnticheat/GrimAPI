@@ -42,6 +42,7 @@ import redis.clients.jedis.params.ScanParams;
 import redis.clients.jedis.resps.Tuple;
 import redis.clients.jedis.util.SafeEncoder;
 
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.Collections;
@@ -298,8 +299,9 @@ public final class RedisBackend implements Backend {
             h.put("check_id", Integer.toString(v.checkId()));
             h.put("vl", Double.toString(v.vl()));
             h.put("occurred_at", Long.toString(v.occurredEpochMs()));
-            if (v.verbose() != null) h.put("verbose", v.verbose());
-            h.put("verbose_format", Integer.toString(v.verboseFormat().code()));
+            String verbose = verboseString(v.verboseData());
+            if (verbose != null) h.put("verbose", verbose);
+            h.put("verbose_format", Integer.toString(VerboseFormat.TEXT.code()));
             Pipeline p = j.pipelined();
             p.hset(recordKey, h);
             p.zadd(tableKey(config.tableNames().violations()) + ":by-session:" + sessionHex, v.occurredEpochMs(), idHex);
@@ -312,7 +314,7 @@ public final class RedisBackend implements Backend {
 
     private void writeSession(SessionEvent s, long sequence, boolean endOfBatch) throws BackendException {
         if (!s.sessionBlobs().isEmpty()) {
-            throw new BackendException("session-blob serialisation isn't implemented by this backend");
+            throw new BackendException("replay-clip serialisation isn't implemented by this backend");
         }
         try (Jedis j = pool.getResource()) {
             String sessionHex = hex(s.sessionId());
@@ -328,11 +330,12 @@ public final class RedisBackend implements Backend {
             // Heartbeats with null closed_at don't HSET the field, so any
             // previously-written value survives. Same NULL → set transition
             // semantics as the SQL backends.
-            if (s.closedAtEpochMs() != null) h.put("closed_at", Long.toString(s.closedAtEpochMs()));
+            if (s.isClosed()) h.put("closed_at", Long.toString(s.closedAtEpochMs()));
             if (s.grimVersion() != null) h.put("grim_version", s.grimVersion());
             if (s.clientBrand() != null) h.put("client_brand", s.clientBrand());
             h.put("client_version_pvn", Integer.toString(s.clientVersion()));
             if (s.serverVersionString() != null) h.put("server_version", s.serverVersionString());
+            if (s.instanceId() != null) h.put("instance_id", hex(s.instanceId()));
             Pipeline p = j.pipelined();
             p.hset(key, h);
             p.zadd(tableKey(config.tableNames().sessions()) + ":by-player:" + playerHex,
@@ -417,8 +420,9 @@ public final class RedisBackend implements Backend {
             h.put("check_id", Integer.toString(v.checkId()));
             h.put("vl", Double.toString(v.vl()));
             h.put("occurred_at", Long.toString(v.occurredEpochMs()));
-            if (v.verbose() != null) h.put("verbose", v.verbose());
-            h.put("verbose_format", Integer.toString(v.verboseFormat().code()));
+            String verbose = verboseString(v.verboseData());
+            if (verbose != null) h.put("verbose", verbose);
+            h.put("verbose_format", Integer.toString(VerboseFormat.TEXT.code()));
             Pipeline p = j.pipelined();
             p.hset(key, h);
             p.zadd(tableKey(config.tableNames().violations()) + ":by-session:" + sessionHex, v.occurredEpochMs(), idHex);
@@ -438,11 +442,12 @@ public final class RedisBackend implements Backend {
             if (s.serverName() != null) h.put("server_name", s.serverName());
             h.put("started_at", Long.toString(s.startedEpochMs()));
             h.put("last_activity", Long.toString(s.lastActivityEpochMs()));
-            if (s.closedAtEpochMs() != null) h.put("closed_at", Long.toString(s.closedAtEpochMs()));
+            if (s.isClosed()) h.put("closed_at", Long.toString(s.closedAtEpochMs()));
             if (s.grimVersion() != null) h.put("grim_version", s.grimVersion());
             if (s.clientBrand() != null) h.put("client_brand", s.clientBrand());
             h.put("client_version_pvn", Integer.toString(s.clientVersion()));
             if (s.serverVersionString() != null) h.put("server_version", s.serverVersionString());
+            if (s.instanceId() != null) h.put("instance_id", hex(s.instanceId()));
             Pipeline p = j.pipelined();
             p.hset(key, h);
             p.zadd(tableKey(config.tableNames().sessions()) + ":by-player:" + playerHex,
@@ -640,17 +645,20 @@ public final class RedisBackend implements Backend {
 
     private static SessionRecord mapSession(Map<String, String> h) {
         String closedAt = h.get("closed_at");
+        String instanceHex = h.get("instance_id");
+        UUID instanceId = (instanceHex == null || instanceHex.isEmpty()) ? null : fromHex(instanceHex);
         return new SessionRecord(
                 fromHex(h.get("session_id")),
                 fromHex(h.get("player_uuid")),
                 h.get("server_name"),
                 Long.parseLong(h.get("started_at")),
                 Long.parseLong(h.get("last_activity")),
-                closedAt == null || closedAt.isEmpty() ? null : Long.parseLong(closedAt),
+                closedAt == null || closedAt.isEmpty() ? SessionRecord.OPEN : Long.parseLong(closedAt),
                 h.get("grim_version"),
                 h.get("client_brand"),
                 Integer.parseInt(h.getOrDefault("client_version_pvn", "-1")),
                 h.get("server_version"),
+                instanceId,
                 List.of());
     }
 
@@ -662,8 +670,7 @@ public final class RedisBackend implements Backend {
                 Integer.parseInt(h.get("check_id")),
                 Double.parseDouble(h.get("vl")),
                 Long.parseLong(h.get("occurred_at")),
-                h.get("verbose"),
-                VerboseFormat.fromCode(Integer.parseInt(h.getOrDefault("verbose_format", "0"))));
+                h.get("verbose") == null ? null : h.get("verbose").getBytes(StandardCharsets.UTF_8));
     }
 
     private static PlayerIdentity mapIdentity(Map<String, String> h) {
@@ -681,6 +688,10 @@ public final class RedisBackend implements Backend {
                 h.get("key"),
                 Base64.getDecoder().decode(h.get("value_b64")),
                 Long.parseLong(h.get("updated_at")));
+    }
+
+    private static String verboseString(byte[] verboseData) {
+        return verboseData == null ? null : new String(verboseData, StandardCharsets.UTF_8);
     }
 
     @Override

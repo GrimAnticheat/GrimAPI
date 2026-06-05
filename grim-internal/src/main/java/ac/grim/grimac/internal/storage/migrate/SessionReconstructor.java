@@ -88,6 +88,7 @@ public final class SessionReconstructor {
                     currentSession.clientBrand(),
                     currentSession.clientVersion(),
                     currentSession.serverVersionString(),
+                    currentSession.instanceId(),
                     currentSession.sessionBlobs());
         }
 
@@ -123,11 +124,12 @@ public final class SessionReconstructor {
                 lookup.server(v.serverId()),
                 v.createdAtEpochMs(),
                 v.createdAtEpochMs(),
-                null, // closedAtEpochMs — legacy V0 rows have no end-of-session signal; leave open
+                SessionRecord.OPEN, // legacy V0 rows have no end-of-session signal; leave open
                 lookup.grimVersion(v.grimVersionId()),
                 lookup.clientBrand(v.clientBrandId()),
                 clientVersionPvn,
                 lookup.serverVersion(v.serverVersionId()),
+                /*instanceId=*/null, // V0 data predates the instance registry
                 List.of());
     }
 

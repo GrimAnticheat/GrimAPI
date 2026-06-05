@@ -27,6 +27,7 @@ import ac.grim.grimac.api.storage.query.Deletes;
 import ac.grim.grimac.api.storage.query.Page;
 import ac.grim.grimac.api.storage.query.Queries;
 import ac.grim.grimac.api.storage.query.Query;
+import ac.grim.grimac.internal.storage.codec.bson.BsonBinaries;
 import ac.grim.grimac.internal.storage.util.UuidCodec;
 import ac.grim.grimac.internal.storage.util.UuidV7;
 import com.mongodb.MongoWriteException;
@@ -53,6 +54,7 @@ import org.bson.types.ObjectId;
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
 
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.EnumSet;
@@ -369,7 +371,7 @@ public final class MongoBackend implements Backend {
     private Document sessionUpdateFields(SessionEvent s) {
         if (!s.sessionBlobs().isEmpty()) {
             throw new UnsupportedOperationException(
-                    "session-blob serialisation isn't implemented by this backend; "
+                    "replay-clip serialisation isn't implemented by this backend; "
                             + "sessions with non-empty sessionBlobs cannot be stored");
         }
         Document fields = new Document()
@@ -382,9 +384,31 @@ public final class MongoBackend implements Backend {
                 .append("client_version_pvn", s.clientVersion())
                 .append("server_version", s.serverVersionString())
                 .append("replay_clips", List.of());
+        // instance_id: write ONLY when present. Two distinct concerns:
+        // (1) subtype — the v2 MongoEntityAdapter writes UUIDs as
+        // BsonBinary subtype 4 (UUID_STANDARD); binUuid here writes
+        // subtype 0. Sweep queries from v2 compare by exact BsonBinary
+        // (subtype-aware), so instance_id MUST use the v2-compatible
+        // helper, not binUuid. (2) null erases — Document.append(name,
+        // null) writes BSON null, which would clear a prior owner on
+        // every heartbeat that didn't carry instanceId. So skip the
+        // append entirely when the event has no instance.
+        if (s.instanceId() != null) {
+            fields.append("instance_id", BsonBinaries.uuidBinary(s.instanceId()));
+        }
         // closed_at: existing wins when non-null; event value when existing is null.
+        // SessionEvent.closedAtEpochMs uses 0L (= SessionRecord.OPEN) as the
+        // "still open" sentinel. We MUST translate 0L → null in the $ifNull
+        // fallback, otherwise heartbeats stamp closed_at=0 on insert and the
+        // sentinel becomes non-null. Once non-null, $ifNull preserves it and
+        // (1) the real close event can never override it, (2) the crash sweep
+        // matches only {closed_at: null}/missing and silently skips these
+        // sessions forever.
+        Object closedAtVal = s.closedAtEpochMs() == ac.grim.grimac.api.storage.model.SessionRecord.OPEN
+                ? null
+                : s.closedAtEpochMs();
         fields.append("closed_at", new Document("$ifNull",
-                Arrays.asList("$closed_at", s.closedAtEpochMs())));
+                Arrays.asList("$closed_at", closedAtVal)));
         return fields;
     }
 
@@ -445,10 +469,10 @@ public final class MongoBackend implements Backend {
     private static Document sessionDoc(UUID session, UUID player, String serverName,
                                        long startedAt, long lastActivity, Long closedAt,
                                        String grimVersion, String clientBrand, int clientPvn,
-                                       String serverVersion, boolean emptyReplay) {
-        if (!emptyReplay) {
+                                       String serverVersion, UUID instanceId, boolean emptySessionBlobs) {
+        if (!emptySessionBlobs) {
             throw new UnsupportedOperationException(
-                    "session-blob serialisation isn't implemented by this backend; "
+                    "replay-clip serialisation isn't implemented by this backend; "
                             + "sessions with non-empty sessionBlobs cannot be stored");
         }
         Document d = new Document()
@@ -462,7 +486,12 @@ public final class MongoBackend implements Backend {
                 .append("client_version_pvn", clientPvn)
                 .append("server_version", serverVersion)
                 .append("replay_clips", List.of());
-        if (closedAt != null) d.append("closed_at", closedAt);
+        if (closedAt != null)   d.append("closed_at", closedAt);
+        // instance_id: subtype-4 (matches v2 codec) and skip when null
+        // so a bulk-imported row without an owning instance doesn't
+        // explicitly write null and confuse the sweep. See
+        // sessionUpdateFields for the rationale.
+        if (instanceId != null) d.append("instance_id", BsonBinaries.uuidBinary(instanceId));
         return d;
     }
 
@@ -507,7 +536,7 @@ public final class MongoBackend implements Backend {
         List<Document> docs = new ArrayList<>(rows.size());
         for (ViolationRecord v : rows) {
             docs.add(violationDoc(v.id(), v.sessionId(), v.playerUuid(), v.checkId(), v.vl(),
-                    v.occurredEpochMs(), v.verbose(), v.verboseFormat()));
+                    v.occurredEpochMs(), verboseString(v.verboseData()), VerboseFormat.TEXT));
         }
         if (!docs.isEmpty()) {
             violations.insertMany(docs, new InsertManyOptions().ordered(false));
@@ -522,10 +551,16 @@ public final class MongoBackend implements Backend {
         // one-shot write.
         List<WriteModel<Document>> ops = new ArrayList<>(rows.size());
         for (SessionRecord s : rows) {
+            // Translate the OPEN sentinel (0L) → null so the bulk-imported
+            // document carries closed_at:null/absent (not 0). Heartbeat
+            // upserts use $ifNull on closed_at; a sentinel 0 here would
+            // poison the field and break markCrashedSessions detection.
+            Long closedAt = s.isClosed() ? s.closedAtEpochMs() : null;
             Document doc = sessionDoc(s.sessionId(), s.playerUuid(), s.serverName(),
-                    s.startedEpochMs(), s.lastActivityEpochMs(), s.closedAtEpochMs(),
+                    s.startedEpochMs(), s.lastActivityEpochMs(), closedAt,
                     s.grimVersion(), s.clientBrand(),
-                    s.clientVersion(), s.serverVersionString(), s.sessionBlobs().isEmpty());
+                    s.clientVersion(), s.serverVersionString(),
+                    s.instanceId(), s.sessionBlobs().isEmpty());
             ops.add(new ReplaceOneModel<>(Filters.eq("_id", binUuid(s.sessionId())),
                     doc, new ReplaceOptions().upsert(true)));
         }
@@ -694,18 +729,32 @@ public final class MongoBackend implements Backend {
         throw new IllegalStateException("expected binary field, got " + (raw == null ? "null" : raw.getClass().getName()));
     }
 
+    private static byte[] verboseBytes(Object raw) {
+        if (raw == null) return null;
+        if (raw instanceof String s) return s.getBytes(StandardCharsets.UTF_8);
+        return binBytes(raw);
+    }
+
+    private static String verboseString(byte[] verboseData) {
+        return verboseData == null ? null : new String(verboseData, StandardCharsets.UTF_8);
+    }
+
     private static SessionRecord mapSession(Document d) {
+        Long closedAtBoxed = d.getLong("closed_at"); // Document.getLong returns null when absent
+        Object instanceRaw = d.get("instance_id");
+        UUID instanceId = instanceRaw == null ? null : UuidCodec.fromBytes(binBytes(instanceRaw));
         return new SessionRecord(
                 UuidCodec.fromBytes(binBytes(d.get("_id"))),
                 UuidCodec.fromBytes(binBytes(d.get("player_uuid"))),
                 d.getString("server_name"),
                 d.getLong("started_at"),
                 d.getLong("last_activity"),
-                d.getLong("closed_at"), // Document.getLong returns null when absent
+                closedAtBoxed == null ? SessionRecord.OPEN : closedAtBoxed,
                 d.getString("grim_version"),
                 d.getString("client_brand"),
                 d.getInteger("client_version_pvn", -1),
                 d.getString("server_version"),
+                instanceId,
                 List.of());
     }
 
@@ -717,8 +766,7 @@ public final class MongoBackend implements Backend {
                 d.getInteger("check_id"),
                 d.getDouble("vl"),
                 d.getLong("occurred_at"),
-                d.getString("verbose"),
-                VerboseFormat.fromCode(d.getInteger("verbose_format", 0)));
+                verboseBytes(d.get("verbose")));
     }
 
     private static PlayerIdentity mapIdentity(Document d) {
@@ -813,12 +861,16 @@ public final class MongoBackend implements Backend {
     public long markCrashedSessions() throws BackendException {
         try {
             // Aggregation pipeline: set closed_at = last_activity for any
-            // session where closed_at is missing OR null.
+            // session where closed_at is missing OR null OR equal to the
+            // SessionRecord.OPEN sentinel (0L). Older builds incorrectly
+            // wrote 0 for open sessions (pre-Phase 3b.2); the 0L branch
+            // rescues those stale rows on first sweep after upgrade.
             Document setStage = new Document("$set", new Document("closed_at", "$last_activity"));
             return sessions.updateMany(
                     new Document("$or", List.of(
                             Filters.exists("closed_at", false),
-                            Filters.eq("closed_at", null))),
+                            Filters.eq("closed_at", null),
+                            Filters.eq("closed_at", ac.grim.grimac.api.storage.model.SessionRecord.OPEN))),
                     List.of(setStage)).getModifiedCount();
         } catch (RuntimeException e) {
             throw new BackendException("markCrashedSessions failed", e);

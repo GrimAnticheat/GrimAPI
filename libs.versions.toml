@@ -14,6 +14,7 @@ mysqlJdbc = "9.1.0"
 postgresJdbc = "42.7.5"
 mongoDriver = "5.3.1"
 jedis = "5.2.0"
+hikaricp = "7.0.2"
 
 [libraries]
 lombok = { module = "org.projectlombok:lombok", version.ref = "lombok" }
@@ -25,6 +26,7 @@ mysqlJdbc = { module = "com.mysql:mysql-connector-j", version.ref = "mysqlJdbc" 
 postgresJdbc = { module = "org.postgresql:postgresql", version.ref = "postgresJdbc" }
 mongoDriverSync = { module = "org.mongodb:mongodb-driver-sync", version.ref = "mongoDriver" }
 jedis = { module = "redis.clients:jedis", version.ref = "jedis" }
+hikaricp = { module = "com.zaxxer:HikariCP", version.ref = "hikaricp" }
 junitJupiter = { module = "org.junit.jupiter:junit-jupiter", version.ref = "junit" }
 
 [plugins]

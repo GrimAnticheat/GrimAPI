@@ -1,6 +1,7 @@
 package ac.grim.grimac.api.storage;
 
 import ac.grim.grimac.api.storage.category.Category;
+import ac.grim.grimac.api.storage.kind.Operation;
 import ac.grim.grimac.api.storage.query.DeleteCriteria;
 import ac.grim.grimac.api.storage.query.Page;
 import ac.grim.grimac.api.storage.query.Query;
@@ -35,6 +36,17 @@ public interface DataStore {
      * storage engine; the record type {@code R} comes from the {@link Query}.
      */
     @NotNull <R> CompletionStage<Page<R>> query(@NotNull Category<?> cat, @NotNull Query<R> query);
+
+    /**
+     * Execute a V2 storage operation against the backend routed for the
+     * operation's category. Implemented by the shared datastore when V2
+     * backend routes are installed.
+     */
+    @NotNull
+    default <R> CompletionStage<R> execute(@NotNull Operation<R> op) {
+        throw new UnsupportedOperationException(
+                "execute(Operation) requires a V2-backed DataStoreImpl");
+    }
 
     @NotNull <E> CompletionStage<Void> delete(@NotNull Category<E> cat, @NotNull DeleteCriteria criteria);
 

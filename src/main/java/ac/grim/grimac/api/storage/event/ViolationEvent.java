@@ -6,6 +6,7 @@ import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
+import java.nio.charset.StandardCharsets;
 import java.util.UUID;
 
 /**
@@ -29,7 +30,7 @@ public final class ViolationEvent {
     private int checkId;
     private double vl;
     private long occurredEpochMs;
-    private @Nullable String verbose;
+    private @Nullable byte[] verboseData;
     private VerboseFormat verboseFormat = VerboseFormat.TEXT;
 
     public @Nullable UUID id() { return id; }
@@ -50,8 +51,25 @@ public final class ViolationEvent {
     public long occurredEpochMs() { return occurredEpochMs; }
     public @NotNull ViolationEvent occurredEpochMs(long v) { this.occurredEpochMs = v; return this; }
 
-    public @Nullable String verbose() { return verbose; }
-    public @NotNull ViolationEvent verbose(@Nullable String v) { this.verbose = v; return this; }
+    /**
+     * Legacy text view used by existing event listeners and callers that have not
+     * been ported to binary verbose payloads yet. New storage writers should use
+     * {@link #verboseData()} to avoid decoding on the write path.
+     */
+    public @Nullable String verbose() {
+        return verboseData == null ? null : new String(verboseData, StandardCharsets.UTF_8);
+    }
+
+    /**
+     * Legacy text setter. Encodes as UTF-8 into the opaque stored payload.
+     */
+    public @NotNull ViolationEvent verbose(@Nullable String v) {
+        this.verboseData = v == null ? null : v.getBytes(StandardCharsets.UTF_8);
+        return this;
+    }
+
+    public @Nullable byte[] verboseData() { return verboseData; }
+    public @NotNull ViolationEvent verboseData(@Nullable byte[] v) { this.verboseData = v; return this; }
 
     public @NotNull VerboseFormat verboseFormat() { return verboseFormat; }
     public @NotNull ViolationEvent verboseFormat(@NotNull VerboseFormat v) { this.verboseFormat = v; return this; }
@@ -67,7 +85,7 @@ public final class ViolationEvent {
         checkId = 0;
         vl = 0.0;
         occurredEpochMs = 0L;
-        verbose = null;
+        verboseData = null;
         verboseFormat = VerboseFormat.TEXT;
     }
 }

@@ -39,7 +39,7 @@ final class ModernSessionUpserter implements SessionUpserter {
                          String serverName,
                          long startedEpochMs,
                          long lastActivityEpochMs,
-                         Long closedAtEpochMs,
+                         long closedAtEpochMs,
                          String grimVersion,
                          String clientBrand,
                          int clientVersionPvn,
@@ -50,7 +50,7 @@ final class ModernSessionUpserter implements SessionUpserter {
         upsert.setString(3, serverName);
         upsert.setLong(4, startedEpochMs);
         upsert.setLong(5, lastActivityEpochMs);
-        if (closedAtEpochMs == null) upsert.setNull(6, java.sql.Types.BIGINT);
+        if (closedAtEpochMs == 0L) upsert.setNull(6, java.sql.Types.BIGINT);
         else upsert.setLong(6, closedAtEpochMs);
         upsert.setString(7, grimVersion);
         upsert.setString(8, clientBrand);

@@ -15,11 +15,27 @@ public record PostgresBackendConfig(
         @Nullable String password,
         @NotNull String extraJdbcParams,
         int batchFlushCap,
+        int writerThreadsDefault,
+        @NotNull java.util.Map<String, Integer> writerThreadsPerCategory,
         @NotNull TableNames tableNames) implements BackendConfig {
 
     public PostgresBackendConfig {
         if (batchFlushCap <= 0) batchFlushCap = 256;
+        if (writerThreadsDefault <= 0) writerThreadsDefault = 1;
+        if (writerThreadsPerCategory == null) writerThreadsPerCategory = java.util.Map.of();
         if (tableNames == null) tableNames = TableNames.DEFAULTS;
+    }
+
+    public PostgresBackendConfig(@NotNull String host, int port, @NotNull String database,
+                                    @NotNull String user, @Nullable String password,
+                                    @NotNull String extraJdbcParams, int batchFlushCap,
+                                    @NotNull TableNames tableNames) {
+        this(host, port, database, user, password, extraJdbcParams, batchFlushCap,
+             1, java.util.Map.of(), tableNames);
+    }
+
+    public int writerThreadsFor(@NotNull String categoryId) {
+        return writerThreadsPerCategory.getOrDefault(categoryId, writerThreadsDefault);
     }
 
     public String jdbcUrl() {

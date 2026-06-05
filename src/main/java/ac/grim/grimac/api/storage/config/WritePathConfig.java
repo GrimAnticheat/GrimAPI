@@ -29,6 +29,23 @@ public record WritePathConfig(
             throw new IllegalArgumentException(
                     "queueCapacity must be a positive power of two (got " + queueCapacity + ")");
         }
+        if (batchSize <= 0) {
+            throw new IllegalArgumentException("batchSize must be > 0 (got " + batchSize + ")");
+        }
+        if (flushIntervalMs < 0) {
+            throw new IllegalArgumentException("flushIntervalMs must be >= 0 (got " + flushIntervalMs + ")");
+        }
+        if (warnRateMs < 0) {
+            throw new IllegalArgumentException("warnRateMs must be >= 0 (got " + warnRateMs + ")");
+        }
+        if (shutdownDrainTimeoutMs < 0) {
+            // Negative would propagate to awaitTermination(...) as undefined
+            // behavior (and to Disruptor's ring shutdown as 'infinite'),
+            // either of which is a foot-gun. 0 = 'no drain, exit immediately'
+            // is the legitimate zero case.
+            throw new IllegalArgumentException(
+                    "shutdownDrainTimeoutMs must be >= 0 (got " + shutdownDrainTimeoutMs + ")");
+        }
         if (waitStrategy == null) waitStrategy = WaitStrategyType.BLOCKING;
     }
 

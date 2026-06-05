@@ -32,6 +32,7 @@ dependencies {
     compileOnly(libs.postgresJdbc)
     compileOnly(libs.mongoDriverSync)
     compileOnly(libs.jedis)
+    compileOnly(libs.hikaricp)
 
     // com.lmax.* ring-buffer writer path used by the datastore. Shaded +
     // relocated in prod builds; version pinned to match Paper's bundled
@@ -46,6 +47,7 @@ dependencies {
     testImplementation(libs.postgresJdbc)
     testImplementation(libs.mongoDriverSync)
     testImplementation(libs.jedis)
+    testImplementation(libs.hikaricp)
 }
 
 tasks.withType<JavaCompile>().configureEach {
@@ -74,3 +76,18 @@ repositories {
     mavenLocal()
     mavenCentral()
 }
+
+val codecBindingsDir = layout.buildDirectory.dir("generated/codec-bindings")
+val generateCodecBindings = tasks.register<JavaExec>("generateCodecBindings") {
+    group = "build"
+    description = "Capture v2 codec bindings for builtin persistent records"
+    dependsOn(tasks.named("compileJava"))
+    classpath = sourceSets["main"].output.classesDirs + sourceSets["main"].compileClasspath
+    mainClass.set("ac.grim.grimac.internal.storage.codec.gen.CodecBindingCaptureTool")
+    val outFile = codecBindingsDir.get().file("META-INF/grim/codec-bindings.tsv").asFile
+    args(outFile.absolutePath)
+    outputs.file(outFile)
+    outputs.upToDateWhen { false }
+}
+
+sourceSets["main"].output.dir(mapOf("builtBy" to generateCodecBindings), codecBindingsDir)

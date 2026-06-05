@@ -2,6 +2,7 @@ package ac.grim.grimac.internal.storage.core;
 
 import ac.grim.grimac.api.storage.backend.ApiVersion;
 import ac.grim.grimac.api.storage.backend.Backend;
+import ac.grim.grimac.api.storage.backend.BackendConfig;
 import ac.grim.grimac.api.storage.backend.BackendContext;
 import ac.grim.grimac.api.storage.backend.BackendException;
 import ac.grim.grimac.api.storage.backend.StorageEventHandler;
@@ -13,17 +14,26 @@ import ac.grim.grimac.api.storage.check.CheckCatalogRepairResult;
 import ac.grim.grimac.api.storage.check.CheckCatalogRow;
 import ac.grim.grimac.api.storage.config.WaitStrategyType;
 import ac.grim.grimac.api.storage.config.WritePathConfig;
+import ac.grim.grimac.api.storage.event.PlayerIdentityEvent;
 import ac.grim.grimac.api.storage.event.ViolationEvent;
-import ac.grim.grimac.api.storage.model.VerboseFormat;
+import ac.grim.grimac.api.storage.kind.Entity;
+import ac.grim.grimac.api.storage.model.PlayerIdentity;
 import ac.grim.grimac.api.storage.model.ViolationRecord;
+import ac.grim.grimac.api.storage.registry.StoreId;
 import ac.grim.grimac.api.storage.query.DeleteCriteria;
 import ac.grim.grimac.api.storage.query.Page;
 import ac.grim.grimac.api.storage.query.Queries;
 import ac.grim.grimac.api.storage.query.Query;
 import ac.grim.grimac.internal.storage.backend.memory.InMemoryBackend;
+import ac.grim.grimac.internal.storage.backend.sqlite.SqliteBackendConfig;
+import ac.grim.grimac.internal.storage.backend.sqlite.v2.SqliteBackendV2;
+import ac.grim.grimac.internal.storage.category.V2BuiltinKinds;
 import ac.grim.grimac.internal.storage.checks.InMemoryCheckCatalogPersistence;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Path;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
@@ -65,6 +75,54 @@ class DataStoreImplTest {
     }
 
     @Test
+    void v2PlayerIdentityQueriesResolveNamesThroughCaseInsensitiveIndex(@TempDir Path tempDir) throws Exception {
+        Logger logger = Logger.getLogger("DataStoreImplTest");
+        SqliteBackendConfig cfg = SqliteBackendConfig.defaults("players-v2.db");
+        SqliteBackendV2 backend = new SqliteBackendV2(cfg);
+        backend.init(new TestBackendContext(cfg, tempDir, logger));
+
+        Entity<UUID, PlayerIdentityEvent, PlayerIdentity> players = V2BuiltinKinds.players();
+        StoreId storeId = StoreId.grim("grim_players");
+        backend.adapterFor(players).orElseThrow().ensureStore(storeId, players);
+
+        DataStoreImpl store = new DataStoreImpl(
+                new CategoryRouter(Map.of()),
+                new WritePathConfig(8, 1, 1L, 10_000L, 1_000L, WaitStrategyType.BLOCKING),
+                logger);
+        store.withV2Routes(V2Routes.builder()
+                .register(Categories.PLAYER_IDENTITY, storeId, players, backend)
+                .build());
+        store.start();
+
+        UUID player = UUID.randomUUID();
+        try {
+            store.submit(Categories.PLAYER_IDENTITY, event -> event
+                    .uuid(player)
+                    .currentName("John_Hydra")
+                    .firstSeenEpochMs(1_700_000_000_000L)
+                    .lastSeenEpochMs(1_700_000_000_500L));
+            waitFor(() -> store.query(Categories.PLAYER_IDENTITY, Queries.getPlayerIdentity(player))
+                    .toCompletableFuture().get(2, TimeUnit.SECONDS)
+                    .items().size() == 1);
+
+            Page<PlayerIdentity> byName = store.query(Categories.PLAYER_IDENTITY,
+                            Queries.getPlayerIdentityByName("john_hydra"))
+                    .toCompletableFuture().get(2, TimeUnit.SECONDS);
+            assertEquals(1, byName.items().size(), "case-insensitive exact name lookup");
+            assertEquals(player, byName.items().get(0).uuid());
+
+            Page<PlayerIdentity> byPrefix = store.query(Categories.PLAYER_IDENTITY,
+                            Queries.listPlayersByNamePrefix("john", 10))
+                    .toCompletableFuture().get(2, TimeUnit.SECONDS);
+            assertEquals(1, byPrefix.items().size(), "case-insensitive prefix lookup");
+            assertEquals(player, byPrefix.items().get(0).uuid());
+        } finally {
+            store.flushAndClose(1_000L);
+            backend.close();
+        }
+    }
+
+    @Test
     void inMemoryRepairRewritesLegacyHashCheckIdsAndStubVersions() throws Exception {
         InMemoryBackend backend = new InMemoryBackend();
         String stableKey = "grim.badpackets.invalid_interact_order";
@@ -81,8 +139,7 @@ class DataStoreImplTest {
                 legacyHashId,
                 1.0,
                 1_700_000_000_000L,
-                "verbose",
-                VerboseFormat.TEXT)));
+                "verbose".getBytes(StandardCharsets.UTF_8))));
 
         CheckCatalogRepairResult result = backend.repairCheckCatalog(
                 Map.of(legacyHashId, catalogId),
@@ -97,6 +154,34 @@ class DataStoreImplTest {
         assertEquals(catalogId, page.items().get(0).checkId());
         CheckCatalogRow row = backend.checkCatalog().loadAll().iterator().next();
         assertEquals("3.0.152-test", row.introducedVersion());
+    }
+
+    private static void waitFor(ThrowingBooleanSupplier condition) throws Exception {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
+        Throwable last = null;
+        while (System.nanoTime() < deadline) {
+            try {
+                if (condition.getAsBoolean()) return;
+            } catch (Throwable t) {
+                last = t;
+            }
+            Thread.sleep(25L);
+        }
+        if (last != null) {
+            throw new AssertionError("condition did not become true", last);
+        }
+        throw new AssertionError("condition did not become true");
+    }
+
+    @FunctionalInterface
+    private interface ThrowingBooleanSupplier {
+        boolean getAsBoolean() throws Exception;
+    }
+
+    private record TestBackendContext(
+            BackendConfig config,
+            Path dataDirectory,
+            Logger logger) implements BackendContext {
     }
 
     private static final class CapturingViolationBackend implements Backend {

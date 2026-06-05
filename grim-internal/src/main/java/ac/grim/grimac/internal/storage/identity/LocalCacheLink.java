@@ -15,6 +15,12 @@ import java.util.concurrent.CompletionStage;
  * Name-resolver link backed by the local PlayerIdentity category. Matches the
  * PR #2371-style behaviour: only resolves UUIDs + names we've previously observed on
  * this server (or any other that writes to the same shared networked backend).
+ *
+ * <p>Uses the legacy {@code store.query()} API; when v2 routes are
+ * installed, {@code DataStoreImpl.query()} transparently translates the
+ * legacy {@link ac.grim.grimac.api.storage.query.Query} into the
+ * equivalent v2 {@link ac.grim.grimac.api.storage.kind.Operation} and
+ * dispatches through the v2 adapter. No consumer-side changes needed.
  */
 @ApiStatus.Internal
 public final class LocalCacheLink implements NameResolverLink {

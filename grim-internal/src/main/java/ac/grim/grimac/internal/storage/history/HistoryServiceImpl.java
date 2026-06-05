@@ -2,12 +2,18 @@ package ac.grim.grimac.internal.storage.history;
 
 import ac.grim.grimac.api.storage.DataStore;
 import ac.grim.grimac.api.storage.category.Categories;
+import ac.grim.grimac.api.storage.category.Category;
+import ac.grim.grimac.api.storage.category.EventStreamCategory;
+import ac.grim.grimac.api.storage.event.ServerStartupEvent;
+import ac.grim.grimac.api.storage.event.ViolationEvent;
 import ac.grim.grimac.api.storage.history.CheckBucket;
 import ac.grim.grimac.api.storage.history.CheckCount;
 import ac.grim.grimac.api.storage.history.HistoryService;
 import ac.grim.grimac.api.storage.history.SessionDetail;
 import ac.grim.grimac.api.storage.history.SessionSummary;
 import ac.grim.grimac.api.storage.history.ViolationEntry;
+import ac.grim.grimac.api.storage.kind.ops.EntityOps;
+import ac.grim.grimac.api.storage.model.ServerStartupRecord;
 import ac.grim.grimac.api.storage.model.SessionRecord;
 import ac.grim.grimac.api.storage.model.ViolationRecord;
 import ac.grim.grimac.api.storage.query.Cursor;
@@ -18,13 +24,17 @@ import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * {@link HistoryService} implementation that walks the {@link DataStore} via
@@ -43,6 +53,15 @@ public final class HistoryServiceImpl implements HistoryService {
     private final CheckRegistry checks;
     private final int defaultPageSize;
     private final long defaultGroupIntervalMs;
+    /**
+     * Optional v2 {@link EventStreamCategory} for violations. When set
+     * (post-Phase-1.4c wiring), the per-page violation-count batch uses
+     * {@code countMany} — one round-trip instead of N. When null, falls
+     * back to the legacy per-session loop.
+     */
+    private volatile @Nullable EventStreamCategory<ViolationEvent, ViolationRecord> v2Violations;
+    private volatile @Nullable Category<ServerStartupEvent> v2Startups;
+    private final Map<UUID, ServerStartupRecord> startupCache = new ConcurrentHashMap<>();
 
     public HistoryServiceImpl(@NotNull DataStore store, @NotNull CheckRegistry checks,
                               int defaultPageSize, long defaultGroupIntervalMs) {
@@ -50,6 +69,21 @@ public final class HistoryServiceImpl implements HistoryService {
         this.checks = checks;
         this.defaultPageSize = defaultPageSize;
         this.defaultGroupIntervalMs = defaultGroupIntervalMs;
+    }
+
+    /**
+     * Install the v2 violations category. After installation the N+1 batch
+     * fix in {@code toSummaryPage} kicks in.
+     */
+    public HistoryServiceImpl withV2Violations(@NotNull EventStreamCategory<ViolationEvent, ViolationRecord> v2) {
+        this.v2Violations = v2;
+        return this;
+    }
+
+    /** Install the v2 server-startup category for startup metadata resolution. */
+    public HistoryServiceImpl withV2Startups(@NotNull Category<ServerStartupEvent> v2) {
+        this.v2Startups = v2;
+        return this;
     }
 
     @Override
@@ -99,27 +133,94 @@ public final class HistoryServiceImpl implements HistoryService {
         if (sessions.isEmpty()) {
             return CompletableFuture.completedFuture(new Page<>(List.of(), page.nextCursor()));
         }
+        return resolveStartups(sessions).thenCompose(startups -> {
+            EventStreamCategory<ViolationEvent, ViolationRecord> v2 = this.v2Violations;
+            if (v2 != null) {
+                return toSummaryPageV2(v2, sessions, startups, page.nextCursor(), total, sessionsBefore);
+            }
+            return toSummaryPageLegacy(sessions, startups, page.nextCursor(), total, sessionsBefore);
+        });
+    }
+
+    /**
+     * N+1-killing path: one {@code countMany} for all session-on-page
+     * violation counts, plus per-session unique-check counts in parallel
+     * (single fan-out, all sessions in flight at once). Once the design
+     * adds {@code countDistinctMany}, the unique-checks call also collapses
+     * to a single round-trip.
+     */
+    @SuppressWarnings("unchecked")
+    private CompletionStage<Page<SessionSummary>> toSummaryPageV2(
+            @NotNull EventStreamCategory<ViolationEvent, ViolationRecord> v2,
+            @NotNull List<SessionRecord> sessions,
+            @NotNull Map<UUID, ServerStartupRecord> startups,
+            @Nullable Cursor nextCursor,
+            long total,
+            long sessionsBefore) {
+        List<UUID> sessionIds = new ArrayList<>(sessions.size());
+        for (SessionRecord s : sessions) sessionIds.add(s.sessionId());
+
+        CompletionStage<Map<UUID, Long>> countsByIdStage =
+            (CompletionStage<Map<UUID, Long>>) (CompletionStage<?>)
+                store.execute(v2.countMany("session_id", sessionIds));
+
+        return countsByIdStage.thenCompose(countsById -> {
+            SessionSummary[] out = new SessionSummary[sessions.size()];
+            @SuppressWarnings("unchecked")
+            CompletionStage<Long>[] uniqueStages = new CompletionStage[sessions.size()];
+            for (int i = 0; i < sessions.size(); i++) {
+                UUID sid = sessions.get(i).sessionId();
+                uniqueStages[i] = (CompletionStage<Long>) (CompletionStage<?>)
+                    store.execute(v2.countDistinct("session_id", sid, "check_id"));
+            }
+            CompletionStage<Void> all = CompletableFuture.completedStage(null);
+            for (int i = 0; i < sessions.size(); i++) {
+                SessionRecord s = sessions.get(i);
+                int ordinal = (int) (total - sessionsBefore - i);
+                int slot = i;
+                long violationCount = countsById.getOrDefault(s.sessionId(), 0L);
+                CompletionStage<Long> uniqueStage = uniqueStages[i];
+                all = all.thenCombine(uniqueStage, (v, unique) -> {
+                    out[slot] = toSummary(s, startups.get(s.startupId()), ordinal, violationCount, unique.intValue());
+                    return null;
+                });
+            }
+            return all.thenApply(v -> new Page<>(List.of(out), nextCursor));
+        });
+    }
+
+    /** Legacy per-session sequential count path; retained as the fallback. */
+    @SuppressWarnings({"deprecation", "removal"})
+    private CompletionStage<Page<SessionSummary>> toSummaryPageLegacy(
+            @NotNull List<SessionRecord> sessions,
+            @NotNull Map<UUID, ServerStartupRecord> startups,
+            @Nullable Cursor nextCursor,
+            long total,
+            long sessionsBefore) {
         SessionSummary[] out = new SessionSummary[sessions.size()];
         CompletionStage<Void> chain = CompletableFuture.completedStage(null);
         for (int i = 0; i < sessions.size(); i++) {
             SessionRecord s = sessions.get(i);
-            // Global ordinal: newest in DESC list = total; session at DESC index i
-            // on a page starting at sessionsBefore has ordinal
-            // total - sessionsBefore - i. Session 1 = oldest.
             int ordinal = (int) (total - sessionsBefore - i);
             int slot = i;
             chain = chain.thenCompose(v -> store.countViolationsInSession(s.sessionId())
                     .thenCompose(count -> store.countUniqueChecksInSession(s.sessionId())
-                            .thenAccept(unique -> out[slot] = toSummary(s, ordinal, count, unique.intValue()))));
+                            .thenAccept(unique -> out[slot] =
+                                    toSummary(s, startups.get(s.startupId()), ordinal, count, unique.intValue()))));
         }
-        return chain.thenApply(v -> new Page<>(List.of(out), page.nextCursor()));
+        return chain.thenApply(v -> new Page<>(List.of(out), nextCursor));
     }
 
-    private static SessionSummary toSummary(SessionRecord s, int ordinal, long violationCount, int uniqueCheckCount) {
+    private static SessionSummary toSummary(
+            SessionRecord s,
+            @Nullable ServerStartupRecord startup,
+            int ordinal,
+            long violationCount,
+            int uniqueCheckCount) {
         return new SessionSummary(
                 s.sessionId(), s.playerUuid(), ordinal,
                 s.startedEpochMs(), s.lastActivityEpochMs(), s.closedAtEpochMs(),
-                s.grimVersion(), s.serverName(), s.clientVersion(), s.clientBrand(),
+                grimVersion(s, startup), serverName(s, startup), s.clientVersion(), s.clientBrand(),
                 violationCount, uniqueCheckCount);
     }
 
@@ -131,9 +232,10 @@ public final class HistoryServiceImpl implements HistoryService {
                     if (sessionPage.items().isEmpty()) return CompletableFuture.completedStage(null);
                     SessionRecord s = sessionPage.items().get(0);
                     if (!s.playerUuid().equals(player)) return CompletableFuture.completedStage(null);
-                    return store.query(Categories.VIOLATION,
-                                    Queries.listViolationsInSession(sessionId, 10_000, null))
-                            .thenApply(vPage -> toDetail(s, vPage.items(), /*sessionOrdinal*/ 0));
+                    return resolveStartup(s).thenCompose(startup ->
+                            store.query(Categories.VIOLATION,
+                                            Queries.listViolationsInSession(sessionId, 10_000, null))
+                                    .thenApply(vPage -> toDetail(s, startup, vPage.items(), /*sessionOrdinal*/ 0)));
                 });
     }
 
@@ -159,9 +261,10 @@ public final class HistoryServiceImpl implements HistoryService {
                             .thenCompose(p -> {
                                 if (inPage >= p.items().size()) return CompletableFuture.completedStage(null);
                                 SessionRecord s = p.items().get(inPage);
-                                return store.query(Categories.VIOLATION,
-                                                Queries.listViolationsInSession(s.sessionId(), 10_000, null))
-                                        .thenApply(vPage -> toDetail(s, vPage.items(), sessionOrdinal));
+                                return resolveStartup(s).thenCompose(startup ->
+                                        store.query(Categories.VIOLATION,
+                                                        Queries.listViolationsInSession(s.sessionId(), 10_000, null))
+                                                .thenApply(vPage -> toDetail(s, startup, vPage.items(), sessionOrdinal)));
                             }));
         });
     }
@@ -171,7 +274,11 @@ public final class HistoryServiceImpl implements HistoryService {
         return store.countSessionsByPlayer(player);
     }
 
-    private SessionDetail toDetail(SessionRecord s, List<ViolationRecord> violations, int sessionOrdinal) {
+    private SessionDetail toDetail(
+            SessionRecord s,
+            @Nullable ServerStartupRecord startup,
+            List<ViolationRecord> violations,
+            int sessionOrdinal) {
         long bucketSize = Math.max(1, defaultGroupIntervalMs);
         long start = s.startedEpochMs();
 
@@ -186,7 +293,8 @@ public final class HistoryServiceImpl implements HistoryService {
             String description = checks.descriptionFor(v.checkId()).orElse("");
             entries.add(new ViolationEntry(
                     v.checkId(), stable, display, description,
-                    offset, v.vl(), v.verbose(), v.verboseFormat()));
+                    offset, v.vl(), renderVerbose(v.verboseData(), startup, v.checkId()),
+                    ac.grim.grimac.api.storage.model.VerboseFormat.TEXT));
 
             long bucket = offset / bucketSize;
             bucketCounts.computeIfAbsent(bucket, k -> new LinkedHashMap<>())
@@ -211,7 +319,70 @@ public final class HistoryServiceImpl implements HistoryService {
         return new SessionDetail(
                 s.sessionId(), s.playerUuid(), sessionOrdinal,
                 s.startedEpochMs(), s.lastActivityEpochMs(),
-                s.grimVersion(), s.serverName(), s.clientVersion(), s.clientBrand(),
+                grimVersion(s, startup), serverName(s, startup), s.clientVersion(), s.clientBrand(),
                 bucketSize, uniqueChecks.size(), buckets, entries);
+    }
+
+    @SuppressWarnings("unchecked")
+    private CompletionStage<Map<UUID, ServerStartupRecord>> resolveStartups(@NotNull List<SessionRecord> sessions) {
+        Category<ServerStartupEvent> cat = this.v2Startups;
+        if (cat == null) return CompletableFuture.completedStage(Map.of());
+
+        LinkedHashSet<UUID> missing = new LinkedHashSet<>();
+        Map<UUID, ServerStartupRecord> resolved = new HashMap<>();
+        for (SessionRecord s : sessions) {
+            UUID id = s.startupId();
+            if (id == null) continue;
+            ServerStartupRecord cached = startupCache.get(id);
+            if (cached != null) {
+                resolved.put(id, cached);
+            } else {
+                missing.add(id);
+            }
+        }
+        if (missing.isEmpty()) return CompletableFuture.completedStage(resolved);
+
+        CompletionStage<List<ServerStartupRecord>> fetched =
+                (CompletionStage<List<ServerStartupRecord>>) (CompletionStage<?>)
+                        store.execute(new EntityOps.GetManyOp<>(cat, missing));
+        return fetched.thenApply(rows -> {
+            for (ServerStartupRecord row : rows) {
+                startupCache.put(row.startupId(), row);
+                resolved.put(row.startupId(), row);
+            }
+            return resolved;
+        });
+    }
+
+    private CompletionStage<@Nullable ServerStartupRecord> resolveStartup(@NotNull SessionRecord session) {
+        UUID startupId = session.startupId();
+        if (startupId == null || v2Startups == null) return CompletableFuture.completedStage(null);
+        ServerStartupRecord cached = startupCache.get(startupId);
+        if (cached != null) return CompletableFuture.completedStage(cached);
+        return resolveStartups(List.of(session)).thenApply(map -> map.get(startupId));
+    }
+
+    private static @Nullable String serverName(
+            @NotNull SessionRecord session,
+            @Nullable ServerStartupRecord startup) {
+        return startup != null ? startup.serverName() : session.serverName();
+    }
+
+    private static @Nullable String grimVersion(
+            @NotNull SessionRecord session,
+            @Nullable ServerStartupRecord startup) {
+        return startup != null ? startup.grimVersion() : session.grimVersion();
+    }
+
+    private static @Nullable String renderVerbose(
+            @Nullable byte[] verboseData,
+            @Nullable ServerStartupRecord startup,
+            int checkId) {
+        if (verboseData == null || verboseData.length == 0) return null;
+        byte[] manifest = startup == null ? null : startup.verboseManifest();
+        // Empty or absent manifest means the payload is legacy UTF-8 text.
+        // Check-specific binary decoders plug in here once the hot checks are
+        // ported; unsupported binary payloads must never break history reads.
+        return new String(verboseData, StandardCharsets.UTF_8);
     }
 }

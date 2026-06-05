@@ -1,5 +1,6 @@
 package ac.grim.grimac.api.storage.history;
 
+import ac.grim.grimac.api.storage.model.SessionRecord;
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
@@ -25,12 +26,12 @@ import java.util.UUID;
  * this session (shown as {@code [N]} in the session-list UI). {@code 0} when
  * there were no violations.
  * <p>
- * {@code closedAtEpochMs} is null while the session is currently the player's
- * live one. Set when the session ends — by the disconnect path on a graceful
- * close, or by the next startup's crash sweep (which stamps it from
- * {@code last_activity}) when the connection went away without firing the
- * disconnect path. Renderers compare {@code closedAtEpochMs} to
- * {@code lastActivityEpochMs}: equal → crashed, strictly greater → graceful.
+ * {@code closedAtEpochMs} uses {@code 0L} as the "still open" sentinel —
+ * mirrors {@link SessionRecord#OPEN}. Set to a real timestamp when the
+ * session ends (graceful disconnect path, or the next startup's crash
+ * sweep). Use {@link #isClosed} rather than comparing to 0 directly.
+ * Renderers compare {@code closedAtEpochMs} to {@code lastActivityEpochMs}
+ * to distinguish graceful (strictly greater) from crashed (equal).
  */
 @ApiStatus.Experimental
 public record SessionSummary(
@@ -39,7 +40,7 @@ public record SessionSummary(
         int sessionOrdinal,
         long startedEpochMs,
         long lastActivityEpochMs,
-        @Nullable Long closedAtEpochMs,
+        long closedAtEpochMs,
         @Nullable String grimVersion,
         @Nullable String serverName,
         int clientVersion,
@@ -51,15 +52,20 @@ public record SessionSummary(
         return Math.max(0, lastActivityEpochMs - startedEpochMs);
     }
 
+    /** {@code true} when {@code closedAtEpochMs} carries a real close timestamp ({@code != 0L}). */
+    public boolean isClosed() {
+        return closedAtEpochMs != SessionRecord.OPEN;
+    }
+
     /**
      * True when the session ended without a graceful disconnect — the
      * crash-sweep stamped {@code closed_at} from {@code last_activity},
      * so they're equal. Renderers use this to mark the session as crashed.
-     * False while ongoing (closedAt is null) or gracefully closed
+     * False while ongoing ({@code isClosed() == false}) or gracefully closed
      * (closedAt > lastActivity by however long the close-path's "now" was
      * after the last heartbeat).
      */
     public boolean endedUnexpectedly() {
-        return closedAtEpochMs != null && closedAtEpochMs == lastActivityEpochMs;
+        return isClosed() && closedAtEpochMs == lastActivityEpochMs;
     }
 }

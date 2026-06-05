@@ -164,7 +164,7 @@ public final class InMemoryBackend implements Backend {
         UUID id = v.id();
         ViolationRecord stored = new ViolationRecord(
                 id, v.sessionId(), v.playerUuid(), v.checkId(), v.vl(),
-                v.occurredEpochMs(), v.verbose(), v.verboseFormat());
+                v.occurredEpochMs(), v.verboseData());
         synchronized (writeMutex) {
             violationsBySession.computeIfAbsent(stored.sessionId(), k -> new ArrayList<>()).add(stored);
             violationsByPlayer.computeIfAbsent(stored.playerUuid(), k -> new ArrayList<>()).add(stored);
@@ -176,14 +176,16 @@ public final class InMemoryBackend implements Backend {
             SessionRecord prev = sessions.get(e.sessionId());
             // Preserve already-set closed_at across heartbeat upserts —
             // matches the SQL/Mongo/Redis NULL → set transition semantics.
-            Long closedAt = e.closedAtEpochMs();
-            if (prev != null && prev.closedAtEpochMs() != null) closedAt = prev.closedAtEpochMs();
+            long closedAt = e.closedAtEpochMs();
+            if (prev != null && prev.isClosed()) closedAt = prev.closedAtEpochMs();
             SessionRecord s = new SessionRecord(
                     e.sessionId(), e.playerUuid(), e.serverName(),
                     e.startedEpochMs(), e.lastActivityEpochMs(),
                     closedAt,
                     e.grimVersion(), e.clientBrand(), e.clientVersion(),
-                    e.serverVersionString(), List.copyOf(e.sessionBlobs()));
+                    e.serverVersionString(),
+                    e.instanceId(),
+                    List.copyOf(e.sessionBlobs()));
             sessions.put(s.sessionId(), s);
             if (prev != null) {
                 List<SessionRecord> existing = sessionsByPlayer.get(prev.playerUuid());
@@ -257,8 +259,7 @@ public final class InMemoryBackend implements Backend {
                         catalogId,
                         v.vl(),
                         v.occurredEpochMs(),
-                        v.verbose(),
-                        v.verboseFormat()));
+                        v.verboseData()));
                 updated++;
             }
         }
@@ -462,13 +463,15 @@ public final class InMemoryBackend implements Backend {
         synchronized (writeMutex) {
             for (java.util.Map.Entry<UUID, SessionRecord> e : sessions.entrySet()) {
                 SessionRecord s = e.getValue();
-                if (s.closedAtEpochMs() != null) continue;
+                if (s.isClosed()) continue;
                 SessionRecord swept = new SessionRecord(
                         s.sessionId(), s.playerUuid(), s.serverName(),
                         s.startedEpochMs(), s.lastActivityEpochMs(),
                         s.lastActivityEpochMs(),
                         s.grimVersion(), s.clientBrand(), s.clientVersion(),
-                        s.serverVersionString(), s.sessionBlobs());
+                        s.serverVersionString(),
+                        s.instanceId(),
+                        s.sessionBlobs());
                 e.setValue(swept);
                 java.util.List<SessionRecord> byPlayer = sessionsByPlayer.get(s.playerUuid());
                 if (byPlayer != null) {

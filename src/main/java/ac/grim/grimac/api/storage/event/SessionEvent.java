@@ -34,11 +34,13 @@ public final class SessionEvent {
     private @Nullable String serverName;
     private long startedEpochMs;
     private long lastActivityEpochMs;
-    private @Nullable Long closedAtEpochMs;
+    private long closedAtEpochMs;
     private @Nullable String grimVersion;
     private @Nullable String clientBrand;
     private int clientVersion = -1;
     private @Nullable String serverVersionString;
+    private @Nullable UUID instanceId;
+    private @Nullable UUID startupId;
     private final List<SessionBlobRecord> sessionBlobs = new ArrayList<>();
 
     public @NotNull UUID sessionId() { return sessionId; }
@@ -57,16 +59,17 @@ public final class SessionEvent {
     public @NotNull SessionEvent lastActivityEpochMs(long v) { this.lastActivityEpochMs = v; return this; }
 
     /**
-     * When the session ended, in epoch milliseconds. {@code null} while the
-     * session is still alive (the live writer leaves it null on every
-     * heartbeat upsert; the disconnect/close path sets it once on the final
-     * upsert; the startup crash sweep sets it from {@code last_activity} for
-     * sessions whose connections went away without a graceful close).
-     * Renderers use this to distinguish "ongoing" / "ended cleanly" /
-     * "crashed" without needing the SessionTracker's in-memory state.
+     * When the session ended, in epoch milliseconds. {@code 0L} (mirrors
+     * {@link SessionRecord#OPEN}) while the session is still alive. The live
+     * writer leaves it 0 on every heartbeat; the disconnect/close path sets
+     * it to {@code System.currentTimeMillis()} on the final upsert; the
+     * startup crash sweep sets it from {@code last_activity} for sessions
+     * whose connections went away without a graceful close.
      */
-    public @Nullable Long closedAtEpochMs() { return closedAtEpochMs; }
-    public @NotNull SessionEvent closedAtEpochMs(@Nullable Long v) { this.closedAtEpochMs = v; return this; }
+    public long closedAtEpochMs() { return closedAtEpochMs; }
+    public @NotNull SessionEvent closedAtEpochMs(long v) { this.closedAtEpochMs = v; return this; }
+    /** Mirrors {@link SessionRecord#isClosed()} — {@code closedAtEpochMs != 0L}. */
+    public boolean isClosed() { return closedAtEpochMs != 0L; }
 
     public @Nullable String grimVersion() { return grimVersion; }
     public @NotNull SessionEvent grimVersion(@Nullable String v) { this.grimVersion = v; return this; }
@@ -79,6 +82,23 @@ public final class SessionEvent {
 
     public @Nullable String serverVersionString() { return serverVersionString; }
     public @NotNull SessionEvent serverVersionString(@Nullable String v) { this.serverVersionString = v; return this; }
+
+    /**
+     * Owning JVM instance id, stamped from the active
+     * {@code ServerInstanceRecord.instanceId} for multi-server crash
+     * sweep purposes. {@code null} means "no owning instance"
+     * (legacy data path or single-server bootstrap before the
+     * registry is initialized). Live writers always set this.
+     */
+    public @Nullable UUID instanceId() { return instanceId; }
+    public @NotNull SessionEvent instanceId(@Nullable UUID v) { this.instanceId = v; return this; }
+
+    /**
+     * Durable startup row owning this session. New V2 writers stamp this
+     * instead of persisting server metadata on every session row.
+     */
+    public @Nullable UUID startupId() { return startupId; }
+    public @NotNull SessionEvent startupId(@Nullable UUID v) { this.startupId = v; return this; }
 
     public @NotNull List<SessionBlobRecord> sessionBlobs() { return sessionBlobs; }
 
@@ -99,11 +119,13 @@ public final class SessionEvent {
         serverName = null;
         startedEpochMs = 0L;
         lastActivityEpochMs = 0L;
-        closedAtEpochMs = null;
+        closedAtEpochMs = 0L;
         grimVersion = null;
         clientBrand = null;
         clientVersion = -1;
         serverVersionString = null;
+        instanceId = null;
+        startupId = null;
         sessionBlobs.clear();
     }
 }

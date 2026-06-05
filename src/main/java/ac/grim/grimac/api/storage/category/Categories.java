@@ -2,10 +2,12 @@ package ac.grim.grimac.api.storage.category;
 
 import ac.grim.grimac.api.storage.event.BlobEvent;
 import ac.grim.grimac.api.storage.event.PlayerIdentityEvent;
+import ac.grim.grimac.api.storage.event.ServerStartupEvent;
 import ac.grim.grimac.api.storage.event.SessionEvent;
 import ac.grim.grimac.api.storage.event.SettingEvent;
 import ac.grim.grimac.api.storage.event.ViolationEvent;
 import ac.grim.grimac.api.storage.model.PlayerIdentity;
+import ac.grim.grimac.api.storage.model.ServerStartupRecord;
 import ac.grim.grimac.api.storage.model.SessionBlobRecord;
 import ac.grim.grimac.api.storage.model.SessionRecord;
 import ac.grim.grimac.api.storage.model.SettingRecord;
@@ -33,6 +35,14 @@ public final class Categories {
             SessionEvent::new,
             SessionRecord.class,
             EnumSet.of(Capability.INDEXED_KV, Capability.HISTORY),
+            AccessPattern.INDEXED_KV);
+
+    public static final Category<ServerStartupEvent> SERVER_STARTUP = new Builtin<>(
+            "server-startup",
+            ServerStartupEvent.class,
+            ServerStartupEvent::new,
+            ServerStartupRecord.class,
+            EnumSet.of(Capability.KIND_ENTITY),
             AccessPattern.INDEXED_KV);
 
     public static final Category<PlayerIdentityEvent> PLAYER_IDENTITY = new Builtin<>(

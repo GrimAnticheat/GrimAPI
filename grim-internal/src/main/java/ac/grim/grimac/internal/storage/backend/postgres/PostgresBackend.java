@@ -301,7 +301,7 @@ public final class PostgresBackend implements Backend {
             ps.setString(3, s.serverName());
             ps.setLong(4, s.startedEpochMs());
             ps.setLong(5, s.lastActivityEpochMs());
-            if (s.closedAtEpochMs() == null) ps.setNull(6, java.sql.Types.BIGINT);
+            if (!s.isClosed()) ps.setNull(6, java.sql.Types.BIGINT);
             else ps.setLong(6, s.closedAtEpochMs());
             ps.setString(7, s.grimVersion());
             ps.setString(8, s.clientBrand());
@@ -338,7 +338,7 @@ public final class PostgresBackend implements Backend {
 
     private static String serializeSessionBlobsShim() {
         throw new UnsupportedOperationException(
-                "session-blob serialisation isn't implemented by this backend; "
+                "replay-clip serialisation isn't implemented by this backend; "
                         + "sessions with non-empty sessionBlobs cannot be stored");
     }
 
@@ -373,8 +373,8 @@ public final class PostgresBackend implements Backend {
                 ps.setInt(4, v.checkId());
                 ps.setDouble(5, v.vl());
                 ps.setLong(6, v.occurredEpochMs());
-                ps.setString(7, v.verbose());
-                ps.setInt(8, v.verboseFormat().code());
+                ps.setString(7, verboseString(v.verboseData()));
+                ps.setInt(8, VerboseFormat.TEXT.code());
                 ps.addBatch();
             }
             ps.executeBatch();
@@ -389,7 +389,7 @@ public final class PostgresBackend implements Backend {
                 ps.setString(3, s.serverName());
                 ps.setLong(4, s.startedEpochMs());
                 ps.setLong(5, s.lastActivityEpochMs());
-                if (s.closedAtEpochMs() == null) ps.setNull(6, java.sql.Types.BIGINT);
+                if (!s.isClosed()) ps.setNull(6, java.sql.Types.BIGINT);
                 else ps.setLong(6, s.closedAtEpochMs());
                 ps.setString(7, s.grimVersion());
                 ps.setString(8, s.clientBrand());
@@ -593,17 +593,22 @@ public final class PostgresBackend implements Backend {
 
     private static SessionRecord mapSession(ResultSet rs) throws SQLException {
         long closedAt = rs.getLong("closed_at");
+        if (rs.wasNull()) closedAt = SessionRecord.OPEN;
+        // instance_id column is added by the v6→v7 schema migration; for
+        // legacy rows or pre-migration reads, treat absent as null and
+        // let the crash sweep's stale-activity backstop catch them.
         return new SessionRecord(
                 UuidCodec.fromBytes(rs.getBytes("session_id")),
                 UuidCodec.fromBytes(rs.getBytes("player_uuid")),
                 rs.getString("server_name"),
                 rs.getLong("started_at"),
                 rs.getLong("last_activity"),
-                rs.wasNull() ? null : closedAt,
+                closedAt,
                 rs.getString("grim_version"),
                 rs.getString("client_brand"),
                 rs.getInt("client_version_pvn"),
                 rs.getString("server_version"),
+                /*instanceId=*/null,
                 List.of());
     }
 
@@ -615,8 +620,7 @@ public final class PostgresBackend implements Backend {
                 rs.getInt("check_id"),
                 rs.getDouble("vl"),
                 rs.getLong("occurred_at"),
-                rs.getString("verbose"),
-                VerboseFormat.fromCode(rs.getInt("verbose_format")));
+                rs.getBytes("verbose"));
     }
 
     private static PlayerIdentity mapIdentity(ResultSet rs) throws SQLException {
@@ -634,6 +638,10 @@ public final class PostgresBackend implements Backend {
                 rs.getString("key"),
                 rs.getBytes("value"),
                 rs.getLong("updated_at"));
+    }
+
+    private static String verboseString(byte[] verboseData) {
+        return verboseData == null ? null : new String(verboseData, java.nio.charset.StandardCharsets.UTF_8);
     }
 
     @Override

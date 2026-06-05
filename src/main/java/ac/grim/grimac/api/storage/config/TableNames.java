@@ -44,8 +44,15 @@ import org.jetbrains.annotations.NotNull;
  * @param settings   Per-scope key/value settings store (server-scoped and
  *                   player-scoped, used by the migration marker and similar
  *                   plumbing that needs persistent key/value storage).
+ *
+ * @deprecated Replaced by {@link ac.grim.grimac.api.storage.registry.StoreRegistry} +
+ * {@link ac.grim.grimac.api.storage.registry.StoreId}. Instead of a fixed six-slot
+ * record, every category (builtin or extension) registers under a namespaced
+ * {@code StoreId} and the operator overrides physical names per-id in config.
+ * See {@code .docs/storage-redesign/03-backends-and-adapters.md}.
  */
 @ApiStatus.Experimental
+@Deprecated(forRemoval = true, since = "phase0")
 public record TableNames(
         @NotNull String meta,
         @NotNull String checks,

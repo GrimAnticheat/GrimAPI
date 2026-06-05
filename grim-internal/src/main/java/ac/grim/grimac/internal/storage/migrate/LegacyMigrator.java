@@ -6,7 +6,6 @@ import ac.grim.grimac.api.storage.category.Categories;
 import ac.grim.grimac.api.storage.model.PlayerIdentity;
 import ac.grim.grimac.api.storage.model.SettingRecord;
 import ac.grim.grimac.api.storage.model.SettingScope;
-import ac.grim.grimac.api.storage.model.VerboseFormat;
 import ac.grim.grimac.api.storage.model.ViolationRecord;
 import ac.grim.grimac.api.storage.query.Page;
 import ac.grim.grimac.api.storage.query.Queries;
@@ -143,8 +142,7 @@ public final class LegacyMigrator {
                                     v.checkId(),
                                     v.vl(),
                                     v.occurredEpochMs(),
-                                    v.verbose(),
-                                    VerboseFormat.TEXT));
+                                    v.verbose() == null ? null : v.verbose().getBytes(StandardCharsets.UTF_8)));
                             long legacyId = v.legacyId();
                             if (legacyId > lastViolationLegacyId.get()) lastViolationLegacyId.set(legacyId);
                         }

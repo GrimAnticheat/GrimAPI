@@ -85,14 +85,6 @@ public final class CheckRegistry {
      *                          persisted on the row for future collision-prefix
      *                          resolution. Pass {@code null} on reloads /
      *                          lookups that don't know.
-     *
-     * TODO: explore a lock-free rewrite. Held by `synchronized` because the
-     * body is a multi-map RMW (byStableKey + byId + byDisplay) plus a DB
-     * write inside the collision-prefix path; making it lock-free needs an
-     * outer retry wrapping a multi-step write with rollback semantics on
-     * the DB side. Cold path in practice — caller's local cache absorbs the
-     * hot path — so the lock cost is amortized to ~zero, but worth doing if
-     * we ever need this on a hot path.
      */
     public synchronized int intern(String stableKey,
                                    @Nullable String display,
