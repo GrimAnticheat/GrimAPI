@@ -1,6 +1,7 @@
 package ac.grim.grimac.internal.storage.verbose;
 
 import ac.grim.grimac.api.storage.verbose.VerboseBuf;
+import ac.grim.grimac.api.storage.verbose.VerboseRenderContext;
 import ac.grim.grimac.api.storage.verbose.VerboseSchema;
 import ac.grim.grimac.api.storage.verbose.VerboseSink;
 import org.junit.jupiter.api.Test;
@@ -9,6 +10,8 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 class GenericVerboseReaderTest {
+
+    private static final VerboseRenderContext UNKNOWN_CONTEXT = new VerboseRenderContext(-1, null);
 
     @Test
     void rendersKnownPayloadAgainstLayout() throws Exception {
@@ -29,6 +32,7 @@ class GenericVerboseReaderTest {
         GenericVerboseReader.render(
                 VerboseSchema.decodeLayout(schema.layoutBytes()),
                 VerboseBuf.wrap(payload.toByteArray()),
+                UNKNOWN_CONTEXT,
                 VerboseSink.into(rendered));
 
         assertEquals("offset=1.25, count=300, delta=-42, ok=true, note=hello", rendered.toString());
@@ -43,6 +47,7 @@ class GenericVerboseReaderTest {
                 GenericVerboseReader.render(
                         VerboseSchema.decodeLayout(schema.layoutBytes()),
                         VerboseBuf.wrap(truncated),
+                        UNKNOWN_CONTEXT,
                         VerboseSink.into(new StringBuilder())));
     }
 }

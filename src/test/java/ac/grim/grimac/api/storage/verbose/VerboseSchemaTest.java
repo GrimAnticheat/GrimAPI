@@ -12,6 +12,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class VerboseSchemaTest {
 
+    private static final VerboseRenderContext UNKNOWN_CONTEXT = new VerboseRenderContext(-1, null);
+
     @Test
     void layoutEncodeDecodeEncodeIsStable() {
         VerboseSchema schema = VerboseSchema.of(3,
@@ -50,7 +52,7 @@ class VerboseSchemaTest {
         VerboseBuf payload = schema.write(new VerboseBuf()).f64(1.25).vi(7).bool(true);
 
         StringBuilder rendered = new StringBuilder();
-        schema.formatter().render(VerboseBuf.wrap(payload.toByteArray()), VerboseSink.into(rendered));
+        schema.formatter().render(VerboseBuf.wrap(payload.toByteArray()), UNKNOWN_CONTEXT, VerboseSink.into(rendered));
 
         assertEquals("offset=1.25, flagId=7, ok=true", rendered.toString());
         assertEquals(2, schema.formatter().version());

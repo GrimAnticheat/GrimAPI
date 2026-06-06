@@ -1,6 +1,7 @@
 package ac.grim.grimac.internal.storage.verbose;
 
 import ac.grim.grimac.api.storage.verbose.VerboseBuf;
+import ac.grim.grimac.api.storage.verbose.VerboseRenderContext;
 import ac.grim.grimac.api.storage.verbose.VerboseSchema;
 import ac.grim.grimac.api.storage.verbose.VerboseSink;
 import org.jetbrains.annotations.ApiStatus;
@@ -14,6 +15,7 @@ public final class GenericVerboseReader {
     public static void render(
             @NotNull VerboseSchema.Layout layout,
             @NotNull VerboseBuf in,
+            @NotNull VerboseRenderContext ctx,
             @NotNull VerboseSink out) throws UnderflowException {
         try {
             for (VerboseSchema.Field field : layout.fields()) {

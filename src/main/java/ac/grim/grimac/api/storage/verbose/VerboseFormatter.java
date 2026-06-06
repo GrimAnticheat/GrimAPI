@@ -8,5 +8,8 @@ public interface VerboseFormatter {
 
     int version();
 
-    void render(@NotNull VerboseBuf in, @NotNull VerboseSink out);
+    void render(
+            @NotNull VerboseBuf in,
+            @NotNull VerboseRenderContext ctx,
+            @NotNull VerboseSink out);
 }

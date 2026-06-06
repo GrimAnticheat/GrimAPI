@@ -12,7 +12,9 @@ import ac.grim.grimac.api.storage.query.Page;
 import ac.grim.grimac.api.storage.query.Query;
 import ac.grim.grimac.api.storage.verbose.VerboseBuf;
 import ac.grim.grimac.api.storage.verbose.VerboseFormatter;
+import ac.grim.grimac.api.storage.verbose.VerboseRenderContext;
 import ac.grim.grimac.api.storage.verbose.VerboseSchema;
+import ac.grim.grimac.api.storage.verbose.VerboseSink;
 import ac.grim.grimac.internal.storage.checks.CheckRegistry;
 import ac.grim.grimac.internal.storage.checks.InMemoryCheckCatalogPersistence;
 import ac.grim.grimac.internal.storage.verbose.VerboseManifest;
@@ -30,6 +32,8 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 
 class HistoryServiceImplVerboseTest {
 
+    private static final VerboseRenderContext UNKNOWN_CONTEXT = new VerboseRenderContext(-1, null);
+
     @Test
     void renderVerboseUsesTextFallbackForVersionZero() {
         HistoryServiceImpl history = history(new FixedVerboseRegistry(null));
@@ -38,7 +42,8 @@ class HistoryServiceImplVerboseTest {
         String rendered = history.renderVerbose(
                 text,
                 startup(VerboseManifest.textOnly(VerboseManifest.FLAVOR_V2_PUBLIC)),
-                42);
+                42,
+                UNKNOWN_CONTEXT);
 
         assertEquals("legacy verbose", rendered);
     }
@@ -52,7 +57,8 @@ class HistoryServiceImplVerboseTest {
         String rendered = history.renderVerbose(
                 payload,
                 startup(VerboseManifest.encode(VerboseManifest.FLAVOR_V2_PUBLIC, Map.of(42, 1))),
-                42);
+                42,
+                UNKNOWN_CONTEXT);
 
         assertEquals("offset=1.25, flagId=7", rendered);
     }
@@ -64,9 +70,32 @@ class HistoryServiceImplVerboseTest {
         String rendered = history.renderVerbose(
                 new byte[] {0x01, 0x02},
                 startup(VerboseManifest.encode(VerboseManifest.FLAVOR_V2_PUBLIC, Map.of(42, 1))),
-                42);
+                42,
+                UNKNOWN_CONTEXT);
 
         assertEquals("[binary verbose v1, schema unavailable] 0x0102", rendered);
+    }
+
+    @Test
+    void renderVerbosePassesContextToCustomFormatter() {
+        VerboseFormatter formatter = new VerboseFormatter() {
+            @Override public int version() { return 1; }
+
+            @Override
+            public void render(VerboseBuf in, VerboseRenderContext ctx, VerboseSink out) {
+                out.key("clientVersion");
+                out.num(ctx.clientVersionPvn());
+            }
+        };
+        HistoryServiceImpl history = history(new FixedVerboseRegistry(null, formatter));
+
+        String rendered = history.renderVerbose(
+                new byte[] {0x01},
+                startup(VerboseManifest.encode(VerboseManifest.FLAVOR_V2_PUBLIC, Map.of(42, 1))),
+                42,
+                new VerboseRenderContext(772, "1.21.11"));
+
+        assertEquals("clientVersion=772", rendered);
     }
 
     private static HistoryServiceImpl history(VerboseRegistry registry) {
@@ -93,11 +122,15 @@ class HistoryServiceImplVerboseTest {
                 manifest);
     }
 
-    private record FixedVerboseRegistry(VerboseSchema.Layout layout) implements VerboseRegistry {
+    private record FixedVerboseRegistry(VerboseSchema.Layout layout, VerboseFormatter formatter) implements VerboseRegistry {
+        private FixedVerboseRegistry(VerboseSchema.Layout layout) {
+            this(layout, null);
+        }
+
         @Override public void register(String stableKey, VerboseSchema schema) {}
         @Override public void registerFormatter(String stableKey, VerboseFormatter formatter) {}
         @Override public Map<Integer, Integer> checkIdVersions(CheckRegistry checks) { return Map.of(); }
-        @Override public VerboseFormatter codeFormatter(int flavor, int checkId, int version) { return null; }
+        @Override public VerboseFormatter codeFormatter(int flavor, int checkId, int version) { return formatter; }
         @Override public VerboseSchema.Layout layout(int flavor, int checkId, int version) { return layout; }
     }
 

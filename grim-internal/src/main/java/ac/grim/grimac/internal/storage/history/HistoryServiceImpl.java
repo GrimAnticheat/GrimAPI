@@ -21,6 +21,7 @@ import ac.grim.grimac.api.storage.query.Page;
 import ac.grim.grimac.api.storage.query.Queries;
 import ac.grim.grimac.api.storage.verbose.VerboseBuf;
 import ac.grim.grimac.api.storage.verbose.VerboseFormatter;
+import ac.grim.grimac.api.storage.verbose.VerboseRenderContext;
 import ac.grim.grimac.api.storage.verbose.VerboseSchema;
 import ac.grim.grimac.api.storage.verbose.VerboseSink;
 import ac.grim.grimac.internal.storage.checks.CheckRegistry;
@@ -315,7 +316,11 @@ public final class HistoryServiceImpl implements HistoryService {
             String description = checks.descriptionFor(v.checkId()).orElse("");
             entries.add(new ViolationEntry(
                     v.checkId(), stable, display, description,
-                    offset, v.vl(), renderVerbose(v.verboseData(), startup, v.checkId()),
+                    offset, v.vl(), renderVerbose(
+                            v.verboseData(),
+                            startup,
+                            v.checkId(),
+                            new VerboseRenderContext(s.clientVersion(), serverVersion(s, startup))),
                     ac.grim.grimac.api.storage.model.VerboseFormat.TEXT));
 
             long bucket = offset / bucketSize;
@@ -396,10 +401,18 @@ public final class HistoryServiceImpl implements HistoryService {
         return startup != null ? startup.grimVersion() : session.grimVersion();
     }
 
+    private static @Nullable String serverVersion(
+            @NotNull SessionRecord session,
+            @Nullable ServerStartupRecord startup) {
+        String startupVersion = startup == null ? null : startup.serverVersionString();
+        return startupVersion != null ? startupVersion : session.serverVersionString();
+    }
+
     @Nullable String renderVerbose(
             @Nullable byte[] verboseData,
             @Nullable ServerStartupRecord startup,
-            int checkId) {
+            int checkId,
+            @NotNull VerboseRenderContext ctx) {
         if (verboseData == null || verboseData.length == 0) return null;
         VerboseManifest.Decoded manifest = startup == null ? null : decodedManifest(startup);
         if (manifest == null) return renderText(verboseData);
@@ -414,7 +427,7 @@ public final class HistoryServiceImpl implements HistoryService {
             if (formatter != null) {
                 try {
                     StringBuilder rendered = new StringBuilder();
-                    formatter.render(VerboseBuf.wrap(verboseData), VerboseSink.into(rendered));
+                    formatter.render(VerboseBuf.wrap(verboseData), ctx, VerboseSink.into(rendered));
                     return rendered.toString();
                 } catch (Throwable ignored) {
                     return placeholder(verboseData, version, "decode failed");
@@ -425,7 +438,7 @@ public final class HistoryServiceImpl implements HistoryService {
             if (layout != null) {
                 try {
                     StringBuilder rendered = new StringBuilder();
-                    GenericVerboseReader.render(layout, VerboseBuf.wrap(verboseData), VerboseSink.into(rendered));
+                    GenericVerboseReader.render(layout, VerboseBuf.wrap(verboseData), ctx, VerboseSink.into(rendered));
                     return rendered.toString();
                 } catch (GenericVerboseReader.UnderflowException | RuntimeException ignored) {
                     return placeholder(verboseData, version, "decode failed");

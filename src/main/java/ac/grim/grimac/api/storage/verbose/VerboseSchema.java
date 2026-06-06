@@ -224,7 +224,10 @@ public final class VerboseSchema {
         @Override public int version() { return version; }
 
         @Override
-        public void render(@NotNull VerboseBuf in, @NotNull VerboseSink out) {
+        public void render(
+                @NotNull VerboseBuf in,
+                @NotNull VerboseRenderContext ctx,
+                @NotNull VerboseSink out) {
             for (Field field : layout.fields()) {
                 renderField(field, in, out);
             }
