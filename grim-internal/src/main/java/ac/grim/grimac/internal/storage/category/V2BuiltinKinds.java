@@ -5,6 +5,7 @@ import ac.grim.grimac.api.storage.event.PlayerIdentityEvent;
 import ac.grim.grimac.api.storage.event.ServerInstanceEvent;
 import ac.grim.grimac.api.storage.event.ServerStartupEvent;
 import ac.grim.grimac.api.storage.event.SessionEvent;
+import ac.grim.grimac.api.storage.event.VerboseSchemaEvent;
 import ac.grim.grimac.api.storage.event.ViolationEvent;
 import ac.grim.grimac.api.storage.codec.Codec;
 import ac.grim.grimac.api.storage.codec.EncodeShape;
@@ -21,6 +22,7 @@ import ac.grim.grimac.api.storage.model.PlayerIdentity;
 import ac.grim.grimac.api.storage.model.ServerInstanceRecord;
 import ac.grim.grimac.api.storage.model.ServerStartupRecord;
 import ac.grim.grimac.api.storage.model.SessionRecord;
+import ac.grim.grimac.api.storage.model.VerboseSchemaRecord;
 import ac.grim.grimac.api.storage.model.ViolationRecord;
 import ac.grim.grimac.internal.storage.codec.MethodHandleCodecFactory;
 import org.jetbrains.annotations.ApiStatus;
@@ -214,6 +216,38 @@ public final class V2BuiltinKinds {
             e.display(),
             e.description(),
             e.introducedVersion(),
+            e.introducedAt());
+    }
+
+    /**
+     * The binary verbose schema dictionary. {@code _id = schema_key}
+     * ({@code "<flavor>:<checkId>:<version>"}). No TTL; layouts must remain
+     * available for old history rows after checks or builds disappear.
+     */
+    public static @NotNull Entity<String, VerboseSchemaEvent, VerboseSchemaRecord> verboseSchemas() {
+        return Entity.<String, VerboseSchemaEvent, VerboseSchemaRecord>builder()
+            .name("verbose_schemas")
+            .event(VerboseSchemaEvent.class, VerboseSchemaEvent::new)
+            .record(VerboseSchemaRecord.class)
+            .codec(MethodHandleCodecFactory.get().create(VerboseSchemaRecord.class))
+            .eventToRecord(V2BuiltinKinds::verboseSchemaEventToRecord)
+            .id(String.class, VerboseSchemaRecord::schemaKey)
+            .secondaryIndex(IndexSpec.of("by_flavor", "flavor"))
+            .secondaryIndex(IndexSpec.of("by_check_id", "check_id"))
+            .build();
+    }
+
+    static @NotNull VerboseSchemaRecord verboseSchemaEventToRecord(@NotNull VerboseSchemaEvent e) {
+        String key = e.schemaKey();
+        byte[] layout = e.layout();
+        if (key == null) throw new IllegalStateException("VerboseSchemaEvent.schemaKey must be set before submit");
+        if (layout == null) throw new IllegalStateException("VerboseSchemaEvent.layout must be set before submit");
+        return new VerboseSchemaRecord(
+            key,
+            e.flavor(),
+            e.checkId(),
+            e.version(),
+            layout,
             e.introducedAt());
     }
 
