@@ -4,8 +4,11 @@ import org.junit.jupiter.api.Test;
 
 import java.util.List;
 
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class VerboseSchemaTest {
 
@@ -51,5 +54,27 @@ class VerboseSchemaTest {
 
         assertEquals("offset=1.25, flagId=7, ok=true", rendered.toString());
         assertEquals(2, schema.formatter().version());
+    }
+
+    @Test
+    void assertionGuardRejectsWrongPrimitiveOrder() {
+        assumeTrue(VerboseSchema.class.desiredAssertionStatus());
+        VerboseSchema schema = VerboseSchema.of("offset:f64", "ok:bool");
+
+        AssertionError error = assertThrows(AssertionError.class,
+                () -> schema.write(new VerboseBuf()).f64(1.25).vi(7));
+
+        assertTrue(error.getMessage().contains("declared bool"));
+    }
+
+    @Test
+    void assertionGuardRejectsMissingFieldsAtSnapshot() {
+        assumeTrue(VerboseSchema.class.desiredAssertionStatus());
+        VerboseSchema schema = VerboseSchema.of("offset:f64", "ok:bool");
+
+        AssertionError error = assertThrows(AssertionError.class,
+                () -> schema.write(new VerboseBuf()).f64(1.25).toByteArray());
+
+        assertTrue(error.getMessage().contains("wrote 1 fields but declared 2"));
     }
 }

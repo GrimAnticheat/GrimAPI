@@ -15,6 +15,7 @@ import java.util.Locale;
 public final class VerboseSchema {
 
     private static final String UTF_8 = "UTF-8";
+    private static final boolean DRIFT_CHECKS = VerboseSchema.class.desiredAssertionStatus();
 
     private final int version;
     private final @NotNull List<Field> fields;
@@ -64,7 +65,9 @@ public final class VerboseSchema {
     }
 
     public @NotNull VerboseBuf write(@NotNull VerboseBuf out) {
-        return out.clear();
+        VerboseBuf cleared = out.clear();
+        assert startDriftCheck(cleared);
+        return cleared;
     }
 
     public @NotNull VerboseFormatter formatter() {
@@ -140,6 +143,72 @@ public final class VerboseSchema {
             return new String(bytes, offset, length, UTF_8);
         } catch (UnsupportedEncodingException e) {
             throw new AssertionError("UTF-8 unavailable", e);
+        }
+    }
+
+    private boolean startDriftCheck(@NotNull VerboseBuf out) {
+        if (!DRIFT_CHECKS) return true;
+        DriftChecks.ACTIVE.set(new DriftGuard(out, fields));
+        return true;
+    }
+
+    static boolean recordWrite(@NotNull VerboseBuf out, @NotNull TypeTag type) {
+        if (!DRIFT_CHECKS) return true;
+        DriftGuard guard = DriftChecks.ACTIVE.get();
+        if (guard == null || guard.out != out) return true;
+        guard.record(type);
+        return true;
+    }
+
+    static boolean completeWrite(@NotNull VerboseBuf out) {
+        if (!DRIFT_CHECKS) return true;
+        DriftGuard guard = DriftChecks.ACTIVE.get();
+        if (guard == null || guard.out != out) return true;
+        try {
+            guard.complete();
+            return true;
+        } finally {
+            DriftChecks.ACTIVE.remove();
+        }
+    }
+
+    private static final class DriftChecks {
+        private static final ThreadLocal<DriftGuard> ACTIVE = new ThreadLocal<>();
+    }
+
+    private static final class DriftGuard {
+        private final @NotNull VerboseBuf out;
+        private final @NotNull List<Field> fields;
+        private int written;
+
+        private DriftGuard(@NotNull VerboseBuf out, @NotNull List<Field> fields) {
+            this.out = out;
+            this.fields = fields;
+        }
+
+        private void record(@NotNull TypeTag actual) {
+            if (written >= fields.size()) {
+                throw new AssertionError("verbose schema wrote extra " + actual.wireName()
+                        + " field after " + fields.size() + " declared fields");
+            }
+            Field expected = fields.get(written);
+            if (!matches(expected.type(), actual)) {
+                throw new AssertionError("verbose schema field " + written + " (" + expected.name()
+                        + ") declared " + expected.type().wireName()
+                        + " but wrote " + actual.wireName());
+            }
+            written++;
+        }
+
+        private void complete() {
+            if (written != fields.size()) {
+                throw new AssertionError("verbose schema wrote " + written
+                        + " fields but declared " + fields.size());
+            }
+        }
+
+        private static boolean matches(@NotNull TypeTag expected, @NotNull TypeTag actual) {
+            return expected == actual || (expected == TypeTag.ENUM && actual == TypeTag.VI);
         }
     }
 

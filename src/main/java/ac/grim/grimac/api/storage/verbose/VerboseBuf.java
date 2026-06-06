@@ -77,6 +77,7 @@ public final class VerboseBuf {
     }
 
     public int length() {
+        assert VerboseSchema.completeWrite(this);
         return writerIndex;
     }
 
@@ -97,14 +98,17 @@ public final class VerboseBuf {
      * the current payload.
      */
     public byte @NotNull [] array() {
+        assert VerboseSchema.completeWrite(this);
         return data;
     }
 
     public byte @NotNull [] toByteArray() {
+        assert VerboseSchema.completeWrite(this);
         return Arrays.copyOf(data, writerIndex);
     }
 
     public @NotNull VerboseBuf f64(double v) {
+        assert VerboseSchema.recordWrite(this, VerboseSchema.TypeTag.F64);
         long bits = Double.doubleToLongBits(v);
         ensureWritable(8);
         for (int i = 0; i < 8; i++) {
@@ -114,6 +118,7 @@ public final class VerboseBuf {
     }
 
     public @NotNull VerboseBuf f32(float v) {
+        assert VerboseSchema.recordWrite(this, VerboseSchema.TypeTag.F32);
         int bits = Float.floatToIntBits(v);
         ensureWritable(4);
         for (int i = 0; i < 4; i++) {
@@ -125,11 +130,13 @@ public final class VerboseBuf {
     /** Write an unsigned varint. Negative values belong on {@link #zz(int)}. */
     public @NotNull VerboseBuf vi(int v) {
         if (v < 0) throw new IllegalArgumentException("vi cannot encode negative value " + v);
+        assert VerboseSchema.recordWrite(this, VerboseSchema.TypeTag.VI);
         writeRawVarInt(v);
         return this;
     }
 
     public @NotNull VerboseBuf zz(int v) {
+        assert VerboseSchema.recordWrite(this, VerboseSchema.TypeTag.ZZ);
         writeRawVarInt((v << 1) ^ (v >> 31));
         return this;
     }
@@ -137,11 +144,13 @@ public final class VerboseBuf {
     /** Write a non-negative varlong. */
     public @NotNull VerboseBuf vl(long v) {
         if (v < 0L) throw new IllegalArgumentException("vl cannot encode negative value " + v);
+        assert VerboseSchema.recordWrite(this, VerboseSchema.TypeTag.VL);
         writeRawVarLong(v);
         return this;
     }
 
     public @NotNull VerboseBuf bool(boolean v) {
+        assert VerboseSchema.recordWrite(this, VerboseSchema.TypeTag.BOOL);
         writeByte(v ? 1 : 0);
         return this;
     }
@@ -151,7 +160,8 @@ public final class VerboseBuf {
         if (bytes.length > MAX_STRING_BYTES) {
             throw new IllegalArgumentException("string payload exceeds " + MAX_STRING_BYTES + " bytes");
         }
-        vi(bytes.length);
+        assert VerboseSchema.recordWrite(this, VerboseSchema.TypeTag.STR);
+        writeRawVarInt(bytes.length);
         writeBytes(bytes);
         return this;
     }

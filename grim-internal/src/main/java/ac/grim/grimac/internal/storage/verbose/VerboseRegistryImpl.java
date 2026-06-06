@@ -113,7 +113,17 @@ public final class VerboseRegistryImpl implements VerboseRegistry {
     @Override
     public @Nullable VerboseSchema.Layout layout(int flavor, int checkId, int version) {
         LayoutKey key = new LayoutKey(flavor, checkId, version);
-        return layoutCache.computeIfAbsent(key, this::loadLayout).orElse(null);
+        Optional<VerboseSchema.Layout> cached = layoutCache.get(key);
+        if (cached != null) return cached.orElse(null);
+
+        LayoutLookup loaded = loadLayout(key);
+        if (!loaded.cacheable()) {
+            Optional<VerboseSchema.Layout> raced = layoutCache.get(key);
+            return raced != null ? raced.orElse(null) : loaded.layout().orElse(null);
+        }
+
+        Optional<VerboseSchema.Layout> previous = layoutCache.putIfAbsent(key, loaded.layout());
+        return (previous != null ? previous : loaded.layout()).orElse(null);
     }
 
     private void resolveAndIntern(
@@ -139,9 +149,10 @@ public final class VerboseRegistryImpl implements VerboseRegistry {
             @NotNull VerboseSchema schema) {
         String schemaKey = VerboseSchemaRecord.keyOf(flavor, checkId, schema.version());
         byte[] layoutBytes = schema.layoutBytes();
-        Optional<VerboseSchemaRecord> existing = loadRecord(schemaKey);
+        // loadRecord().join() may block the calling pool thread on first resolution; amortized once per schema.
+        RecordLookup existing = loadRecord(schemaKey);
         if (existing.isPresent()) {
-            VerboseSchemaRecord row = existing.get();
+            VerboseSchemaRecord row = existing.record().get();
             if (!Arrays.equals(row.layout(), layoutBytes)) {
                 logger.warning(() -> "verbose schema conflict for " + schemaKey
                         + " (" + stableKey + "): keeping existing durable layout");
@@ -152,6 +163,9 @@ public final class VerboseRegistryImpl implements VerboseRegistry {
                 logger.log(Level.WARNING, "stored verbose schema layout is unreadable for " + schemaKey, e);
                 return Optional.empty();
             }
+        }
+        if (existing.lookupFailed()) {
+            return Optional.of(new VerboseSchema.Layout(schema.fields()));
         }
 
         long now = System.currentTimeMillis();
@@ -165,38 +179,68 @@ public final class VerboseRegistryImpl implements VerboseRegistry {
         return Optional.of(new VerboseSchema.Layout(schema.fields()));
     }
 
-    private @NotNull Optional<VerboseSchema.Layout> loadLayout(@NotNull LayoutKey key) {
+    private @NotNull LayoutLookup loadLayout(@NotNull LayoutKey key) {
         if (key.flavor() == flavor) {
             Optional<String> stableKey = checks.stableKeyFor(key.checkId());
             if (stableKey.isPresent()) {
                 VerboseSchema schema = schemasByStableKey.get(stableKey.get());
                 if (schema != null && schema.version() == key.version()) {
-                    return Optional.of(new VerboseSchema.Layout(schema.fields()));
+                    return LayoutLookup.confirmed(Optional.of(new VerboseSchema.Layout(schema.fields())));
                 }
             }
         }
 
         String schemaKey = VerboseSchemaRecord.keyOf(key.flavor(), key.checkId(), key.version());
-        Optional<VerboseSchemaRecord> row = loadRecord(schemaKey);
-        if (row.isEmpty()) return Optional.empty();
+        // loadRecord().join() may block the calling pool thread on first resolution; amortized once per schema.
+        RecordLookup row = loadRecord(schemaKey);
+        if (row.lookupFailed()) return LayoutLookup.retryableMiss();
+        if (row.isEmpty()) return LayoutLookup.confirmed(Optional.empty());
         try {
-            return Optional.of(VerboseSchema.decodeLayout(row.get().layout()));
+            return LayoutLookup.confirmed(Optional.of(VerboseSchema.decodeLayout(row.record().get().layout())));
         } catch (RuntimeException e) {
             logger.log(Level.WARNING, "stored verbose schema layout is unreadable for " + schemaKey, e);
-            return Optional.empty();
+            return LayoutLookup.confirmed(Optional.empty());
         }
     }
 
     @SuppressWarnings("unchecked")
-    private @NotNull Optional<VerboseSchemaRecord> loadRecord(@NotNull String schemaKey) {
+    private @NotNull RecordLookup loadRecord(@NotNull String schemaKey) {
         try {
             CompletionStage<Optional<VerboseSchemaRecord>> stage =
                     (CompletionStage<Optional<VerboseSchemaRecord>>) (CompletionStage<?>)
                             store.execute(new EntityOps.GetByIdOp<>(category, schemaKey));
-            return stage.toCompletableFuture().join();
+            return RecordLookup.confirmed(stage.toCompletableFuture().join());
         } catch (RuntimeException e) {
             logger.log(Level.FINE, "verbose schema lookup failed for " + schemaKey, e);
-            return Optional.empty();
+            return RecordLookup.failure();
+        }
+    }
+
+    private record LayoutLookup(@NotNull Optional<VerboseSchema.Layout> layout, boolean cacheable) {
+        private static @NotNull LayoutLookup confirmed(@NotNull Optional<VerboseSchema.Layout> layout) {
+            return new LayoutLookup(layout, true);
+        }
+
+        private static @NotNull LayoutLookup retryableMiss() {
+            return new LayoutLookup(Optional.empty(), false);
+        }
+    }
+
+    private record RecordLookup(@NotNull Optional<VerboseSchemaRecord> record, boolean lookupFailed) {
+        private static @NotNull RecordLookup confirmed(@NotNull Optional<VerboseSchemaRecord> record) {
+            return new RecordLookup(record, false);
+        }
+
+        private static @NotNull RecordLookup failure() {
+            return new RecordLookup(Optional.empty(), true);
+        }
+
+        private boolean isPresent() {
+            return record.isPresent();
+        }
+
+        private boolean isEmpty() {
+            return record.isEmpty();
         }
     }
 
