@@ -24,6 +24,7 @@ public record VerboseSchemaRecord(
 
     public VerboseSchemaRecord {
         if (schemaKey == null || schemaKey.isEmpty()) throw new IllegalArgumentException("schemaKey");
+        if (version < 1) throw new IllegalArgumentException("version");
         if (layout == null) throw new IllegalArgumentException("layout");
     }
 

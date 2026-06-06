@@ -241,6 +241,7 @@ public final class V2BuiltinKinds {
         String key = e.schemaKey();
         byte[] layout = e.layout();
         if (key == null) throw new IllegalStateException("VerboseSchemaEvent.schemaKey must be set before submit");
+        if (e.version() < 1) throw new IllegalStateException("VerboseSchemaEvent.version must be positive before submit");
         if (layout == null) throw new IllegalStateException("VerboseSchemaEvent.layout must be set before submit");
         return new VerboseSchemaRecord(
             key,

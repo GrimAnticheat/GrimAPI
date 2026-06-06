@@ -31,7 +31,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 class HistoryServiceImplVerboseTest {
 
     @Test
-    void renderVerboseUsesTextFallbackForVersionMinusOne() {
+    void renderVerboseUsesTextFallbackForVersionZero() {
         HistoryServiceImpl history = history(new FixedVerboseRegistry(null));
         byte[] text = "legacy verbose".getBytes(StandardCharsets.UTF_8);
 
@@ -44,7 +44,7 @@ class HistoryServiceImplVerboseTest {
     }
 
     @Test
-    void renderVerboseUsesGenericDecodeWhenSchemaIsPresent() {
+    void renderVerboseUsesGenericDecodeForVersionOneWhenSchemaIsPresent() {
         VerboseSchema schema = VerboseSchema.of(1, "offset:f64", "flagId:vi");
         HistoryServiceImpl history = history(new FixedVerboseRegistry(VerboseSchema.decodeLayout(schema.layoutBytes())));
         byte[] payload = schema.write(new VerboseBuf()).f64(1.25).vi(7).toByteArray();

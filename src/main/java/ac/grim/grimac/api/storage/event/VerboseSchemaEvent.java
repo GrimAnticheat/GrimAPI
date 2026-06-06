@@ -28,7 +28,11 @@ public final class VerboseSchemaEvent {
     public @NotNull VerboseSchemaEvent checkId(int v) { this.checkId = v; return this; }
 
     public int version() { return version; }
-    public @NotNull VerboseSchemaEvent version(int v) { this.version = v; return this; }
+    public @NotNull VerboseSchemaEvent version(int v) {
+        if (v < 1) throw new IllegalArgumentException("version");
+        this.version = v;
+        return this;
+    }
 
     public byte @Nullable [] layout() { return layout; }
     public @NotNull VerboseSchemaEvent layout(byte @NotNull [] v) { this.layout = v; return this; }

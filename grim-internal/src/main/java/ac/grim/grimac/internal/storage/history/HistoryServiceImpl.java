@@ -405,7 +405,7 @@ public final class HistoryServiceImpl implements HistoryService {
         if (manifest == null) return renderText(verboseData);
 
         int version = manifest.codecVersionOrText(checkId);
-        if (!manifest.supported() || version < 0) return renderText(verboseData);
+        if (!manifest.supported() || version <= 0) return renderText(verboseData);
 
         int flavor = manifest.flavor();
         VerboseRegistry registry = this.verboseRegistry;

@@ -22,7 +22,7 @@ public final class VerboseSchema {
     private volatile byte[] layoutBytes;
 
     private VerboseSchema(int version, @NotNull List<Field> fields) {
-        if (version < 0) throw new IllegalArgumentException("version");
+        if (version < 1) throw new IllegalArgumentException("version");
         this.version = version;
         this.fields = List.copyOf(fields);
         if (this.fields.isEmpty()) throw new IllegalArgumentException("schema must declare at least one field");

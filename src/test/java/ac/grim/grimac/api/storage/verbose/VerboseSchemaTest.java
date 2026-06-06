@@ -57,6 +57,14 @@ class VerboseSchemaTest {
     }
 
     @Test
+    void rejectsNonPositiveVersions() {
+        assertThrows(IllegalArgumentException.class, () -> VerboseSchema.of(0, "offset:f64"));
+        assertThrows(IllegalArgumentException.class, () -> VerboseSchema.of(-1, "offset:f64"));
+        assertThrows(IllegalArgumentException.class,
+                () -> VerboseSchema.of("offset:f64").withVersion(0));
+    }
+
+    @Test
     void assertionGuardRejectsWrongPrimitiveOrder() {
         assumeTrue(VerboseSchema.class.desiredAssertionStatus());
         VerboseSchema schema = VerboseSchema.of("offset:f64", "ok:bool");

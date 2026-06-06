@@ -61,6 +61,7 @@ public final class VerboseRegistryImpl implements VerboseRegistry {
     @Override
     public void register(@NotNull String stableKey, @NotNull VerboseSchema schema) {
         if (stableKey.isEmpty()) throw new IllegalArgumentException("stableKey");
+        if (!isBinaryVersion(schema.version())) throw new IllegalArgumentException("schema version must be positive");
         VerboseSchema previous = schemasByStableKey.put(stableKey, schema);
         if (previous != null
                 && (previous.version() != schema.version()
@@ -74,6 +75,7 @@ public final class VerboseRegistryImpl implements VerboseRegistry {
     @Override
     public void registerFormatter(@NotNull String stableKey, @NotNull VerboseFormatter formatter) {
         if (stableKey.isEmpty()) throw new IllegalArgumentException("stableKey");
+        if (!isBinaryVersion(formatter.version())) throw new IllegalArgumentException("formatter version must be positive");
         formattersByStableKey.put(stableKey, formatter);
         checks.getId(stableKey).ifPresent(checkId ->
                 formattersByTuple.put(new FormatterKey(flavor, checkId, formatter.version()), formatter));
@@ -83,15 +85,18 @@ public final class VerboseRegistryImpl implements VerboseRegistry {
     public @NotNull Map<Integer, Integer> checkIdVersions(@NotNull CheckRegistry checks) {
         Map<Integer, Integer> versions = new LinkedHashMap<>();
         for (Map.Entry<String, VerboseSchema> entry : schemasByStableKey.entrySet()) {
-            checks.getId(entry.getKey()).ifPresent(checkId -> {
-                VerboseSchema schema = entry.getValue();
-                versions.put(checkId, schema.version());
-                resolveAndIntern(entry.getKey(), schema, checks);
-            });
+            Optional<Integer> checkId = checks.getId(entry.getKey());
+            if (checkId.isEmpty()) continue;
+            VerboseSchema schema = entry.getValue();
+            if (!isBinaryVersion(schema.version())) continue;
+            versions.put(checkId.get(), schema.version());
+            resolveAndIntern(entry.getKey(), schema, checks);
         }
         for (Map.Entry<String, VerboseFormatter> entry : formattersByStableKey.entrySet()) {
+            VerboseFormatter formatter = entry.getValue();
+            if (!isBinaryVersion(formatter.version())) continue;
             checks.getId(entry.getKey()).ifPresent(checkId ->
-                    formattersByTuple.put(new FormatterKey(flavor, checkId, entry.getValue().version()), entry.getValue()));
+                    formattersByTuple.put(new FormatterKey(flavor, checkId, formatter.version()), formatter));
         }
         return Map.copyOf(versions);
     }
@@ -99,6 +104,7 @@ public final class VerboseRegistryImpl implements VerboseRegistry {
     @Override
     public @Nullable VerboseFormatter codeFormatter(int flavor, int checkId, int version) {
         if (flavor != this.flavor) return null;
+        if (!isBinaryVersion(version)) return null;
         FormatterKey key = new FormatterKey(flavor, checkId, version);
         VerboseFormatter cached = formattersByTuple.get(key);
         if (cached != null) return cached;
@@ -112,6 +118,7 @@ public final class VerboseRegistryImpl implements VerboseRegistry {
 
     @Override
     public @Nullable VerboseSchema.Layout layout(int flavor, int checkId, int version) {
+        if (!isBinaryVersion(version)) return null;
         LayoutKey key = new LayoutKey(flavor, checkId, version);
         Optional<VerboseSchema.Layout> cached = layoutCache.get(key);
         if (cached != null) return cached.orElse(null);
@@ -130,6 +137,7 @@ public final class VerboseRegistryImpl implements VerboseRegistry {
             @NotNull String stableKey,
             @NotNull VerboseSchema schema,
             @NotNull CheckRegistry checks) {
+        if (!isBinaryVersion(schema.version())) return;
         Optional<Integer> checkId = checks.getId(stableKey);
         if (checkId.isEmpty()) return;
 
@@ -138,7 +146,7 @@ public final class VerboseRegistryImpl implements VerboseRegistry {
         layoutCache.put(key, effective);
 
         VerboseFormatter formatter = formattersByStableKey.get(stableKey);
-        if (formatter != null) {
+        if (formatter != null && isBinaryVersion(formatter.version())) {
             formattersByTuple.put(new FormatterKey(flavor, checkId.get(), formatter.version()), formatter);
         }
     }
@@ -147,6 +155,7 @@ public final class VerboseRegistryImpl implements VerboseRegistry {
             @NotNull String stableKey,
             int checkId,
             @NotNull VerboseSchema schema) {
+        if (!isBinaryVersion(schema.version())) return Optional.empty();
         String schemaKey = VerboseSchemaRecord.keyOf(flavor, checkId, schema.version());
         byte[] layoutBytes = schema.layoutBytes();
         // loadRecord().join() may block the calling pool thread on first resolution; amortized once per schema.
@@ -242,6 +251,10 @@ public final class VerboseRegistryImpl implements VerboseRegistry {
         private boolean isEmpty() {
             return record.isEmpty();
         }
+    }
+
+    private static boolean isBinaryVersion(int version) {
+        return version >= 1;
     }
 
     private record LayoutKey(int flavor, int checkId, int version) {}
