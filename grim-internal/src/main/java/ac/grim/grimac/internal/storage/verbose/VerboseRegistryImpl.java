@@ -6,8 +6,11 @@ import ac.grim.grimac.api.storage.category.Category;
 import ac.grim.grimac.api.storage.event.VerboseSchemaEvent;
 import ac.grim.grimac.api.storage.kind.ops.EntityOps;
 import ac.grim.grimac.api.storage.model.VerboseSchemaRecord;
+import ac.grim.grimac.api.storage.verbose.VerboseBuf;
 import ac.grim.grimac.api.storage.verbose.VerboseFormatter;
+import ac.grim.grimac.api.storage.verbose.VerboseRenderContext;
 import ac.grim.grimac.api.storage.verbose.VerboseSchema;
+import ac.grim.grimac.api.storage.verbose.VerboseSink;
 import ac.grim.grimac.internal.storage.checks.CheckRegistry;
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
@@ -26,7 +29,7 @@ import java.util.logging.Logger;
 @ApiStatus.Internal
 public final class VerboseRegistryImpl implements VerboseRegistry {
 
-    private final @NotNull DataStore store;
+    private final @Nullable DataStore store;
     private final @NotNull CheckRegistry checks;
     private final int flavor;
     private final @NotNull Category<VerboseSchemaEvent> category;
@@ -38,7 +41,7 @@ public final class VerboseRegistryImpl implements VerboseRegistry {
     private final ConcurrentMap<LayoutKey, Optional<VerboseSchema.Layout>> layoutCache = new ConcurrentHashMap<>();
 
     public VerboseRegistryImpl(
-            @NotNull DataStore store,
+            @Nullable DataStore store,
             @NotNull CheckRegistry checks,
             int flavor) {
         this(store, checks, flavor, Categories.VERBOSE_SCHEMA,
@@ -46,7 +49,7 @@ public final class VerboseRegistryImpl implements VerboseRegistry {
     }
 
     public VerboseRegistryImpl(
-            @NotNull DataStore store,
+            @Nullable DataStore store,
             @NotNull CheckRegistry checks,
             int flavor,
             @NotNull Category<VerboseSchemaEvent> category,
@@ -79,6 +82,36 @@ public final class VerboseRegistryImpl implements VerboseRegistry {
         formattersByStableKey.put(stableKey, formatter);
         checks.getId(stableKey).ifPresent(checkId ->
                 formattersByTuple.put(new FormatterKey(flavor, checkId, formatter.version()), formatter));
+    }
+
+    @Override
+    public @NotNull String render(
+            @NotNull String stableKey,
+            byte @NotNull [] data,
+            @NotNull VerboseRenderContext ctx) {
+        if (stableKey.isEmpty() || data.length == 0) return "";
+        try {
+            VerboseFormatter formatter = formattersByStableKey.get(stableKey);
+            if (formatter != null) {
+                StringBuilder rendered = new StringBuilder();
+                formatter.render(VerboseBuf.wrap(data), ctx, VerboseSink.into(rendered));
+                return rendered.toString();
+            }
+
+            VerboseSchema schema = schemasByStableKey.get(stableKey);
+            if (schema != null) {
+                StringBuilder rendered = new StringBuilder();
+                GenericVerboseReader.render(
+                        new VerboseSchema.Layout(schema.fields()),
+                        VerboseBuf.wrap(data),
+                        ctx,
+                        VerboseSink.into(rendered));
+                return rendered.toString();
+            }
+        } catch (Throwable ignored) {
+            return "";
+        }
+        return "";
     }
 
     @Override
@@ -158,6 +191,9 @@ public final class VerboseRegistryImpl implements VerboseRegistry {
         if (!isBinaryVersion(schema.version())) return Optional.empty();
         String schemaKey = VerboseSchemaRecord.keyOf(flavor, checkId, schema.version());
         byte[] layoutBytes = schema.layoutBytes();
+        if (store == null) {
+            return Optional.of(new VerboseSchema.Layout(schema.fields()));
+        }
         // loadRecord().join() may block the calling pool thread on first resolution; amortized once per schema.
         RecordLookup existing = loadRecord(schemaKey);
         if (existing.isPresent()) {
@@ -214,6 +250,7 @@ public final class VerboseRegistryImpl implements VerboseRegistry {
 
     @SuppressWarnings("unchecked")
     private @NotNull RecordLookup loadRecord(@NotNull String schemaKey) {
+        if (store == null) return RecordLookup.failure();
         try {
             CompletionStage<Optional<VerboseSchemaRecord>> stage =
                     (CompletionStage<Optional<VerboseSchemaRecord>>) (CompletionStage<?>)

@@ -8,20 +8,41 @@ import org.bukkit.event.Event;
 import org.bukkit.event.HandlerList;
 import org.jetbrains.annotations.NotNull;
 
+import java.util.function.Supplier;
+
 @Deprecated(since = "1.2.1.0", forRemoval = true)
 public class FlagEvent extends Event implements GrimUserEvent, Cancellable {
 
     private static final HandlerList handlers = new HandlerList();
     @Getter private final GrimUser user;
     @Getter private final AbstractCheck check;
-    @Getter private final String verbose;
+    private final Supplier<String> verboseSupplier;
+    private String verbose;
+    private boolean verboseComputed;
     private boolean cancelled;
 
     public FlagEvent(GrimUser user, AbstractCheck check, String verbose) {
+        this(user, check, constant(verbose));
+    }
+
+    public FlagEvent(GrimUser user, AbstractCheck check, Supplier<String> verboseSupplier) {
         super(true); // Async!
         this.user = user;
         this.check = check;
-        this.verbose = verbose;
+        this.verboseSupplier = verboseSupplier == null ? () -> "" : verboseSupplier;
+    }
+
+    public synchronized String getVerbose() {
+        if (!verboseComputed) {
+            try {
+                verbose = verboseSupplier.get();
+                if (verbose == null) verbose = "";
+            } catch (Throwable ignored) {
+                verbose = "";
+            }
+            verboseComputed = true;
+        }
+        return verbose;
     }
 
     @Override
@@ -52,5 +73,9 @@ public class FlagEvent extends Event implements GrimUserEvent, Cancellable {
         return check.getViolations() > check.getSetbackVL();
     }
 
+    private static @NotNull Supplier<String> constant(String verbose) {
+        String value = verbose == null ? "" : verbose;
+        return () -> value;
+    }
 
 }

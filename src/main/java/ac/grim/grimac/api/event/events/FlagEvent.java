@@ -7,6 +7,8 @@ import ac.grim.grimac.api.plugin.GrimPlugin;
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
 
+import java.util.function.Supplier;
+
 public class FlagEvent extends GrimVerboseCheckEvent<FlagEvent.Channel> {
 
     /** Pool constructor — fields populated via {@link #init}. */
@@ -18,10 +20,19 @@ public class FlagEvent extends GrimVerboseCheckEvent<FlagEvent.Channel> {
         super(user, check, verbose);
     }
 
+    public FlagEvent(GrimUser user, AbstractCheck check, Supplier<String> verboseSupplier) {
+        super(user, check, verboseSupplier);
+    }
+
     @ApiStatus.Internal
     @Override
     public void init(GrimUser user, AbstractCheck check, String verbose) {
         super.init(user, check, verbose);
+    }
+
+    @ApiStatus.Internal
+    public void init(GrimUser user, AbstractCheck check, Supplier<String> verboseSupplier) {
+        super.init(user, check, verboseSupplier);
     }
 
     /**
@@ -76,15 +87,21 @@ public class FlagEvent extends GrimVerboseCheckEvent<FlagEvent.Channel> {
 
         /** Dispatches the event. Returns the final cancelled state after all handlers run. */
         public boolean fire(@NotNull GrimUser user, @NotNull AbstractCheck check, @NotNull String verbose) {
+            return fire(user, check, constant(verbose));
+        }
+
+        /** Dispatches the event. Returns the final cancelled state after all handlers run. */
+        public boolean fire(@NotNull GrimUser user, @NotNull AbstractCheck check, @NotNull Supplier<String> verboseSupplier) {
             Entry<Handler>[] entries = entries();
             if (entries.length == 0) return false;
 
+            Supplier<String> verbose = memoize(verboseSupplier);
             boolean cancelled = false;
             if (!hasLegacy()) {
                 for (Entry<Handler> e : entries) {
                     if (cancelled && !e.ignoreCancelled) continue;
                     try {
-                        cancelled = e.handler.onFlag(user, check, verbose, cancelled);
+                        cancelled = e.handler.onFlag(user, check, verbose.get(), cancelled);
                     } catch (Throwable t) {
                         t.printStackTrace();
                     }
@@ -102,7 +119,7 @@ public class FlagEvent extends GrimVerboseCheckEvent<FlagEvent.Channel> {
                         e.<FlagEvent>legacyListenerAs().handle(pooled);
                         cancelled = pooled.isCancelled();
                     } else {
-                        cancelled = e.handler.onFlag(user, check, verbose, cancelled);
+                        cancelled = e.handler.onFlag(user, check, verbose.get(), cancelled);
                     }
                 } catch (Throwable t) {
                     t.printStackTrace();
