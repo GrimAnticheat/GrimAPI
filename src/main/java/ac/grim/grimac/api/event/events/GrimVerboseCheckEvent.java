@@ -8,6 +8,7 @@ import ac.grim.grimac.api.plugin.GrimPlugin;
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
 
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Supplier;
 
 public abstract class GrimVerboseCheckEvent<CHANNEL extends EventChannel<?, ?>>
@@ -40,21 +41,14 @@ public abstract class GrimVerboseCheckEvent<CHANNEL extends EventChannel<?, ?>>
         setVerboseSupplier(verboseSupplier);
     }
 
-    /**
-     * Returns a memoized supplier for the human verbose string. Calling
-     * {@link Supplier#get()} computes the string at most once for this event.
-     */
-    public @NotNull Supplier<String> getVerboseSupplier() {
-        return verboseSupplier;
-    }
-
-    /**
-     * @deprecated Prefer {@link #getVerboseSupplier()} so listeners that do
-     * not need the human string do not force verbose rendering.
-     */
-    @Deprecated
+    /** Returns the human verbose string, rendering it lazily on first use. */
     public @NotNull String getVerbose() {
         return verboseSupplier.get();
+    }
+
+    @ApiStatus.Internal
+    final @NotNull Supplier<String> verboseSupplier() {
+        return verboseSupplier;
     }
 
     protected static @NotNull Supplier<String> constant(String verbose) {
@@ -99,100 +93,117 @@ public abstract class GrimVerboseCheckEvent<CHANNEL extends EventChannel<?, ?>>
      * {@link CompletePredictionEvent}, which extends {@link GrimCheckEvent}
      * directly and has no verbose field.
      */
-    @Deprecated
     @FunctionalInterface
     public interface Handler {
-        boolean onVerboseCheck(@NotNull GrimUser user, @NotNull AbstractCheck check,
-                               @NotNull String verbose, boolean currentlyCancelled);
-    }
-
-    @FunctionalInterface
-    public interface LazyHandler {
         boolean onVerboseCheck(@NotNull GrimUser user, @NotNull AbstractCheck check,
                                @NotNull Supplier<String> verbose, boolean currentlyCancelled);
     }
 
-    public static final class Channel extends AbstractEventChannel<GrimVerboseCheckEvent<?>, LazyHandler> {
+    /**
+     * @deprecated Prefer {@link Handler}. This string handler forces verbose
+     * rendering before your callback runs.
+     */
+    @Deprecated
+    @FunctionalInterface
+    public interface StringHandler {
+        boolean onVerboseCheck(@NotNull GrimUser user, @NotNull AbstractCheck check,
+                               @NotNull String verbose, boolean currentlyCancelled);
+    }
+
+    public static final class Channel extends AbstractEventChannel<GrimVerboseCheckEvent<?>, Handler> {
+        private static final AtomicBoolean STRING_HANDLER_WARNING = new AtomicBoolean();
+
         @SuppressWarnings({"unchecked", "rawtypes"})
         public Channel() {
-            super((Class<GrimVerboseCheckEvent<?>>) (Class) GrimVerboseCheckEvent.class, LazyHandler.class);
+            super((Class<GrimVerboseCheckEvent<?>>) (Class) GrimVerboseCheckEvent.class, Handler.class);
         }
 
-        public void onVerboseCheckLazy(@NotNull GrimPlugin plugin, @NotNull LazyHandler handler) {
+        public void onVerboseCheck(@NotNull GrimPlugin plugin, @NotNull Handler handler) {
             subscribeAbstract(handler, 0, false, plugin);
         }
 
-        public void onVerboseCheckLazy(@NotNull GrimPlugin plugin, @NotNull LazyHandler handler, int priority) {
+        public void onVerboseCheck(@NotNull GrimPlugin plugin, @NotNull Handler handler, int priority) {
             subscribeAbstract(handler, priority, false, plugin);
         }
 
-        public void onVerboseCheckLazy(@NotNull GrimPlugin plugin, @NotNull LazyHandler handler, int priority, boolean ignoreCancelled) {
+        public void onVerboseCheck(@NotNull GrimPlugin plugin, @NotNull Handler handler, int priority, boolean ignoreCancelled) {
             subscribeAbstract(handler, priority, ignoreCancelled, plugin);
         }
 
         /**
-         * @deprecated Prefer {@link #onVerboseCheckLazy(GrimPlugin, LazyHandler)}
-         * so verbose rendering remains lazy when the handler does not need it.
+         * @deprecated Prefer {@link #onVerboseCheck(GrimPlugin, Handler)}.
          */
         @Deprecated
-        public void onVerboseCheck(@NotNull GrimPlugin plugin, @NotNull Handler handler) {
-            onVerboseCheckLazy(plugin, adapt(handler));
+        public void onVerboseCheckString(@NotNull GrimPlugin plugin, @NotNull StringHandler handler) {
+            warnStringHandler(plugin);
+            onVerboseCheck(plugin, adapt(handler));
         }
 
         /**
-         * @deprecated Prefer {@link #onVerboseCheckLazy(GrimPlugin, LazyHandler, int)}.
+         * @deprecated Prefer {@link #onVerboseCheck(GrimPlugin, Handler, int)}.
          */
         @Deprecated
-        public void onVerboseCheck(@NotNull GrimPlugin plugin, @NotNull Handler handler, int priority) {
-            onVerboseCheckLazy(plugin, adapt(handler), priority);
+        public void onVerboseCheckString(@NotNull GrimPlugin plugin, @NotNull StringHandler handler, int priority) {
+            warnStringHandler(plugin);
+            onVerboseCheck(plugin, adapt(handler), priority);
         }
 
         /**
-         * @deprecated Prefer {@link #onVerboseCheckLazy(GrimPlugin, LazyHandler, int, boolean)}.
+         * @deprecated Prefer {@link #onVerboseCheck(GrimPlugin, Handler, int, boolean)}.
          */
         @Deprecated
-        public void onVerboseCheck(@NotNull GrimPlugin plugin, @NotNull Handler handler, int priority, boolean ignoreCancelled) {
-            onVerboseCheckLazy(plugin, adapt(handler), priority, ignoreCancelled);
-        }
-
-        /** @deprecated resolve your context once at plugin enable — {@code api.getGrimPlugin(this)} — and call the {@link GrimPlugin}-taking overload. */
-        @Deprecated
-        public void onVerboseCheckLazy(@NotNull Object pluginContext, @NotNull LazyHandler handler) {
-            subscribeAbstractResolving(pluginContext, handler, 0, false);
-        }
-
-        /** @deprecated see {@link #onVerboseCheckLazy(Object, LazyHandler)}. */
-        @Deprecated
-        public void onVerboseCheckLazy(@NotNull Object pluginContext, @NotNull LazyHandler handler, int priority) {
-            subscribeAbstractResolving(pluginContext, handler, priority, false);
-        }
-
-        /** @deprecated see {@link #onVerboseCheckLazy(Object, LazyHandler)}. */
-        @Deprecated
-        public void onVerboseCheckLazy(@NotNull Object pluginContext, @NotNull LazyHandler handler, int priority, boolean ignoreCancelled) {
-            subscribeAbstractResolving(pluginContext, handler, priority, ignoreCancelled);
+        public void onVerboseCheckString(@NotNull GrimPlugin plugin, @NotNull StringHandler handler, int priority, boolean ignoreCancelled) {
+            warnStringHandler(plugin);
+            onVerboseCheck(plugin, adapt(handler), priority, ignoreCancelled);
         }
 
         /** @deprecated resolve your context once at plugin enable — {@code api.getGrimPlugin(this)} — and call the {@link GrimPlugin}-taking overload. */
         @Deprecated
         public void onVerboseCheck(@NotNull Object pluginContext, @NotNull Handler handler) {
-            onVerboseCheckLazy(pluginContext, adapt(handler));
+            subscribeAbstractResolving(pluginContext, handler, 0, false);
         }
 
         /** @deprecated see {@link #onVerboseCheck(Object, Handler)}. */
         @Deprecated
         public void onVerboseCheck(@NotNull Object pluginContext, @NotNull Handler handler, int priority) {
-            onVerboseCheckLazy(pluginContext, adapt(handler), priority);
+            subscribeAbstractResolving(pluginContext, handler, priority, false);
         }
 
         /** @deprecated see {@link #onVerboseCheck(Object, Handler)}. */
         @Deprecated
         public void onVerboseCheck(@NotNull Object pluginContext, @NotNull Handler handler, int priority, boolean ignoreCancelled) {
-            onVerboseCheckLazy(pluginContext, adapt(handler), priority, ignoreCancelled);
+            subscribeAbstractResolving(pluginContext, handler, priority, ignoreCancelled);
         }
 
-        private static @NotNull LazyHandler adapt(@NotNull Handler handler) {
+        /** @deprecated resolve your context once at plugin enable — {@code api.getGrimPlugin(this)} — and call the {@link GrimPlugin}-taking overload. */
+        @Deprecated
+        public void onVerboseCheckString(@NotNull Object pluginContext, @NotNull StringHandler handler) {
+            GrimPlugin plugin = resolvePlugin(pluginContext);
+            onVerboseCheckString(plugin, handler);
+        }
+
+        /** @deprecated see {@link #onVerboseCheckString(Object, StringHandler)}. */
+        @Deprecated
+        public void onVerboseCheckString(@NotNull Object pluginContext, @NotNull StringHandler handler, int priority) {
+            GrimPlugin plugin = resolvePlugin(pluginContext);
+            onVerboseCheckString(plugin, handler, priority);
+        }
+
+        /** @deprecated see {@link #onVerboseCheckString(Object, StringHandler)}. */
+        @Deprecated
+        public void onVerboseCheckString(@NotNull Object pluginContext, @NotNull StringHandler handler, int priority, boolean ignoreCancelled) {
+            GrimPlugin plugin = resolvePlugin(pluginContext);
+            onVerboseCheckString(plugin, handler, priority, ignoreCancelled);
+        }
+
+        private static @NotNull Handler adapt(@NotNull StringHandler handler) {
             return (user, check, verbose, cancelled) -> handler.onVerboseCheck(user, check, verbose.get(), cancelled);
+        }
+
+        private static void warnStringHandler(@NotNull GrimPlugin plugin) {
+            if (STRING_HANDLER_WARNING.compareAndSet(false, true)) {
+                plugin.getLogger().warning("Deprecated Grim verbose string listener registered; use the Supplier<String> verbose handler and call verbose.get() only when text is needed.");
+            }
         }
     }
 }

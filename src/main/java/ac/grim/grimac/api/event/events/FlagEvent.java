@@ -7,6 +7,7 @@ import ac.grim.grimac.api.plugin.GrimPlugin;
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
 
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Supplier;
 
 public class FlagEvent extends GrimVerboseCheckEvent<FlagEvent.Channel> {
@@ -42,104 +43,105 @@ public class FlagEvent extends GrimVerboseCheckEvent<FlagEvent.Channel> {
      * dispatch; a handler registered with {@code ignoreCancelled = true}
      * still runs when a higher-priority handler already cancelled the event.
      *
-     * @deprecated Prefer {@link LazyHandler}; this handler forces verbose
-     * rendering before your callback runs.
      */
-    @Deprecated
     @FunctionalInterface
     public interface Handler {
-        boolean onFlag(@NotNull GrimUser user, @NotNull AbstractCheck check,
-                       @NotNull String verbose, boolean currentlyCancelled);
-    }
-
-    /**
-     * Typed flag handler that receives a memoized verbose supplier. Calling
-     * {@link Supplier#get()} computes the human string at most once.
-     */
-    @FunctionalInterface
-    public interface LazyHandler {
         boolean onFlag(@NotNull GrimUser user, @NotNull AbstractCheck check,
                        @NotNull Supplier<String> verbose, boolean currentlyCancelled);
     }
 
-    public static final class Channel extends EventChannel<FlagEvent, LazyHandler> {
+    /**
+     * @deprecated Prefer {@link Handler}. This handler forces verbose
+     * rendering before your callback runs.
+     */
+    @Deprecated
+    @FunctionalInterface
+    public interface StringHandler {
+        boolean onFlag(@NotNull GrimUser user, @NotNull AbstractCheck check,
+                       @NotNull String verbose, boolean currentlyCancelled);
+    }
+
+    public static final class Channel extends EventChannel<FlagEvent, Handler> {
+        private static final AtomicBoolean STRING_HANDLER_WARNING = new AtomicBoolean();
         private final ThreadLocal<FlagEvent> legacyPool = ThreadLocal.withInitial(FlagEvent::new);
 
         public Channel() {
-            super(FlagEvent.class, LazyHandler.class);
+            super(FlagEvent.class, Handler.class);
         }
 
-        public void onFlagLazy(@NotNull GrimPlugin plugin, @NotNull LazyHandler handler) {
+        public void onFlag(@NotNull GrimPlugin plugin, @NotNull Handler handler) {
             subscribe(handler, 0, false, plugin, null);
         }
 
-        public void onFlagLazy(@NotNull GrimPlugin plugin, @NotNull LazyHandler handler, int priority) {
+        public void onFlag(@NotNull GrimPlugin plugin, @NotNull Handler handler, int priority) {
             subscribe(handler, priority, false, plugin, null);
         }
 
-        public void onFlagLazy(@NotNull GrimPlugin plugin, @NotNull LazyHandler handler, int priority, boolean ignoreCancelled) {
+        public void onFlag(@NotNull GrimPlugin plugin, @NotNull Handler handler, int priority, boolean ignoreCancelled) {
             subscribe(handler, priority, ignoreCancelled, plugin, null);
         }
 
         /**
-         * @deprecated Prefer {@link #onFlagLazy(GrimPlugin, LazyHandler)} so
-         * verbose rendering remains lazy when the handler does not need it.
+         * @deprecated Prefer {@link #onFlag(GrimPlugin, Handler)}.
          */
         @Deprecated
-        public void onFlag(@NotNull GrimPlugin plugin, @NotNull Handler handler) {
-            onFlagLazy(plugin, adapt(handler));
+        public void onFlagString(@NotNull GrimPlugin plugin, @NotNull StringHandler handler) {
+            warnStringHandler(plugin);
+            onFlag(plugin, adapt(handler));
         }
 
         /**
-         * @deprecated Prefer {@link #onFlagLazy(GrimPlugin, LazyHandler, int)}.
+         * @deprecated Prefer {@link #onFlag(GrimPlugin, Handler, int)}.
          */
         @Deprecated
-        public void onFlag(@NotNull GrimPlugin plugin, @NotNull Handler handler, int priority) {
-            onFlagLazy(plugin, adapt(handler), priority);
+        public void onFlagString(@NotNull GrimPlugin plugin, @NotNull StringHandler handler, int priority) {
+            warnStringHandler(plugin);
+            onFlag(plugin, adapt(handler), priority);
         }
 
         /**
-         * @deprecated Prefer {@link #onFlagLazy(GrimPlugin, LazyHandler, int, boolean)}.
+         * @deprecated Prefer {@link #onFlag(GrimPlugin, Handler, int, boolean)}.
          */
         @Deprecated
-        public void onFlag(@NotNull GrimPlugin plugin, @NotNull Handler handler, int priority, boolean ignoreCancelled) {
-            onFlagLazy(plugin, adapt(handler), priority, ignoreCancelled);
-        }
-
-        /** @deprecated resolve your context once at plugin enable — {@code api.getGrimPlugin(this)} — and call the {@link GrimPlugin}-taking overload. */
-        @Deprecated
-        public void onFlagLazy(@NotNull Object pluginContext, @NotNull LazyHandler handler) {
-            onFlagLazy(resolvePlugin(pluginContext), handler);
-        }
-
-        /** @deprecated see {@link #onFlagLazy(Object, LazyHandler)}. */
-        @Deprecated
-        public void onFlagLazy(@NotNull Object pluginContext, @NotNull LazyHandler handler, int priority) {
-            onFlagLazy(resolvePlugin(pluginContext), handler, priority);
-        }
-
-        /** @deprecated see {@link #onFlagLazy(Object, LazyHandler)}. */
-        @Deprecated
-        public void onFlagLazy(@NotNull Object pluginContext, @NotNull LazyHandler handler, int priority, boolean ignoreCancelled) {
-            onFlagLazy(resolvePlugin(pluginContext), handler, priority, ignoreCancelled);
+        public void onFlagString(@NotNull GrimPlugin plugin, @NotNull StringHandler handler, int priority, boolean ignoreCancelled) {
+            warnStringHandler(plugin);
+            onFlag(plugin, adapt(handler), priority, ignoreCancelled);
         }
 
         /** @deprecated resolve your context once at plugin enable — {@code api.getGrimPlugin(this)} — and call the {@link GrimPlugin}-taking overload. */
         @Deprecated
         public void onFlag(@NotNull Object pluginContext, @NotNull Handler handler) {
-            onFlagLazy(pluginContext, adapt(handler));
+            onFlag(resolvePlugin(pluginContext), handler);
         }
 
         /** @deprecated see {@link #onFlag(Object, Handler)}. */
         @Deprecated
         public void onFlag(@NotNull Object pluginContext, @NotNull Handler handler, int priority) {
-            onFlagLazy(pluginContext, adapt(handler), priority);
+            onFlag(resolvePlugin(pluginContext), handler, priority);
         }
 
         /** @deprecated see {@link #onFlag(Object, Handler)}. */
         @Deprecated
         public void onFlag(@NotNull Object pluginContext, @NotNull Handler handler, int priority, boolean ignoreCancelled) {
-            onFlagLazy(pluginContext, adapt(handler), priority, ignoreCancelled);
+            onFlag(resolvePlugin(pluginContext), handler, priority, ignoreCancelled);
+        }
+
+        /** @deprecated resolve your context once at plugin enable — {@code api.getGrimPlugin(this)} — and call the {@link GrimPlugin}-taking overload. */
+        @Deprecated
+        public void onFlagString(@NotNull Object pluginContext, @NotNull StringHandler handler) {
+            onFlagString(resolvePlugin(pluginContext), handler);
+        }
+
+        /** @deprecated see {@link #onFlagString(Object, StringHandler)}. */
+        @Deprecated
+        public void onFlagString(@NotNull Object pluginContext, @NotNull StringHandler handler, int priority) {
+            onFlagString(resolvePlugin(pluginContext), handler, priority);
+        }
+
+        /** @deprecated see {@link #onFlagString(Object, StringHandler)}. */
+        @Deprecated
+        public void onFlagString(@NotNull Object pluginContext, @NotNull StringHandler handler, int priority, boolean ignoreCancelled) {
+            onFlagString(resolvePlugin(pluginContext), handler, priority, ignoreCancelled);
         }
 
         /** Dispatches the event. Returns the final cancelled state after all handlers run. */
@@ -149,13 +151,13 @@ public class FlagEvent extends GrimVerboseCheckEvent<FlagEvent.Channel> {
 
         /** Dispatches the event. Returns the final cancelled state after all handlers run. */
         public boolean fire(@NotNull GrimUser user, @NotNull AbstractCheck check, @NotNull Supplier<String> verboseSupplier) {
-            Entry<LazyHandler>[] entries = entries();
+            Entry<Handler>[] entries = entries();
             if (entries.length == 0) return false;
 
             Supplier<String> verbose = memoize(verboseSupplier);
             boolean cancelled = false;
             if (!hasLegacy()) {
-                for (Entry<LazyHandler> e : entries) {
+                for (Entry<Handler> e : entries) {
                     if (cancelled && !e.ignoreCancelled) continue;
                     try {
                         cancelled = e.handler.onFlag(user, check, verbose, cancelled);
@@ -168,7 +170,7 @@ public class FlagEvent extends GrimVerboseCheckEvent<FlagEvent.Channel> {
 
             FlagEvent pooled = legacyPool.get();
             pooled.init(user, check, verbose);
-            for (Entry<LazyHandler> e : entries) {
+            for (Entry<Handler> e : entries) {
                 if (cancelled && !e.ignoreCancelled) continue;
                 try {
                     if (e.legacyListener != null) {
@@ -186,33 +188,39 @@ public class FlagEvent extends GrimVerboseCheckEvent<FlagEvent.Channel> {
         }
 
         @Override
-        protected boolean dispatchTypedFromLegacy(@NotNull FlagEvent event, @NotNull LazyHandler handler, boolean cancelled) {
-            return handler.onFlag(event.getUser(), event.getCheck(), event.getVerboseSupplier(), cancelled);
+        protected boolean dispatchTypedFromLegacy(@NotNull FlagEvent event, @NotNull Handler handler, boolean cancelled) {
+            return handler.onFlag(event.getUser(), event.getCheck(), event.verboseSupplier(), cancelled);
         }
 
         /** Bridge from {@link GrimCheckEvent.Handler} — used by the abstract channel when a check-level subscriber registers. */
         @ApiStatus.Internal
-        public static @NotNull LazyHandler bridgeFromCheck(@NotNull GrimCheckEvent.Handler abstractHandler) {
+        public static @NotNull Handler bridgeFromCheck(@NotNull GrimCheckEvent.Handler abstractHandler) {
             return (user, check, verbose, cancelled) -> abstractHandler.onCheck(user, check, cancelled);
         }
 
         /** Bridge from {@link GrimVerboseCheckEvent.Handler}. */
         @ApiStatus.Internal
-        public static @NotNull LazyHandler bridgeFromVerboseCheck(@NotNull GrimVerboseCheckEvent.LazyHandler abstractHandler) {
+        public static @NotNull Handler bridgeFromVerboseCheck(@NotNull GrimVerboseCheckEvent.Handler abstractHandler) {
             return (user, check, verbose, cancelled) -> abstractHandler.onVerboseCheck(user, check, verbose, cancelled);
         }
 
         /** Bridge from root-level {@link ac.grim.grimac.api.event.GrimEvent.Handler} — observational only, cancelled is passed through unchanged. */
         @ApiStatus.Internal
-        public static @NotNull LazyHandler bridgeFromAny(@NotNull ac.grim.grimac.api.event.GrimEvent.Handler abstractHandler) {
+        public static @NotNull Handler bridgeFromAny(@NotNull ac.grim.grimac.api.event.GrimEvent.Handler abstractHandler) {
             return (user, check, verbose, cancelled) -> {
                 abstractHandler.onAnyEvent(FlagEvent.class, cancelled);
                 return cancelled;
             };
         }
 
-        private static @NotNull LazyHandler adapt(@NotNull Handler handler) {
+        private static @NotNull Handler adapt(@NotNull StringHandler handler) {
             return (user, check, verbose, cancelled) -> handler.onFlag(user, check, verbose.get(), cancelled);
+        }
+
+        private static void warnStringHandler(@NotNull GrimPlugin plugin) {
+            if (STRING_HANDLER_WARNING.compareAndSet(false, true)) {
+                plugin.getLogger().warning("Deprecated Grim flag string listener registered; use the Supplier<String> verbose handler and call verbose.get() only when text is needed.");
+            }
         }
     }
 }

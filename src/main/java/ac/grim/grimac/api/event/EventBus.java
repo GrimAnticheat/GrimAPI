@@ -16,7 +16,7 @@ import org.jetbrains.annotations.NotNull;
  * <pre>{@code
  * // Subscribe
  * EventBus bus = GrimAPIProvider.getAPI().getEventBus();
- * bus.get(FlagEvent.class).onFlagLazy(plugin, (user, check, verbose, cancelled) -> {
+ * bus.get(FlagEvent.class).onFlag(plugin, (user, check, verbose, cancelled) -> {
  *     getLogger().info("flag " + check.getClass().getSimpleName());
  *     return cancelled;
  * });

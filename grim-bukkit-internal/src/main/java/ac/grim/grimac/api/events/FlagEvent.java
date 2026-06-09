@@ -30,10 +30,6 @@ public class FlagEvent extends Event implements GrimUserEvent, Cancellable {
         this.verboseSupplier = memoize(verboseSupplier == null ? () -> "" : verboseSupplier);
     }
 
-    public Supplier<String> getVerboseSupplier() {
-        return verboseSupplier;
-    }
-
     public String getVerbose() {
         return verboseSupplier.get();
     }

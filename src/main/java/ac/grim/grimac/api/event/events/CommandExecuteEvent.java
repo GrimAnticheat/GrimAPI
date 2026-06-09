@@ -7,6 +7,7 @@ import ac.grim.grimac.api.plugin.GrimPlugin;
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
 
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Supplier;
 
 public class CommandExecuteEvent extends GrimVerboseCheckEvent<CommandExecuteEvent.Channel> {
@@ -46,102 +47,107 @@ public class CommandExecuteEvent extends GrimVerboseCheckEvent<CommandExecuteEve
     /**
      * Typed command-execute handler. Returns the new cancelled state — see
      * {@link FlagEvent.Handler} for the cancellation contract.
-     *
-     * @deprecated Prefer {@link LazyHandler}; this handler forces verbose
-     * rendering before your callback runs.
      */
-    @Deprecated
     @FunctionalInterface
     public interface Handler {
-        boolean onCommandExecute(@NotNull GrimUser user, @NotNull AbstractCheck check,
-                                 @NotNull String verbose, @NotNull String command,
-                                 boolean currentlyCancelled);
-    }
-
-    @FunctionalInterface
-    public interface LazyHandler {
         boolean onCommandExecute(@NotNull GrimUser user, @NotNull AbstractCheck check,
                                  @NotNull Supplier<String> verbose, @NotNull String command,
                                  boolean currentlyCancelled);
     }
 
-    public static final class Channel extends EventChannel<CommandExecuteEvent, LazyHandler> {
+    /**
+     * @deprecated Prefer {@link Handler}. This handler forces verbose
+     * rendering before your callback runs.
+     */
+    @Deprecated
+    @FunctionalInterface
+    public interface StringHandler {
+        boolean onCommandExecute(@NotNull GrimUser user, @NotNull AbstractCheck check,
+                                 @NotNull String verbose, @NotNull String command,
+                                 boolean currentlyCancelled);
+    }
+
+    public static final class Channel extends EventChannel<CommandExecuteEvent, Handler> {
+        private static final AtomicBoolean STRING_HANDLER_WARNING = new AtomicBoolean();
         private final ThreadLocal<CommandExecuteEvent> legacyPool = ThreadLocal.withInitial(CommandExecuteEvent::new);
 
         public Channel() {
-            super(CommandExecuteEvent.class, LazyHandler.class);
+            super(CommandExecuteEvent.class, Handler.class);
         }
 
-        public void onCommandExecuteLazy(@NotNull GrimPlugin plugin, @NotNull LazyHandler handler) {
+        public void onCommandExecute(@NotNull GrimPlugin plugin, @NotNull Handler handler) {
             subscribe(handler, 0, false, plugin, null);
         }
 
-        public void onCommandExecuteLazy(@NotNull GrimPlugin plugin, @NotNull LazyHandler handler, int priority) {
+        public void onCommandExecute(@NotNull GrimPlugin plugin, @NotNull Handler handler, int priority) {
             subscribe(handler, priority, false, plugin, null);
         }
 
-        public void onCommandExecuteLazy(@NotNull GrimPlugin plugin, @NotNull LazyHandler handler, int priority, boolean ignoreCancelled) {
+        public void onCommandExecute(@NotNull GrimPlugin plugin, @NotNull Handler handler, int priority, boolean ignoreCancelled) {
             subscribe(handler, priority, ignoreCancelled, plugin, null);
         }
 
         /**
-         * @deprecated Prefer {@link #onCommandExecuteLazy(GrimPlugin, LazyHandler)}.
+         * @deprecated Prefer {@link #onCommandExecute(GrimPlugin, Handler)}.
          */
         @Deprecated
-        public void onCommandExecute(@NotNull GrimPlugin plugin, @NotNull Handler handler) {
-            onCommandExecuteLazy(plugin, adapt(handler));
+        public void onCommandExecuteString(@NotNull GrimPlugin plugin, @NotNull StringHandler handler) {
+            warnStringHandler(plugin);
+            onCommandExecute(plugin, adapt(handler));
         }
 
         /**
-         * @deprecated Prefer {@link #onCommandExecuteLazy(GrimPlugin, LazyHandler, int)}.
+         * @deprecated Prefer {@link #onCommandExecute(GrimPlugin, Handler, int)}.
          */
         @Deprecated
-        public void onCommandExecute(@NotNull GrimPlugin plugin, @NotNull Handler handler, int priority) {
-            onCommandExecuteLazy(plugin, adapt(handler), priority);
+        public void onCommandExecuteString(@NotNull GrimPlugin plugin, @NotNull StringHandler handler, int priority) {
+            warnStringHandler(plugin);
+            onCommandExecute(plugin, adapt(handler), priority);
         }
 
         /**
-         * @deprecated Prefer {@link #onCommandExecuteLazy(GrimPlugin, LazyHandler, int, boolean)}.
+         * @deprecated Prefer {@link #onCommandExecute(GrimPlugin, Handler, int, boolean)}.
          */
         @Deprecated
-        public void onCommandExecute(@NotNull GrimPlugin plugin, @NotNull Handler handler, int priority, boolean ignoreCancelled) {
-            onCommandExecuteLazy(plugin, adapt(handler), priority, ignoreCancelled);
-        }
-
-        /** @deprecated resolve your context once at plugin enable — {@code api.getGrimPlugin(this)} — and call the {@link GrimPlugin}-taking overload. */
-        @Deprecated
-        public void onCommandExecuteLazy(@NotNull Object pluginContext, @NotNull LazyHandler handler) {
-            onCommandExecuteLazy(resolvePlugin(pluginContext), handler);
-        }
-
-        /** @deprecated see {@link #onCommandExecuteLazy(Object, LazyHandler)}. */
-        @Deprecated
-        public void onCommandExecuteLazy(@NotNull Object pluginContext, @NotNull LazyHandler handler, int priority) {
-            onCommandExecuteLazy(resolvePlugin(pluginContext), handler, priority);
-        }
-
-        /** @deprecated see {@link #onCommandExecuteLazy(Object, LazyHandler)}. */
-        @Deprecated
-        public void onCommandExecuteLazy(@NotNull Object pluginContext, @NotNull LazyHandler handler, int priority, boolean ignoreCancelled) {
-            onCommandExecuteLazy(resolvePlugin(pluginContext), handler, priority, ignoreCancelled);
+        public void onCommandExecuteString(@NotNull GrimPlugin plugin, @NotNull StringHandler handler, int priority, boolean ignoreCancelled) {
+            warnStringHandler(plugin);
+            onCommandExecute(plugin, adapt(handler), priority, ignoreCancelled);
         }
 
         /** @deprecated resolve your context once at plugin enable — {@code api.getGrimPlugin(this)} — and call the {@link GrimPlugin}-taking overload. */
         @Deprecated
         public void onCommandExecute(@NotNull Object pluginContext, @NotNull Handler handler) {
-            onCommandExecuteLazy(pluginContext, adapt(handler));
+            onCommandExecute(resolvePlugin(pluginContext), handler);
         }
 
         /** @deprecated see {@link #onCommandExecute(Object, Handler)}. */
         @Deprecated
         public void onCommandExecute(@NotNull Object pluginContext, @NotNull Handler handler, int priority) {
-            onCommandExecuteLazy(pluginContext, adapt(handler), priority);
+            onCommandExecute(resolvePlugin(pluginContext), handler, priority);
         }
 
         /** @deprecated see {@link #onCommandExecute(Object, Handler)}. */
         @Deprecated
         public void onCommandExecute(@NotNull Object pluginContext, @NotNull Handler handler, int priority, boolean ignoreCancelled) {
-            onCommandExecuteLazy(pluginContext, adapt(handler), priority, ignoreCancelled);
+            onCommandExecute(resolvePlugin(pluginContext), handler, priority, ignoreCancelled);
+        }
+
+        /** @deprecated resolve your context once at plugin enable — {@code api.getGrimPlugin(this)} — and call the {@link GrimPlugin}-taking overload. */
+        @Deprecated
+        public void onCommandExecuteString(@NotNull Object pluginContext, @NotNull StringHandler handler) {
+            onCommandExecuteString(resolvePlugin(pluginContext), handler);
+        }
+
+        /** @deprecated see {@link #onCommandExecuteString(Object, StringHandler)}. */
+        @Deprecated
+        public void onCommandExecuteString(@NotNull Object pluginContext, @NotNull StringHandler handler, int priority) {
+            onCommandExecuteString(resolvePlugin(pluginContext), handler, priority);
+        }
+
+        /** @deprecated see {@link #onCommandExecuteString(Object, StringHandler)}. */
+        @Deprecated
+        public void onCommandExecuteString(@NotNull Object pluginContext, @NotNull StringHandler handler, int priority, boolean ignoreCancelled) {
+            onCommandExecuteString(resolvePlugin(pluginContext), handler, priority, ignoreCancelled);
         }
 
         public boolean fire(@NotNull GrimUser user, @NotNull AbstractCheck check,
@@ -151,13 +157,13 @@ public class CommandExecuteEvent extends GrimVerboseCheckEvent<CommandExecuteEve
 
         public boolean fire(@NotNull GrimUser user, @NotNull AbstractCheck check,
                             @NotNull Supplier<String> verboseSupplier, @NotNull String command) {
-            Entry<LazyHandler>[] entries = entries();
+            Entry<Handler>[] entries = entries();
             if (entries.length == 0) return false;
 
             Supplier<String> verbose = memoize(verboseSupplier);
             boolean cancelled = false;
             if (!hasLegacy()) {
-                for (Entry<LazyHandler> e : entries) {
+                for (Entry<Handler> e : entries) {
                     if (cancelled && !e.ignoreCancelled) continue;
                     try {
                         cancelled = e.handler.onCommandExecute(user, check, verbose, command, cancelled);
@@ -170,7 +176,7 @@ public class CommandExecuteEvent extends GrimVerboseCheckEvent<CommandExecuteEve
 
             CommandExecuteEvent pooled = legacyPool.get();
             pooled.init(user, check, verbose, command);
-            for (Entry<LazyHandler> e : entries) {
+            for (Entry<Handler> e : entries) {
                 if (cancelled && !e.ignoreCancelled) continue;
                 try {
                     if (e.legacyListener != null) {
@@ -188,30 +194,36 @@ public class CommandExecuteEvent extends GrimVerboseCheckEvent<CommandExecuteEve
         }
 
         @Override
-        protected boolean dispatchTypedFromLegacy(@NotNull CommandExecuteEvent event, @NotNull LazyHandler handler, boolean cancelled) {
-            return handler.onCommandExecute(event.getUser(), event.getCheck(), event.getVerboseSupplier(), event.getCommand(), cancelled);
+        protected boolean dispatchTypedFromLegacy(@NotNull CommandExecuteEvent event, @NotNull Handler handler, boolean cancelled) {
+            return handler.onCommandExecute(event.getUser(), event.getCheck(), event.verboseSupplier(), event.getCommand(), cancelled);
         }
 
         @ApiStatus.Internal
-        public static @NotNull LazyHandler bridgeFromCheck(@NotNull GrimCheckEvent.Handler abstractHandler) {
+        public static @NotNull Handler bridgeFromCheck(@NotNull GrimCheckEvent.Handler abstractHandler) {
             return (user, check, verbose, command, cancelled) -> abstractHandler.onCheck(user, check, cancelled);
         }
 
         @ApiStatus.Internal
-        public static @NotNull LazyHandler bridgeFromVerboseCheck(@NotNull GrimVerboseCheckEvent.LazyHandler abstractHandler) {
+        public static @NotNull Handler bridgeFromVerboseCheck(@NotNull GrimVerboseCheckEvent.Handler abstractHandler) {
             return (user, check, verbose, command, cancelled) -> abstractHandler.onVerboseCheck(user, check, verbose, cancelled);
         }
 
         @ApiStatus.Internal
-        public static @NotNull LazyHandler bridgeFromAny(@NotNull ac.grim.grimac.api.event.GrimEvent.Handler abstractHandler) {
+        public static @NotNull Handler bridgeFromAny(@NotNull ac.grim.grimac.api.event.GrimEvent.Handler abstractHandler) {
             return (user, check, verbose, command, cancelled) -> {
                 abstractHandler.onAnyEvent(CommandExecuteEvent.class, cancelled);
                 return cancelled;
             };
         }
 
-        private static @NotNull LazyHandler adapt(@NotNull Handler handler) {
+        private static @NotNull Handler adapt(@NotNull StringHandler handler) {
             return (user, check, verbose, command, cancelled) -> handler.onCommandExecute(user, check, verbose.get(), command, cancelled);
+        }
+
+        private static void warnStringHandler(@NotNull GrimPlugin plugin) {
+            if (STRING_HANDLER_WARNING.compareAndSet(false, true)) {
+                plugin.getLogger().warning("Deprecated Grim command-execute string listener registered; use the Supplier<String> verbose handler and call verbose.get() only when text is needed.");
+            }
         }
     }
 }
