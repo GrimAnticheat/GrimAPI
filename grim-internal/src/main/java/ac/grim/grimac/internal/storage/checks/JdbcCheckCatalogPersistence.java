@@ -69,26 +69,47 @@ public final class JdbcCheckCatalogPersistence implements CheckCatalogPersistenc
                       @Nullable String description,
                       @Nullable String introducedVersion,
                       long introducedAt) {
-        try (Connection c = connections.open();
-             PreparedStatement ps = c.prepareStatement(
-                     "INSERT INTO " + checksTable + "(stable_key, display, description, introduced_version, introduced_at) "
-                             + "VALUES (?, ?, ?, ?, ?)",
-                     Statement.RETURN_GENERATED_KEYS)) {
-            ps.setString(1, stableKey);
-            bindNullableString(ps, 2, display);
-            bindNullableString(ps, 3, description);
-            bindNullableString(ps, 4, introducedVersion);
-            ps.setLong(5, introducedAt);
-            ps.executeUpdate();
-            try (ResultSet keys = ps.getGeneratedKeys()) {
-                if (keys.next()) return keys.getInt(1);
-                throw new SQLException("no generated key for " + checksTable + " insert");
+        SQLException lastFailure = null;
+        for (int attempt = 0; attempt < 5; attempt++) {
+            try (Connection c = connections.open()) {
+                boolean priorAutoCommit = c.getAutoCommit();
+                c.setAutoCommit(false);
+                try {
+                    Integer existing = findExistingId(c, stableKey);
+                    if (existing != null) {
+                        c.commit();
+                        return existing;
+                    }
+
+                    int checkId = nextCheckId(c);
+                    try (PreparedStatement ps = c.prepareStatement(
+                            "INSERT INTO " + checksTable
+                                    + "(check_id, stable_key, display, description, introduced_version, introduced_at) "
+                                    + "VALUES (?, ?, ?, ?, ?, ?)")) {
+                        ps.setInt(1, checkId);
+                        ps.setString(2, stableKey);
+                        bindNullableString(ps, 3, display);
+                        bindNullableString(ps, 4, description);
+                        bindNullableString(ps, 5, introducedVersion);
+                        ps.setLong(6, introducedAt);
+                        ps.executeUpdate();
+                    }
+                    alignSequence(c);
+                    c.commit();
+                    return checkId;
+                } catch (SQLException e) {
+                    lastFailure = e;
+                    try { c.rollback(); } catch (SQLException ignored) {}
+                    Integer existing = findExistingId(stableKey);
+                    if (existing != null) return existing;
+                } finally {
+                    try { c.setAutoCommit(priorAutoCommit); } catch (SQLException ignored) {}
+                }
+            } catch (SQLException e) {
+                lastFailure = e;
             }
-        } catch (SQLException e) {
-            Integer existing = findExistingId(stableKey);
-            if (existing != null) return existing;
-            throw new RuntimeException("failed to insert " + checksTable + " row for " + stableKey, e);
         }
+        throw new RuntimeException("failed to insert " + checksTable + " row for " + stableKey, lastFailure);
     }
 
     @Override
@@ -162,6 +183,26 @@ public final class JdbcCheckCatalogPersistence implements CheckCatalogPersistenc
         } catch (SQLException ignore) {
         }
         return null;
+    }
+
+    private Integer findExistingId(Connection c, String stableKey) throws SQLException {
+        try (PreparedStatement ps = c.prepareStatement(
+                "SELECT check_id FROM " + checksTable + " WHERE stable_key = ?")) {
+            ps.setString(1, stableKey);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) return rs.getInt(1);
+            }
+        }
+        return null;
+    }
+
+    private int nextCheckId(Connection c) throws SQLException {
+        try (PreparedStatement ps = c.prepareStatement(
+                "SELECT COALESCE(MAX(check_id), 0) + 1 FROM " + checksTable);
+             ResultSet rs = ps.executeQuery()) {
+            if (rs.next()) return rs.getInt(1);
+        }
+        return 1;
     }
 
     private String findStableKeyById(int checkId) {
