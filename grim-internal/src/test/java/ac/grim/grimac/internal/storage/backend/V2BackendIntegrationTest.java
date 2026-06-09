@@ -6,13 +6,17 @@ import ac.grim.grimac.api.storage.backend.BackendV2;
 import ac.grim.grimac.api.storage.backend.KindAdapter;
 import ac.grim.grimac.api.storage.category.Categories;
 import ac.grim.grimac.api.storage.config.TableNames;
+import ac.grim.grimac.api.storage.event.SettingEvent;
 import ac.grim.grimac.api.storage.event.ServerStartupEvent;
 import ac.grim.grimac.api.storage.event.SessionEvent;
 import ac.grim.grimac.api.storage.kind.Entity;
+import ac.grim.grimac.api.storage.kind.KeyValueScoped;
 import ac.grim.grimac.api.storage.kind.ops.EntityOps;
+import ac.grim.grimac.api.storage.kind.ops.KeyValueScopedOps;
 import ac.grim.grimac.api.storage.model.PlayerIdentity;
 import ac.grim.grimac.api.storage.model.ServerStartupRecord;
 import ac.grim.grimac.api.storage.model.SessionRecord;
+import ac.grim.grimac.api.storage.model.SettingScope;
 import ac.grim.grimac.api.storage.registry.StoreId;
 import ac.grim.grimac.internal.storage.backend.mongo.MongoBackendConfig;
 import ac.grim.grimac.internal.storage.backend.mongo.v2.MongoBackendV2;
@@ -29,6 +33,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.net.Socket;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Optional;
 import java.util.UUID;
@@ -48,12 +53,15 @@ class V2BackendIntegrationTest {
 
     @Test @DisplayName("SQLite v2: entity indexes")
     void sqlite(@TempDir Path tempDir) throws Exception {
-        SqliteBackendConfig cfg = SqliteBackendConfig.defaults("v2-integ.db");
+        SqliteBackendConfig cfg = SqliteBackendConfig.defaults("data/v2-integ.db");
         SqliteBackendV2 backend = new SqliteBackendV2(cfg);
         try {
             backend.init(ctx(cfg, tempDir));
+            assertTrue(Files.isDirectory(tempDir.resolve("data")),
+                    "SQLite backend creates missing parent directories");
             exerciseEntityIndexes(backend, "v2_integ_players_sqlite", "v2_integ_sessions_sqlite",
                     "v2_integ_startups_sqlite");
+            exerciseSettingsKv(backend, "v2_integ_settings_sqlite");
         } finally {
             backend.close();
         }
@@ -254,6 +262,32 @@ class V2BackendIntegrationTest {
             backend.id() + ": by_open_heartbeat excludes closed startup");
 
         LOG.info(() -> backend.id() + ": v2 entity index contract OK for " + testUuid);
+    }
+
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private void exerciseSettingsKv(BackendV2 backend, String settingsStoreName) throws Exception {
+        StoreId settingsStore = StoreId.grim(settingsStoreName + "_" + Long.toHexString(System.nanoTime()));
+        KeyValueScoped settingsKind = V2BuiltinKinds.settings();
+        KindAdapter adapter = backend.adapterFor(settingsKind).orElseThrow(
+            () -> new AssertionError(backend.id() + " has no KeyValueScoped adapter"));
+
+        adapter.ensureStore(settingsStore, settingsKind);
+
+        var handler = adapter.writeHandler(settingsStore, settingsKind, Categories.SETTING);
+        SettingEvent event = new SettingEvent();
+        event.scope(SettingScope.PLAYER)
+            .scopeKey("00000000-0000-0000-0000-000000000001")
+            .key("alerts")
+            .value(new byte[]{1})
+            .updatedEpochMs(System.currentTimeMillis());
+        handler.onEvent(event, 0, true);
+
+        KeyValueScopedOps.GetOp<SettingScope, byte[]> get = new KeyValueScopedOps.GetOp<>(
+            Categories.SETTING, SettingScope.PLAYER,
+            "00000000-0000-0000-0000-000000000001", "alerts");
+        Optional<byte[]> got = (Optional<byte[]>) adapter.execute(settingsStore, settingsKind, get);
+        assertTrue(got.isPresent(), backend.id() + ": setting KV row round-trips");
+        assertArrayEquals(new byte[]{1}, got.get(), backend.id() + ": setting KV value round-trips");
     }
 
     private static void writeSession(ac.grim.grimac.api.storage.backend.StorageEventHandler<SessionEvent> handler,

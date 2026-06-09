@@ -100,6 +100,11 @@ public final class MysqlBackendV2 implements BackendV2 {
         if (kind instanceof Counter<?>)              return Optional.of((KindAdapter) counterAdapter);
         return Optional.empty();
     }
+
+    @Override public @NotNull Optional<SearchAdapter> searchAdapter() { return Optional.empty(); }
+    @Override public @NotNull Optional<TxAdapter> txAdapter() { return Optional.empty(); }
+    @Override public @NotNull Optional<AdminAdapter> adminAdapter() { return Optional.empty(); }
+
     @Override @SuppressWarnings("unchecked")
     public <X> @NotNull Optional<X> unwrap(@NotNull Class<X> type) {
         if (type.isAssignableFrom(javax.sql.DataSource.class) && ds != null) return Optional.of((X) ds);

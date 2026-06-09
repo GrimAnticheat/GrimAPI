@@ -1,10 +1,13 @@
 package ac.grim.grimac.internal.storage.backend.postgres.v2;
 
 import ac.grim.grimac.api.storage.backend.ApiVersion;
+import ac.grim.grimac.api.storage.backend.AdminAdapter;
 import ac.grim.grimac.api.storage.backend.BackendContext;
 import ac.grim.grimac.api.storage.backend.BackendException;
 import ac.grim.grimac.api.storage.backend.BackendV2;
 import ac.grim.grimac.api.storage.backend.KindAdapter;
+import ac.grim.grimac.api.storage.backend.SearchAdapter;
+import ac.grim.grimac.api.storage.backend.TxAdapter;
 import ac.grim.grimac.api.storage.category.Capability;
 import ac.grim.grimac.api.storage.kind.Counter;
 import ac.grim.grimac.api.storage.kind.DataKind;
@@ -191,6 +194,10 @@ public final class PostgresBackendV2 implements BackendV2 {
         if (kind instanceof Counter<?>)                 return Optional.of((KindAdapter) counterAdapter);
         return Optional.empty();
     }
+
+    @Override public @NotNull Optional<SearchAdapter> searchAdapter() { return Optional.empty(); }
+    @Override public @NotNull Optional<TxAdapter> txAdapter() { return Optional.empty(); }
+    @Override public @NotNull Optional<AdminAdapter> adminAdapter() { return Optional.empty(); }
 
     @Override
     @SuppressWarnings("unchecked")

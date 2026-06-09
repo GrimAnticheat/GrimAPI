@@ -13,6 +13,8 @@ import ac.grim.grimac.internal.storage.backend.sql.v2.dialect.SqliteDialect;
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
 
+import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.DriverManager;
@@ -69,6 +71,19 @@ public final class SqliteBackendV2 implements BackendV2 {
         Path dbFile = ctx.dataDirectory().resolve(config.path());
         String jdbcUrl = "jdbc:sqlite:" + dbFile.toAbsolutePath();
         try {
+            Class.forName("org.sqlite.JDBC");
+        } catch (ClassNotFoundException e) {
+            throw new BackendException("SQLite JDBC driver missing: " + e.getMessage(), e);
+        }
+        Path parent = dbFile.getParent();
+        if (parent != null) {
+            try {
+                Files.createDirectories(parent);
+            } catch (IOException e) {
+                throw new BackendException("failed to create SQLite database directory " + parent, e);
+            }
+        }
+        try {
             this.connection = DriverManager.getConnection(jdbcUrl);
             try (Statement s = connection.createStatement()) {
                 s.execute("PRAGMA journal_mode=WAL");
@@ -109,6 +124,11 @@ public final class SqliteBackendV2 implements BackendV2 {
         if (kind instanceof Counter<?>)              return Optional.of((KindAdapter) counterAdapter);
         return Optional.empty();
     }
+
+    @Override public @NotNull Optional<SearchAdapter> searchAdapter() { return Optional.empty(); }
+    @Override public @NotNull Optional<TxAdapter> txAdapter() { return Optional.empty(); }
+    @Override public @NotNull Optional<AdminAdapter> adminAdapter() { return Optional.empty(); }
+
     @Override @SuppressWarnings("unchecked")
     public <X> @NotNull Optional<X> unwrap(@NotNull Class<X> type) {
         if (type.isAssignableFrom(javax.sql.DataSource.class) && singleConnDs != null) return Optional.of((X) singleConnDs);
