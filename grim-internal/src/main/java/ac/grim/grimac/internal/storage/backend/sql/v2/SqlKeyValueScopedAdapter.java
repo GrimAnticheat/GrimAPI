@@ -105,6 +105,9 @@ public final class SqlKeyValueScopedAdapter implements KindAdapter<KeyValueScope
             + " WHERE " + dialect.quoteIdentifier("scope") + " = ?"
             + " AND " + dialect.quoteIdentifier("scope_key") + " = ?"
             + " AND " + dialect.quoteIdentifier("key") + " = ?";
+        if (dialect.usesLegacySqliteUpsert()) {
+            return new LegacyKVWriteHandler<>(legacyKvInsertSql(table), legacyKvUpdateSql(table), deleteSql);
+        }
         return new KVWriteHandler<>(upsertSql, deleteSql);
     }
 
@@ -173,6 +176,52 @@ public final class SqlKeyValueScopedAdapter implements KindAdapter<KeyValueScope
         }
     }
 
+    private final class LegacyKVWriteHandler<E> implements StorageEventHandler<E> {
+        private final String insertSql;
+        private final String updateSql;
+        private final String deleteSql;
+
+        LegacyKVWriteHandler(String insertSql, String updateSql, String deleteSql) {
+            this.insertSql = insertSql;
+            this.updateSql = updateSql;
+            this.deleteSql = deleteSql;
+        }
+
+        @Override
+        public void onEvent(E event, long sequence, boolean endOfBatch) throws BackendException {
+            KeyValueEvent<?, ?> kve = (KeyValueEvent<?, ?>) event;
+            if (kve.scope == null || kve.scopeKey == null || kve.key == null) return;
+            try (Connection c = ds.getConnection()) {
+                if (kve.remove) {
+                    try (PreparedStatement ps = c.prepareStatement(deleteSql)) {
+                        ps.setString(1, String.valueOf(kve.scope));
+                        ps.setString(2, String.valueOf(kve.scopeKey));
+                        ps.setString(3, kve.key);
+                        ps.executeUpdate();
+                    }
+                    return;
+                }
+                if (kve.value == null) {
+                    throw new BackendException("KV PutOp value must be non-null; use remove flag for deletion");
+                }
+                boolean priorAutoCommit = c.getAutoCommit();
+                c.setAutoCommit(false);
+                try {
+                    legacyKvUpsert(c, insertSql, updateSql, String.valueOf(kve.scope),
+                        String.valueOf(kve.scopeKey), kve.key, valueAsBytes(kve.value), kve.updatedEpochMs);
+                    c.commit();
+                } catch (Exception e) {
+                    try { c.rollback(); } catch (SQLException ignored) {}
+                    throw e;
+                } finally {
+                    c.setAutoCommit(priorAutoCommit);
+                }
+            } catch (SQLException e) {
+                throw new BackendException("kv write failed", e);
+            }
+        }
+    }
+
     /**
      * Coerce a KV slot's value to bytes for {@code setBytes}. byte[]
      * passes through; String falls back to UTF-8 so legacy callers
@@ -186,6 +235,53 @@ public final class SqlKeyValueScopedAdapter implements KindAdapter<KeyValueScope
         if (value instanceof String s)
             return s.getBytes(java.nio.charset.StandardCharsets.UTF_8);
         throw new BackendException("KV value must be byte[] or String, got " + value.getClass().getName());
+    }
+
+    private @NotNull String legacyKvInsertSql(@NotNull String table) {
+        String scope = dialect.quoteIdentifier("scope");
+        String scopeKey = dialect.quoteIdentifier("scope_key");
+        String key = dialect.quoteIdentifier("key");
+        String value = dialect.quoteIdentifier("value");
+        String updatedAt = dialect.quoteIdentifier("updated_at");
+        return "INSERT OR IGNORE INTO " + table + " (" + scope + ", " + scopeKey + ", " + key
+            + ", " + value + ", " + updatedAt + ") VALUES (?, ?, ?, ?, ?)";
+    }
+
+    private @NotNull String legacyKvUpdateSql(@NotNull String table) {
+        String scope = dialect.quoteIdentifier("scope");
+        String scopeKey = dialect.quoteIdentifier("scope_key");
+        String key = dialect.quoteIdentifier("key");
+        String value = dialect.quoteIdentifier("value");
+        String updatedAt = dialect.quoteIdentifier("updated_at");
+        return "UPDATE " + table + " SET " + value + " = ?, " + updatedAt + " = ?"
+            + " WHERE " + scope + " = ? AND " + scopeKey + " = ? AND " + key + " = ?";
+    }
+
+    private void legacyKvUpsert(
+            @NotNull Connection c,
+            @NotNull String insertSql,
+            @NotNull String updateSql,
+            @NotNull String scope,
+            @NotNull String scopeKey,
+            @NotNull String key,
+            byte @NotNull [] value,
+            long updatedAt) throws SQLException {
+        try (PreparedStatement insert = c.prepareStatement(insertSql)) {
+            insert.setString(1, scope);
+            insert.setString(2, scopeKey);
+            insert.setString(3, key);
+            insert.setBytes(4, value);
+            insert.setLong(5, updatedAt);
+            insert.executeUpdate();
+        }
+        try (PreparedStatement update = c.prepareStatement(updateSql)) {
+            update.setBytes(1, value);
+            update.setLong(2, updatedAt);
+            update.setString(3, scope);
+            update.setString(4, scopeKey);
+            update.setString(5, key);
+            update.executeUpdate();
+        }
     }
 
     // ============================== execute dispatch ==============================
@@ -236,6 +332,24 @@ public final class SqlKeyValueScopedAdapter implements KindAdapter<KeyValueScope
             throw new IllegalArgumentException("KV PutOp value must be non-null; use RemoveOp for deletion");
         }
         String table = dialect.quoteIdentifier(id.name());
+        if (dialect.usesLegacySqliteUpsert()) {
+            try (Connection c = ds.getConnection()) {
+                boolean prior = c.getAutoCommit();
+                c.setAutoCommit(false);
+                try {
+                    legacyKvUpsert(c, legacyKvInsertSql(table), legacyKvUpdateSql(table),
+                        String.valueOf(op.scope()), op.scopeKey(), op.key(),
+                        valueAsBytes(op.value()), System.currentTimeMillis());
+                    c.commit();
+                } catch (Exception e) {
+                    try { c.rollback(); } catch (SQLException ignored) {}
+                    throw e;
+                } finally {
+                    c.setAutoCommit(prior);
+                }
+            }
+            return;
+        }
         String sql = dialect.kvUpsertSql(table);
         try (Connection c = ds.getConnection(); PreparedStatement ps = c.prepareStatement(sql)) {
             ps.setString(1, String.valueOf(op.scope()));
@@ -250,23 +364,37 @@ public final class SqlKeyValueScopedAdapter implements KindAdapter<KeyValueScope
     private void putAll(@NotNull StoreId id, @NotNull KeyValueScopedOps.PutAllOp<?, ?> op) throws SQLException, BackendException {
         String table = dialect.quoteIdentifier(id.name());
         String sql = dialect.kvUpsertSql(table);
+        String legacyInsert = legacyKvInsertSql(table);
+        String legacyUpdate = legacyKvUpdateSql(table);
         long now = System.currentTimeMillis();
         try (Connection c = ds.getConnection()) {
             boolean priorAutoCommit = c.getAutoCommit();
             c.setAutoCommit(false);
-            try (PreparedStatement ps = c.prepareStatement(sql)) {
-                for (Map.Entry<String, ?> e : op.values().entrySet()) {
-                    if (e.getValue() == null) {
-                        throw new IllegalArgumentException("KV PutAllOp value for key '" + e.getKey() + "' must be non-null");
+            try {
+                if (dialect.usesLegacySqliteUpsert()) {
+                    for (Map.Entry<String, ?> e : op.values().entrySet()) {
+                        if (e.getValue() == null) {
+                            throw new IllegalArgumentException("KV PutAllOp value for key '" + e.getKey() + "' must be non-null");
+                        }
+                        legacyKvUpsert(c, legacyInsert, legacyUpdate, String.valueOf(op.scope()),
+                            op.scopeKey(), e.getKey(), valueAsBytes(e.getValue()), now);
                     }
-                    ps.setString(1, String.valueOf(op.scope()));
-                    ps.setString(2, op.scopeKey());
-                    ps.setString(3, e.getKey());
-                    ps.setBytes(4, valueAsBytes(e.getValue()));
-                    ps.setLong(5, now);
-                    ps.addBatch();
+                } else {
+                    try (PreparedStatement ps = c.prepareStatement(sql)) {
+                        for (Map.Entry<String, ?> e : op.values().entrySet()) {
+                            if (e.getValue() == null) {
+                                throw new IllegalArgumentException("KV PutAllOp value for key '" + e.getKey() + "' must be non-null");
+                            }
+                            ps.setString(1, String.valueOf(op.scope()));
+                            ps.setString(2, op.scopeKey());
+                            ps.setString(3, e.getKey());
+                            ps.setBytes(4, valueAsBytes(e.getValue()));
+                            ps.setLong(5, now);
+                            ps.addBatch();
+                        }
+                        ps.executeBatch();
+                    }
                 }
-                ps.executeBatch();
                 c.commit();
             } catch (Exception e) {
                 try { c.rollback(); } catch (SQLException ignored) {}

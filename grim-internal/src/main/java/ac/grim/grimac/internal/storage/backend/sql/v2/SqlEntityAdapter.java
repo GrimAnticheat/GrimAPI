@@ -6,6 +6,7 @@ import ac.grim.grimac.api.storage.backend.StorageEventHandler;
 import ac.grim.grimac.api.storage.category.Capability;
 import ac.grim.grimac.api.storage.category.Category;
 import ac.grim.grimac.api.storage.codec.EncodeShape;
+import ac.grim.grimac.api.storage.codec.MergeMode;
 import ac.grim.grimac.api.storage.kind.Entity;
 import ac.grim.grimac.api.storage.kind.IndexSpec;
 import ac.grim.grimac.api.storage.kind.Operation;
@@ -241,6 +242,9 @@ public final class SqlEntityAdapter implements KindAdapter<Entity<?, ?, ?>> {
             @NotNull Category<E> category) {
         @SuppressWarnings("unchecked")
         Entity<?, E, ?> typed = (Entity<?, E, ?>) kind;
+        if (dialect.usesLegacySqliteUpsert()) {
+            return new LegacySqliteEntityHandler<>(id, typed);
+        }
         return new SqlEntityHandler<>(id, typed);
     }
 
@@ -292,6 +296,148 @@ public final class SqlEntityAdapter implements KindAdapter<Entity<?, ?, ?>> {
                 throw new BackendException("sql entity upsert failed for " + id, e);
             }
         }
+    }
+
+    /**
+     * Pre-3.24 SQLite cannot parse {@code ON CONFLICT DO UPDATE}. Use
+     * the same row semantics with a two-step transaction selected once
+     * at handler construction: {@code INSERT OR IGNORE}, then
+     * {@code UPDATE} with the same per-field merge expressions.
+     */
+    private final class LegacySqliteEntityHandler<E> implements StorageEventHandler<E> {
+
+        private final @NotNull StoreId id;
+        private final @NotNull String insertSql;
+        private final @Nullable String updateSql;
+        private final @NotNull List<Integer> updateIndexes;
+        @SuppressWarnings("rawtypes")
+        private final @NotNull BsonCodec codec;
+        private final @NotNull EncodeShape shape;
+        private final int idIndex;
+        private final @NotNull Function<E, Object> eventToRecord;
+
+        @SuppressWarnings({"unchecked", "rawtypes"})
+        LegacySqliteEntityHandler(@NotNull StoreId id, @NotNull Entity<?, E, ?> kind) {
+            this.id = id;
+            this.shape = kind.codec().shape();
+            this.insertSql = legacyInsertSql(id.name(), shape);
+            this.updateIndexes = legacyUpdateIndexes(shape);
+            this.updateSql = updateIndexes.isEmpty() ? null : legacyUpdateSql(id.name(), shape, updateIndexes);
+            this.idIndex = idFieldIndex(shape);
+            this.codec = BsonCodecs.regular(kind.recordType());
+            this.eventToRecord = (Function) kind.eventToRecord();
+        }
+
+        @Override
+        @SuppressWarnings({"unchecked", "rawtypes"})
+        public void onEvent(E event, long sequence, boolean endOfBatch) throws BackendException {
+            try {
+                Object record = eventToRecord.apply(event);
+                try (Connection c = ds.getConnection()) {
+                    boolean priorAutoCommit = c.getAutoCommit();
+                    c.setAutoCommit(false);
+                    try {
+                        try (PreparedStatement insert = c.prepareStatement(insertSql)) {
+                            bindAllFields(insert, record);
+                            insert.executeUpdate();
+                        }
+                        if (updateSql != null) {
+                            try (PreparedStatement update = c.prepareStatement(updateSql)) {
+                                int param = 1;
+                                for (int fieldIndex : updateIndexes) {
+                                    EncodeShape.FieldDef f = shape.fields().get(fieldIndex);
+                                    SqlBindings.bind(update, param++, f, codec.readField(record, fieldIndex));
+                                }
+                                EncodeShape.FieldDef idField = shape.fields().get(idIndex);
+                                SqlBindings.bind(update, param, idField, codec.readField(record, idIndex));
+                                update.executeUpdate();
+                            }
+                        }
+                        c.commit();
+                    } catch (Exception e) {
+                        try { c.rollback(); } catch (SQLException ignored) {}
+                        throw e;
+                    } finally {
+                        c.setAutoCommit(priorAutoCommit);
+                    }
+                }
+            } catch (SQLException | RuntimeException e) {
+                throw new BackendException("sql entity upsert failed for " + id, e);
+            }
+        }
+
+        private void bindAllFields(@NotNull PreparedStatement ps, @NotNull Object record)
+                throws SQLException {
+            int n = shape.fields().size();
+            for (int i = 0; i < n; i++) {
+                EncodeShape.FieldDef f = shape.fields().get(i);
+                SqlBindings.bind(ps, i + 1, f, codec.readField(record, i));
+            }
+        }
+    }
+
+    private @NotNull String legacyInsertSql(@NotNull String tableName, @NotNull EncodeShape shape) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("INSERT OR IGNORE INTO ").append(dialect.quoteIdentifier(tableName)).append(" (");
+        boolean first = true;
+        for (EncodeShape.FieldDef f : shape.fields()) {
+            if (!first) sb.append(", ");
+            sb.append(dialect.quoteIdentifier(f.name()));
+            first = false;
+        }
+        sb.append(") VALUES (");
+        for (int i = 0; i < shape.fields().size(); i++) {
+            if (i > 0) sb.append(", ");
+            sb.append('?');
+        }
+        sb.append(')');
+        return sb.toString();
+    }
+
+    private @NotNull List<Integer> legacyUpdateIndexes(@NotNull EncodeShape shape) {
+        List<Integer> indexes = new ArrayList<>();
+        for (int i = 0; i < shape.fields().size(); i++) {
+            EncodeShape.FieldDef f = shape.fields().get(i);
+            if (f.name().equals(shape.idField())) continue;
+            if (f.mergeMode() == MergeMode.INSERT_ONLY) continue;
+            indexes.add(i);
+        }
+        return indexes;
+    }
+
+    private @NotNull String legacyUpdateSql(
+            @NotNull String tableName,
+            @NotNull EncodeShape shape,
+            @NotNull List<Integer> updateIndexes) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("UPDATE ").append(dialect.quoteIdentifier(tableName)).append(" SET ");
+        boolean first = true;
+        for (int index : updateIndexes) {
+            if (!first) sb.append(", ");
+            EncodeShape.FieldDef f = shape.fields().get(index);
+            String col = dialect.quoteIdentifier(f.name());
+            sb.append(col).append(" = ");
+            switch (f.mergeMode()) {
+                case OVERWRITE -> sb.append('?');
+                case PRESERVE_ON_NON_NULL -> sb.append("COALESCE(").append(col).append(", ?)");
+                case PRESERVE_ON_NON_SENTINEL -> sb.append("CASE WHEN ")
+                    .append(col).append(" IS NULL OR ").append(col).append(" = ")
+                    .append(f.sentinelValue()).append(" THEN ? ELSE ").append(col).append(" END");
+                case MAX -> sb.append("MAX(").append(col).append(", ?)");
+                case MIN -> sb.append("MIN(").append(col).append(", ?)");
+                case INSERT_ONLY -> { /* excluded above */ }
+            }
+            first = false;
+        }
+        sb.append(" WHERE ").append(dialect.quoteIdentifier(shape.idField())).append(" = ?");
+        return sb.toString();
+    }
+
+    private static int idFieldIndex(@NotNull EncodeShape shape) {
+        for (int i = 0; i < shape.fields().size(); i++) {
+            if (shape.fields().get(i).name().equals(shape.idField())) return i;
+        }
+        throw new IllegalArgumentException("EncodeShape id field missing: " + shape.idField());
     }
 
     @SuppressWarnings({"unchecked", "rawtypes"})

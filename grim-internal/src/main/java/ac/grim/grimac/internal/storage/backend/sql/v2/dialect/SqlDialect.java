@@ -108,6 +108,13 @@ public interface SqlDialect {
     @NotNull String upsertSql(@NotNull String tableName, @NotNull EncodeShape shape);
 
     /**
+     * True when SQLite must avoid modern UPSERT / RETURNING syntax.
+     * SQLite engines before 3.24 reject {@code ON CONFLICT DO UPDATE},
+     * which is still common on old Bukkit-family servers.
+     */
+    default boolean usesLegacySqliteUpsert() { return false; }
+
+    /**
      * Whether this dialect supports {@code RETURNING <columns>} on
      * INSERT/UPDATE. Postgres and SQLite 3.35+ do; MySQL does not.
      * When false, adapters that need post-write values (e.g. counter
