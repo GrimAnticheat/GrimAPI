@@ -96,107 +96,102 @@ public abstract class GrimVerboseCheckEvent<CHANNEL extends EventChannel<?, ?>>
     @FunctionalInterface
     public interface Handler {
         boolean onVerboseCheck(@NotNull GrimUser user, @NotNull AbstractCheck check,
-                               @NotNull Supplier<String> verbose, boolean currentlyCancelled);
-    }
-
-    /**
-     * @deprecated Prefer {@link Handler}. This string handler forces verbose
-     * rendering before your callback runs.
-     */
-    @Deprecated
-    @FunctionalInterface
-    public interface StringHandler {
-        boolean onVerboseCheck(@NotNull GrimUser user, @NotNull AbstractCheck check,
                                @NotNull String verbose, boolean currentlyCancelled);
     }
 
-    public static final class Channel extends AbstractEventChannel<GrimVerboseCheckEvent<?>, Handler> {
+    @FunctionalInterface
+    public interface SupplierHandler {
+        boolean onVerboseCheck(@NotNull GrimUser user, @NotNull AbstractCheck check,
+                               @NotNull Supplier<String> verbose, boolean currentlyCancelled);
+    }
+
+    public static final class Channel extends AbstractEventChannel<GrimVerboseCheckEvent<?>, SupplierHandler> {
         private static final AtomicBoolean STRING_HANDLER_WARNING = new AtomicBoolean();
 
         @SuppressWarnings({"unchecked", "rawtypes"})
         public Channel() {
-            super((Class<GrimVerboseCheckEvent<?>>) (Class) GrimVerboseCheckEvent.class, Handler.class);
+            super((Class<GrimVerboseCheckEvent<?>>) (Class) GrimVerboseCheckEvent.class, SupplierHandler.class);
         }
 
-        public void onVerboseCheck(@NotNull GrimPlugin plugin, @NotNull Handler handler) {
+        public void onVerboseCheckSupplier(@NotNull GrimPlugin plugin, @NotNull SupplierHandler handler) {
             subscribeAbstract(handler, 0, false, plugin);
         }
 
-        public void onVerboseCheck(@NotNull GrimPlugin plugin, @NotNull Handler handler, int priority) {
+        public void onVerboseCheckSupplier(@NotNull GrimPlugin plugin, @NotNull SupplierHandler handler, int priority) {
             subscribeAbstract(handler, priority, false, plugin);
         }
 
-        public void onVerboseCheck(@NotNull GrimPlugin plugin, @NotNull Handler handler, int priority, boolean ignoreCancelled) {
+        public void onVerboseCheckSupplier(@NotNull GrimPlugin plugin, @NotNull SupplierHandler handler, int priority, boolean ignoreCancelled) {
             subscribeAbstract(handler, priority, ignoreCancelled, plugin);
         }
 
         /**
-         * @deprecated Prefer {@link #onVerboseCheck(GrimPlugin, Handler)}.
+         * @deprecated Prefer {@link #onVerboseCheckSupplier(GrimPlugin, SupplierHandler)}.
          */
         @Deprecated
-        public void onVerboseCheckString(@NotNull GrimPlugin plugin, @NotNull StringHandler handler) {
+        public void onVerboseCheck(@NotNull GrimPlugin plugin, @NotNull Handler handler) {
             warnStringHandler(plugin);
-            onVerboseCheck(plugin, adapt(handler));
+            onVerboseCheckSupplier(plugin, adapt(handler));
         }
 
         /**
-         * @deprecated Prefer {@link #onVerboseCheck(GrimPlugin, Handler, int)}.
+         * @deprecated Prefer {@link #onVerboseCheckSupplier(GrimPlugin, SupplierHandler, int)}.
          */
         @Deprecated
-        public void onVerboseCheckString(@NotNull GrimPlugin plugin, @NotNull StringHandler handler, int priority) {
+        public void onVerboseCheck(@NotNull GrimPlugin plugin, @NotNull Handler handler, int priority) {
             warnStringHandler(plugin);
-            onVerboseCheck(plugin, adapt(handler), priority);
+            onVerboseCheckSupplier(plugin, adapt(handler), priority);
         }
 
         /**
-         * @deprecated Prefer {@link #onVerboseCheck(GrimPlugin, Handler, int, boolean)}.
+         * @deprecated Prefer {@link #onVerboseCheckSupplier(GrimPlugin, SupplierHandler, int, boolean)}.
          */
         @Deprecated
-        public void onVerboseCheckString(@NotNull GrimPlugin plugin, @NotNull StringHandler handler, int priority, boolean ignoreCancelled) {
+        public void onVerboseCheck(@NotNull GrimPlugin plugin, @NotNull Handler handler, int priority, boolean ignoreCancelled) {
             warnStringHandler(plugin);
-            onVerboseCheck(plugin, adapt(handler), priority, ignoreCancelled);
+            onVerboseCheckSupplier(plugin, adapt(handler), priority, ignoreCancelled);
         }
 
         /** @deprecated resolve your context once at plugin enable — {@code api.getGrimPlugin(this)} — and call the {@link GrimPlugin}-taking overload. */
         @Deprecated
-        public void onVerboseCheck(@NotNull Object pluginContext, @NotNull Handler handler) {
+        public void onVerboseCheckSupplier(@NotNull Object pluginContext, @NotNull SupplierHandler handler) {
             subscribeAbstractResolving(pluginContext, handler, 0, false);
         }
 
-        /** @deprecated see {@link #onVerboseCheck(Object, Handler)}. */
+        /** @deprecated see {@link #onVerboseCheckSupplier(Object, SupplierHandler)}. */
         @Deprecated
-        public void onVerboseCheck(@NotNull Object pluginContext, @NotNull Handler handler, int priority) {
+        public void onVerboseCheckSupplier(@NotNull Object pluginContext, @NotNull SupplierHandler handler, int priority) {
             subscribeAbstractResolving(pluginContext, handler, priority, false);
         }
 
-        /** @deprecated see {@link #onVerboseCheck(Object, Handler)}. */
+        /** @deprecated see {@link #onVerboseCheckSupplier(Object, SupplierHandler)}. */
         @Deprecated
-        public void onVerboseCheck(@NotNull Object pluginContext, @NotNull Handler handler, int priority, boolean ignoreCancelled) {
+        public void onVerboseCheckSupplier(@NotNull Object pluginContext, @NotNull SupplierHandler handler, int priority, boolean ignoreCancelled) {
             subscribeAbstractResolving(pluginContext, handler, priority, ignoreCancelled);
         }
 
         /** @deprecated resolve your context once at plugin enable — {@code api.getGrimPlugin(this)} — and call the {@link GrimPlugin}-taking overload. */
         @Deprecated
-        public void onVerboseCheckString(@NotNull Object pluginContext, @NotNull StringHandler handler) {
+        public void onVerboseCheck(@NotNull Object pluginContext, @NotNull Handler handler) {
             GrimPlugin plugin = resolvePlugin(pluginContext);
-            onVerboseCheckString(plugin, handler);
+            onVerboseCheck(plugin, handler);
         }
 
-        /** @deprecated see {@link #onVerboseCheckString(Object, StringHandler)}. */
+        /** @deprecated see {@link #onVerboseCheck(Object, Handler)}. */
         @Deprecated
-        public void onVerboseCheckString(@NotNull Object pluginContext, @NotNull StringHandler handler, int priority) {
+        public void onVerboseCheck(@NotNull Object pluginContext, @NotNull Handler handler, int priority) {
             GrimPlugin plugin = resolvePlugin(pluginContext);
-            onVerboseCheckString(plugin, handler, priority);
+            onVerboseCheck(plugin, handler, priority);
         }
 
-        /** @deprecated see {@link #onVerboseCheckString(Object, StringHandler)}. */
+        /** @deprecated see {@link #onVerboseCheck(Object, Handler)}. */
         @Deprecated
-        public void onVerboseCheckString(@NotNull Object pluginContext, @NotNull StringHandler handler, int priority, boolean ignoreCancelled) {
+        public void onVerboseCheck(@NotNull Object pluginContext, @NotNull Handler handler, int priority, boolean ignoreCancelled) {
             GrimPlugin plugin = resolvePlugin(pluginContext);
-            onVerboseCheckString(plugin, handler, priority, ignoreCancelled);
+            onVerboseCheck(plugin, handler, priority, ignoreCancelled);
         }
 
-        private static @NotNull Handler adapt(@NotNull StringHandler handler) {
+        private static @NotNull SupplierHandler adapt(@NotNull Handler handler) {
             return (user, check, verbose, cancelled) -> handler.onVerboseCheck(user, check, verbose.get(), cancelled);
         }
 

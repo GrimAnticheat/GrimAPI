@@ -47,65 +47,78 @@ public class FlagEvent extends GrimVerboseCheckEvent<FlagEvent.Channel> {
     @FunctionalInterface
     public interface Handler {
         boolean onFlag(@NotNull GrimUser user, @NotNull AbstractCheck check,
-                       @NotNull Supplier<String> verbose, boolean currentlyCancelled);
-    }
-
-    /**
-     * @deprecated Prefer {@link Handler}. This handler forces verbose
-     * rendering before your callback runs.
-     */
-    @Deprecated
-    @FunctionalInterface
-    public interface StringHandler {
-        boolean onFlag(@NotNull GrimUser user, @NotNull AbstractCheck check,
                        @NotNull String verbose, boolean currentlyCancelled);
     }
 
-    public static final class Channel extends EventChannel<FlagEvent, Handler> {
+    @FunctionalInterface
+    public interface SupplierHandler {
+        boolean onFlag(@NotNull GrimUser user, @NotNull AbstractCheck check,
+                       @NotNull Supplier<String> verbose, boolean currentlyCancelled);
+    }
+
+    public static final class Channel extends EventChannel<FlagEvent, SupplierHandler> {
         private static final AtomicBoolean STRING_HANDLER_WARNING = new AtomicBoolean();
         private final ThreadLocal<FlagEvent> legacyPool = ThreadLocal.withInitial(FlagEvent::new);
 
         public Channel() {
-            super(FlagEvent.class, Handler.class);
+            super(FlagEvent.class, SupplierHandler.class);
         }
 
-        public void onFlag(@NotNull GrimPlugin plugin, @NotNull Handler handler) {
+        public void onFlagSupplier(@NotNull GrimPlugin plugin, @NotNull SupplierHandler handler) {
             subscribe(handler, 0, false, plugin, null);
         }
 
-        public void onFlag(@NotNull GrimPlugin plugin, @NotNull Handler handler, int priority) {
+        public void onFlagSupplier(@NotNull GrimPlugin plugin, @NotNull SupplierHandler handler, int priority) {
             subscribe(handler, priority, false, plugin, null);
         }
 
-        public void onFlag(@NotNull GrimPlugin plugin, @NotNull Handler handler, int priority, boolean ignoreCancelled) {
+        public void onFlagSupplier(@NotNull GrimPlugin plugin, @NotNull SupplierHandler handler, int priority, boolean ignoreCancelled) {
             subscribe(handler, priority, ignoreCancelled, plugin, null);
         }
 
         /**
-         * @deprecated Prefer {@link #onFlag(GrimPlugin, Handler)}.
+         * @deprecated Prefer {@link #onFlagSupplier(GrimPlugin, SupplierHandler)}.
          */
         @Deprecated
-        public void onFlagString(@NotNull GrimPlugin plugin, @NotNull StringHandler handler) {
+        public void onFlag(@NotNull GrimPlugin plugin, @NotNull Handler handler) {
             warnStringHandler(plugin);
-            onFlag(plugin, adapt(handler));
+            onFlagSupplier(plugin, adapt(handler));
         }
 
         /**
-         * @deprecated Prefer {@link #onFlag(GrimPlugin, Handler, int)}.
+         * @deprecated Prefer {@link #onFlagSupplier(GrimPlugin, SupplierHandler, int)}.
          */
         @Deprecated
-        public void onFlagString(@NotNull GrimPlugin plugin, @NotNull StringHandler handler, int priority) {
+        public void onFlag(@NotNull GrimPlugin plugin, @NotNull Handler handler, int priority) {
             warnStringHandler(plugin);
-            onFlag(plugin, adapt(handler), priority);
+            onFlagSupplier(plugin, adapt(handler), priority);
         }
 
         /**
-         * @deprecated Prefer {@link #onFlag(GrimPlugin, Handler, int, boolean)}.
+         * @deprecated Prefer {@link #onFlagSupplier(GrimPlugin, SupplierHandler, int, boolean)}.
          */
         @Deprecated
-        public void onFlagString(@NotNull GrimPlugin plugin, @NotNull StringHandler handler, int priority, boolean ignoreCancelled) {
+        public void onFlag(@NotNull GrimPlugin plugin, @NotNull Handler handler, int priority, boolean ignoreCancelled) {
             warnStringHandler(plugin);
-            onFlag(plugin, adapt(handler), priority, ignoreCancelled);
+            onFlagSupplier(plugin, adapt(handler), priority, ignoreCancelled);
+        }
+
+        /** @deprecated resolve your context once at plugin enable — {@code api.getGrimPlugin(this)} — and call the {@link GrimPlugin}-taking overload. */
+        @Deprecated
+        public void onFlagSupplier(@NotNull Object pluginContext, @NotNull SupplierHandler handler) {
+            onFlagSupplier(resolvePlugin(pluginContext), handler);
+        }
+
+        /** @deprecated see {@link #onFlagSupplier(Object, SupplierHandler)}. */
+        @Deprecated
+        public void onFlagSupplier(@NotNull Object pluginContext, @NotNull SupplierHandler handler, int priority) {
+            onFlagSupplier(resolvePlugin(pluginContext), handler, priority);
+        }
+
+        /** @deprecated see {@link #onFlagSupplier(Object, SupplierHandler)}. */
+        @Deprecated
+        public void onFlagSupplier(@NotNull Object pluginContext, @NotNull SupplierHandler handler, int priority, boolean ignoreCancelled) {
+            onFlagSupplier(resolvePlugin(pluginContext), handler, priority, ignoreCancelled);
         }
 
         /** @deprecated resolve your context once at plugin enable — {@code api.getGrimPlugin(this)} — and call the {@link GrimPlugin}-taking overload. */
@@ -126,24 +139,6 @@ public class FlagEvent extends GrimVerboseCheckEvent<FlagEvent.Channel> {
             onFlag(resolvePlugin(pluginContext), handler, priority, ignoreCancelled);
         }
 
-        /** @deprecated resolve your context once at plugin enable — {@code api.getGrimPlugin(this)} — and call the {@link GrimPlugin}-taking overload. */
-        @Deprecated
-        public void onFlagString(@NotNull Object pluginContext, @NotNull StringHandler handler) {
-            onFlagString(resolvePlugin(pluginContext), handler);
-        }
-
-        /** @deprecated see {@link #onFlagString(Object, StringHandler)}. */
-        @Deprecated
-        public void onFlagString(@NotNull Object pluginContext, @NotNull StringHandler handler, int priority) {
-            onFlagString(resolvePlugin(pluginContext), handler, priority);
-        }
-
-        /** @deprecated see {@link #onFlagString(Object, StringHandler)}. */
-        @Deprecated
-        public void onFlagString(@NotNull Object pluginContext, @NotNull StringHandler handler, int priority, boolean ignoreCancelled) {
-            onFlagString(resolvePlugin(pluginContext), handler, priority, ignoreCancelled);
-        }
-
         /** Dispatches the event. Returns the final cancelled state after all handlers run. */
         public boolean fire(@NotNull GrimUser user, @NotNull AbstractCheck check, @NotNull String verbose) {
             return fire(user, check, constant(verbose));
@@ -151,13 +146,13 @@ public class FlagEvent extends GrimVerboseCheckEvent<FlagEvent.Channel> {
 
         /** Dispatches the event. Returns the final cancelled state after all handlers run. */
         public boolean fire(@NotNull GrimUser user, @NotNull AbstractCheck check, @NotNull Supplier<String> verboseSupplier) {
-            Entry<Handler>[] entries = entries();
+            Entry<SupplierHandler>[] entries = entries();
             if (entries.length == 0) return false;
 
             Supplier<String> verbose = memoize(verboseSupplier);
             boolean cancelled = false;
             if (!hasLegacy()) {
-                for (Entry<Handler> e : entries) {
+                for (Entry<SupplierHandler> e : entries) {
                     if (cancelled && !e.ignoreCancelled) continue;
                     try {
                         cancelled = e.handler.onFlag(user, check, verbose, cancelled);
@@ -170,7 +165,7 @@ public class FlagEvent extends GrimVerboseCheckEvent<FlagEvent.Channel> {
 
             FlagEvent pooled = legacyPool.get();
             pooled.init(user, check, verbose);
-            for (Entry<Handler> e : entries) {
+            for (Entry<SupplierHandler> e : entries) {
                 if (cancelled && !e.ignoreCancelled) continue;
                 try {
                     if (e.legacyListener != null) {
@@ -188,32 +183,32 @@ public class FlagEvent extends GrimVerboseCheckEvent<FlagEvent.Channel> {
         }
 
         @Override
-        protected boolean dispatchTypedFromLegacy(@NotNull FlagEvent event, @NotNull Handler handler, boolean cancelled) {
+        protected boolean dispatchTypedFromLegacy(@NotNull FlagEvent event, @NotNull SupplierHandler handler, boolean cancelled) {
             return handler.onFlag(event.getUser(), event.getCheck(), event.verboseSupplier(), cancelled);
         }
 
         /** Bridge from {@link GrimCheckEvent.Handler} — used by the abstract channel when a check-level subscriber registers. */
         @ApiStatus.Internal
-        public static @NotNull Handler bridgeFromCheck(@NotNull GrimCheckEvent.Handler abstractHandler) {
+        public static @NotNull SupplierHandler bridgeFromCheck(@NotNull GrimCheckEvent.Handler abstractHandler) {
             return (user, check, verbose, cancelled) -> abstractHandler.onCheck(user, check, cancelled);
         }
 
         /** Bridge from {@link GrimVerboseCheckEvent.Handler}. */
         @ApiStatus.Internal
-        public static @NotNull Handler bridgeFromVerboseCheck(@NotNull GrimVerboseCheckEvent.Handler abstractHandler) {
+        public static @NotNull SupplierHandler bridgeFromVerboseCheck(@NotNull GrimVerboseCheckEvent.SupplierHandler abstractHandler) {
             return (user, check, verbose, cancelled) -> abstractHandler.onVerboseCheck(user, check, verbose, cancelled);
         }
 
         /** Bridge from root-level {@link ac.grim.grimac.api.event.GrimEvent.Handler} — observational only, cancelled is passed through unchanged. */
         @ApiStatus.Internal
-        public static @NotNull Handler bridgeFromAny(@NotNull ac.grim.grimac.api.event.GrimEvent.Handler abstractHandler) {
+        public static @NotNull SupplierHandler bridgeFromAny(@NotNull ac.grim.grimac.api.event.GrimEvent.Handler abstractHandler) {
             return (user, check, verbose, cancelled) -> {
                 abstractHandler.onAnyEvent(FlagEvent.class, cancelled);
                 return cancelled;
             };
         }
 
-        private static @NotNull Handler adapt(@NotNull StringHandler handler) {
+        private static @NotNull SupplierHandler adapt(@NotNull Handler handler) {
             return (user, check, verbose, cancelled) -> handler.onFlag(user, check, verbose.get(), cancelled);
         }
 
