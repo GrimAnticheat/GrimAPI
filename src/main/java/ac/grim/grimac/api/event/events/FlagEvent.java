@@ -141,7 +141,7 @@ public class FlagEvent extends GrimVerboseCheckEvent<FlagEvent.Channel> {
 
         /** Dispatches the event. Returns the final cancelled state after all handlers run. */
         public boolean fire(@NotNull GrimUser user, @NotNull AbstractCheck check, @NotNull String verbose) {
-            return fire(user, check, constant(verbose));
+            return fire(user, check, VerboseSuppliers.constant(verbose));
         }
 
         /** Dispatches the event. Returns the final cancelled state after all handlers run. */
@@ -149,7 +149,7 @@ public class FlagEvent extends GrimVerboseCheckEvent<FlagEvent.Channel> {
             Entry<SupplierHandler>[] entries = entries();
             if (entries.length == 0) return false;
 
-            Supplier<String> verbose = memoize(verboseSupplier);
+            Supplier<String> verbose = VerboseSuppliers.memoize(verboseSupplier);
             boolean cancelled = false;
             if (!hasLegacy()) {
                 for (Entry<SupplierHandler> e : entries) {

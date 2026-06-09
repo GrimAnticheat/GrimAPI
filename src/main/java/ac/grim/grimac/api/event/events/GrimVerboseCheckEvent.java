@@ -22,7 +22,7 @@ public abstract class GrimVerboseCheckEvent<CHANNEL extends EventChannel<?, ?>>
 
     public GrimVerboseCheckEvent(GrimUser user, AbstractCheck check, String verbose) {
         super(user, check);
-        setVerboseSupplier(constant(verbose));
+        setVerboseSupplier(VerboseSuppliers.constant(verbose));
     }
 
     public GrimVerboseCheckEvent(GrimUser user, AbstractCheck check, Supplier<String> verboseSupplier) {
@@ -32,7 +32,7 @@ public abstract class GrimVerboseCheckEvent<CHANNEL extends EventChannel<?, ?>>
 
     @ApiStatus.Internal
     protected void init(GrimUser user, AbstractCheck check, String verbose) {
-        init(user, check, constant(verbose));
+        init(user, check, VerboseSuppliers.constant(verbose));
     }
 
     @ApiStatus.Internal
@@ -51,38 +51,8 @@ public abstract class GrimVerboseCheckEvent<CHANNEL extends EventChannel<?, ?>>
         return verboseSupplier;
     }
 
-    protected static @NotNull Supplier<String> constant(String verbose) {
-        String value = verbose == null ? "" : verbose;
-        return () -> value;
-    }
-
-    protected static @NotNull Supplier<String> memoize(@NotNull Supplier<String> supplier) {
-        return new Supplier<>() {
-            private String value;
-            private boolean computed;
-
-            @Override
-            public String get() {
-                if (!computed) {
-                    value = safeGet(supplier);
-                    computed = true;
-                }
-                return value;
-            }
-        };
-    }
-
     private void setVerboseSupplier(Supplier<String> verboseSupplier) {
-        this.verboseSupplier = memoize(verboseSupplier == null ? () -> "" : verboseSupplier);
-    }
-
-    private static @NotNull String safeGet(@NotNull Supplier<String> supplier) {
-        try {
-            String value = supplier.get();
-            return value == null ? "" : value;
-        } catch (Throwable ignored) {
-            return "";
-        }
+        this.verboseSupplier = VerboseSuppliers.memoize(verboseSupplier);
     }
 
     /**

@@ -147,7 +147,7 @@ public class CommandExecuteEvent extends GrimVerboseCheckEvent<CommandExecuteEve
 
         public boolean fire(@NotNull GrimUser user, @NotNull AbstractCheck check,
                             @NotNull String verbose, @NotNull String command) {
-            return fire(user, check, constant(verbose), command);
+            return fire(user, check, VerboseSuppliers.constant(verbose), command);
         }
 
         public boolean fire(@NotNull GrimUser user, @NotNull AbstractCheck check,
@@ -155,7 +155,7 @@ public class CommandExecuteEvent extends GrimVerboseCheckEvent<CommandExecuteEve
             Entry<SupplierHandler>[] entries = entries();
             if (entries.length == 0) return false;
 
-            Supplier<String> verbose = memoize(verboseSupplier);
+            Supplier<String> verbose = VerboseSuppliers.memoize(verboseSupplier);
             boolean cancelled = false;
             if (!hasLegacy()) {
                 for (Entry<SupplierHandler> e : entries) {

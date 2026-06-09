@@ -2,6 +2,7 @@ package ac.grim.grimac.api.events;
 
 import ac.grim.grimac.api.AbstractCheck;
 import ac.grim.grimac.api.GrimUser;
+import ac.grim.grimac.api.event.events.VerboseSuppliers;
 import lombok.Getter;
 import org.bukkit.event.Cancellable;
 import org.bukkit.event.Event;
@@ -20,14 +21,14 @@ public class FlagEvent extends Event implements GrimUserEvent, Cancellable {
     private boolean cancelled;
 
     public FlagEvent(GrimUser user, AbstractCheck check, String verbose) {
-        this(user, check, constant(verbose));
+        this(user, check, VerboseSuppliers.constant(verbose));
     }
 
     public FlagEvent(GrimUser user, AbstractCheck check, Supplier<String> verboseSupplier) {
         super(true); // Async!
         this.user = user;
         this.check = check;
-        this.verboseSupplier = memoize(verboseSupplier == null ? () -> "" : verboseSupplier);
+        this.verboseSupplier = VerboseSuppliers.memoize(verboseSupplier);
     }
 
     public String getVerbose() {
@@ -60,32 +61,6 @@ public class FlagEvent extends Event implements GrimUserEvent, Cancellable {
 
     public boolean isSetback() {
         return check.getViolations() > check.getSetbackVL();
-    }
-
-    private static @NotNull Supplier<String> constant(String verbose) {
-        String value = verbose == null ? "" : verbose;
-        return () -> value;
-    }
-
-    private static @NotNull Supplier<String> memoize(@NotNull Supplier<String> supplier) {
-        return new Supplier<>() {
-            private String value;
-            private boolean computed;
-
-            @Override
-            public String get() {
-                if (!computed) {
-                    try {
-                        value = supplier.get();
-                        if (value == null) value = "";
-                    } catch (Throwable ignored) {
-                        value = "";
-                    }
-                    computed = true;
-                }
-                return value;
-            }
-        };
     }
 
 }
