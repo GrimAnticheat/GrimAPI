@@ -20,6 +20,29 @@ import java.util.UUID;
 @ApiStatus.Internal
 public final class SqliteDialect implements SqlDialect {
 
+    private final boolean legacyUpsert;
+    private final boolean supportsReturning;
+
+    public SqliteDialect() {
+        this(false, true);
+    }
+
+    private SqliteDialect(boolean legacyUpsert, boolean supportsReturning) {
+        this.legacyUpsert = legacyUpsert;
+        this.supportsReturning = supportsReturning;
+    }
+
+    @ApiStatus.Internal
+    public static @NotNull SqliteDialect legacyForTest() {
+        return new SqliteDialect(true, false);
+    }
+
+    public static @NotNull SqliteDialect forEngineVersion(@NotNull String version) {
+        boolean legacy = compareVersionTriple(version, 3, 24, 0) < 0;
+        boolean returning = compareVersionTriple(version, 3, 35, 0) >= 0;
+        return new SqliteDialect(legacy, returning);
+    }
+
     @Override public @NotNull String name() { return "sqlite"; }
 
     @Override
@@ -128,7 +151,9 @@ public final class SqliteDialect implements SqlDialect {
         return sb.toString();
     }
 
-    @Override public boolean supportsReturning() { return true; }
+    @Override public boolean usesLegacySqliteUpsert() { return legacyUpsert; }
+
+    @Override public boolean supportsReturning() { return supportsReturning; }
 
     @Override public @NotNull String greatestFn(@NotNull String a, @NotNull String b) {
         return "MAX(" + a + ", " + b + ")";
@@ -136,5 +161,22 @@ public final class SqliteDialect implements SqlDialect {
 
     private static @NotNull String q(@NotNull String name) {
         return PostgresDialect.quoteId(name); // same double-quote convention
+    }
+
+    private static int compareVersionTriple(String version, int majorFloor, int minorFloor, int patchFloor) {
+        int[] triple = {0, 0, 0};
+        int idx = 0;
+        int i = 0;
+        while (i < version.length() && idx < 3) {
+            int start = i;
+            while (i < version.length() && Character.isDigit(version.charAt(i))) i++;
+            if (i == start) break;
+            triple[idx++] = Integer.parseInt(version.substring(start, i));
+            if (i < version.length() && version.charAt(i) == '.') i++;
+            else break;
+        }
+        if (triple[0] != majorFloor) return Integer.compare(triple[0], majorFloor);
+        if (triple[1] != minorFloor) return Integer.compare(triple[1], minorFloor);
+        return Integer.compare(triple[2], patchFloor);
     }
 }

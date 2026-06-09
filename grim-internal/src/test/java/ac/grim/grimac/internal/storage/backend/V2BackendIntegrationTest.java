@@ -5,12 +5,17 @@ import ac.grim.grimac.api.storage.backend.BackendContext;
 import ac.grim.grimac.api.storage.backend.BackendV2;
 import ac.grim.grimac.api.storage.backend.KindAdapter;
 import ac.grim.grimac.api.storage.category.Categories;
+import ac.grim.grimac.api.storage.codec.Codec;
+import ac.grim.grimac.api.storage.codec.EncodeShape;
 import ac.grim.grimac.api.storage.config.TableNames;
 import ac.grim.grimac.api.storage.event.SettingEvent;
 import ac.grim.grimac.api.storage.event.ServerStartupEvent;
 import ac.grim.grimac.api.storage.event.SessionEvent;
+import ac.grim.grimac.api.storage.kind.Counter;
+import ac.grim.grimac.api.storage.kind.CounterEvent;
 import ac.grim.grimac.api.storage.kind.Entity;
 import ac.grim.grimac.api.storage.kind.KeyValueScoped;
+import ac.grim.grimac.api.storage.kind.ops.CounterOps;
 import ac.grim.grimac.api.storage.kind.ops.EntityOps;
 import ac.grim.grimac.api.storage.kind.ops.KeyValueScopedOps;
 import ac.grim.grimac.api.storage.model.PlayerIdentity;
@@ -26,6 +31,7 @@ import ac.grim.grimac.internal.storage.backend.redis.RedisBackendConfig;
 import ac.grim.grimac.internal.storage.backend.redis.v2.RedisBackendV2;
 import ac.grim.grimac.internal.storage.backend.sqlite.SqliteBackendConfig;
 import ac.grim.grimac.internal.storage.backend.sqlite.v2.SqliteBackendV2;
+import ac.grim.grimac.internal.storage.backend.sql.v2.dialect.SqliteDialect;
 import ac.grim.grimac.internal.storage.category.V2BuiltinKinds;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.DisplayName;
@@ -62,6 +68,22 @@ class V2BackendIntegrationTest {
             exerciseEntityIndexes(backend, "v2_integ_players_sqlite", "v2_integ_sessions_sqlite",
                     "v2_integ_startups_sqlite");
             exerciseSettingsKv(backend, "v2_integ_settings_sqlite");
+            exerciseCounter(backend, "v2_integ_counters_sqlite");
+        } finally {
+            backend.close();
+        }
+    }
+
+    @Test @DisplayName("SQLite v2 legacy dialect: entity/KV/counter writes")
+    void sqliteLegacy(@TempDir Path tempDir) throws Exception {
+        SqliteBackendConfig cfg = SqliteBackendConfig.defaults("data/v2-legacy-integ.db");
+        SqliteBackendV2 backend = new SqliteBackendV2(cfg, SqliteDialect.legacyForTest());
+        try {
+            backend.init(ctx(cfg, tempDir));
+            exerciseEntityIndexes(backend, "v2_legacy_players_sqlite", "v2_legacy_sessions_sqlite",
+                    "v2_legacy_startups_sqlite");
+            exerciseSettingsKv(backend, "v2_legacy_settings_sqlite");
+            exerciseCounter(backend, "v2_legacy_counters_sqlite");
         } finally {
             backend.close();
         }
@@ -290,6 +312,37 @@ class V2BackendIntegrationTest {
         assertArrayEquals(new byte[]{1}, got.get(), backend.id() + ": setting KV value round-trips");
     }
 
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private void exerciseCounter(BackendV2 backend, String counterStoreName) throws Exception {
+        StoreId counterStore = StoreId.grim(counterStoreName + "_" + Long.toHexString(System.nanoTime()));
+        Counter<String> counterKind = Counter.<String>builder()
+            .name("test-counter")
+            .key(String.class, STRING_CODEC)
+            .build();
+        KindAdapter adapter = backend.adapterFor(counterKind).orElseThrow(
+            () -> new AssertionError(backend.id() + " has no Counter adapter"));
+
+        adapter.ensureStore(counterStore, counterKind);
+
+        var handler = adapter.writeHandler(counterStore, counterKind, (ac.grim.grimac.api.storage.category.Category) Categories.SETTING);
+        CounterEvent<String> event = new CounterEvent<>();
+        event.key = "flags";
+        event.delta = 2L;
+        handler.onEvent(event, 0, true);
+
+        long afterIncrement = (Long) adapter.execute(counterStore, counterKind,
+            new CounterOps.IncrementByOp<>(Categories.SETTING, "flags", 3L));
+        assertEquals(5L, afterIncrement, backend.id() + ": counter increment merges");
+
+        long afterLowerSet = (Long) adapter.execute(counterStore, counterKind,
+            new CounterOps.SetIfHigherOp<>(Categories.SETTING, "flags", 4L));
+        assertEquals(5L, afterLowerSet, backend.id() + ": counter setIfHigher preserves higher value");
+
+        long afterHigherSet = (Long) adapter.execute(counterStore, counterKind,
+            new CounterOps.SetIfHigherOp<>(Categories.SETTING, "flags", 9L));
+        assertEquals(9L, afterHigherSet, backend.id() + ": counter setIfHigher raises value");
+    }
+
     private static void writeSession(ac.grim.grimac.api.storage.backend.StorageEventHandler<SessionEvent> handler,
                                      UUID sessionId, UUID playerId, UUID startupId, long started, long sequence) throws Exception {
         writeSession(handler, sessionId, playerId, startupId, started, SessionRecord.OPEN, sequence);
@@ -340,6 +393,13 @@ class V2BackendIntegrationTest {
             @Override public BackendConfig config() { return cfg; }
         };
     }
+
+    private static final Codec<String> STRING_CODEC = new Codec<>() {
+        @Override public Class<String> recordType() { return String.class; }
+        @Override public EncodeShape shape() { throw new UnsupportedOperationException("counter key only"); }
+        @Override public int version() { return 1; }
+        @Override public Object indexField(String record, String fieldName) { return null; }
+    };
 
     private static void assumeReachable(String host, int port) {
         try (Socket s = new Socket(host, port)) {

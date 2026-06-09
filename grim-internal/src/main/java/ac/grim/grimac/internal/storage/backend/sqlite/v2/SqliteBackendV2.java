@@ -40,7 +40,8 @@ import java.util.logging.Logger;
 public final class SqliteBackendV2 implements BackendV2 {
 
     private final @NotNull SqliteBackendConfig config;
-    private final @NotNull SqliteDialect dialect = new SqliteDialect();
+    private final SqliteDialect dialectOverride;
+    private SqliteDialect dialect;
     private Logger logger;
     private Connection connection;
     private javax.sql.DataSource singleConnDs;
@@ -50,7 +51,13 @@ public final class SqliteBackendV2 implements BackendV2 {
     private ac.grim.grimac.internal.storage.backend.sql.v2.SqlCounterAdapter counterAdapter;
 
     public SqliteBackendV2(@NotNull SqliteBackendConfig config) {
+        this(config, null);
+    }
+
+    @ApiStatus.Internal
+    public SqliteBackendV2(@NotNull SqliteBackendConfig config, SqliteDialect dialectOverride) {
         this.config = config;
+        this.dialectOverride = dialectOverride;
     }
 
     @Override public @NotNull String id() { return "sqlite-v2"; }
@@ -98,6 +105,7 @@ public final class SqliteBackendV2 implements BackendV2 {
             try (Statement s = connection.createStatement()) {
                 s.execute("PRAGMA busy_timeout=30000");
             }
+            this.dialect = dialectOverride != null ? dialectOverride : selectDialect(connection, logger);
         } catch (SQLException e) {
             throw new BackendException("failed to open SQLite database " + dbFile, e);
         }
@@ -106,6 +114,27 @@ public final class SqliteBackendV2 implements BackendV2 {
         this.eventStreamAdapter = new ac.grim.grimac.internal.storage.backend.sql.v2.SqlEventStreamAdapter(singleConnDs, dialect, logger);
         this.kvScopedAdapter = new ac.grim.grimac.internal.storage.backend.sql.v2.SqlKeyValueScopedAdapter(singleConnDs, dialect, logger);
         this.counterAdapter = new ac.grim.grimac.internal.storage.backend.sql.v2.SqlCounterAdapter(singleConnDs, dialect, logger);
+    }
+
+    private static @NotNull SqliteDialect selectDialect(
+            @NotNull Connection connection,
+            @NotNull Logger logger) throws SQLException {
+        String version;
+        try (Statement s = connection.createStatement();
+             java.sql.ResultSet rs = s.executeQuery("SELECT sqlite_version()")) {
+            if (!rs.next()) {
+                logger.warning("[grim-datastore] sqlite_version() returned no row; assuming modern SQLite dialect");
+                return new SqliteDialect();
+            }
+            version = rs.getString(1);
+        }
+        SqliteDialect selected = SqliteDialect.forEngineVersion(version);
+        logger.info("[grim-datastore] SQLite engine " + version + " — using "
+                + (selected.usesLegacySqliteUpsert()
+                ? "legacy (pre-3.24, no UPSERT) dialect"
+                : "modern dialect")
+                + (selected.supportsReturning() ? "" : " without RETURNING"));
+        return selected;
     }
 
     @Override public void flush() {}

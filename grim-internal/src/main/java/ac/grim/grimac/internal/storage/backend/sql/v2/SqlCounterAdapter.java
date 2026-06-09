@@ -94,6 +94,9 @@ public final class SqlCounterAdapter implements KindAdapter<Counter<?>> {
             @NotNull StoreId id, @NotNull Counter<?> kind, @NotNull Category<E> category) {
         String table = dialect.quoteIdentifier(id.name());
         String upsertSql = dialect.counterIncrementSql(table);
+        if (dialect.usesLegacySqliteUpsert()) {
+            return new LegacyCounterWriteHandler<>(table);
+        }
         return new CounterWriteHandler<>(upsertSql);
     }
 
@@ -140,6 +143,37 @@ public final class SqlCounterAdapter implements KindAdapter<Counter<?>> {
         }
     }
 
+    private final class LegacyCounterWriteHandler<E> implements StorageEventHandler<E> {
+        private final String table;
+
+        LegacyCounterWriteHandler(String table) {
+            this.table = table;
+        }
+
+        @Override
+        public void onEvent(E event, long sequence, boolean endOfBatch) throws BackendException {
+            CounterEvent<?> ce = (CounterEvent<?>) event;
+            if (ce.key == null) return;
+            if (ce.delta == 0L) return;
+            try (Connection c = ds.getConnection()) {
+                boolean prior = c.getAutoCommit();
+                c.setAutoCommit(false);
+                try {
+                    legacyInsertCounter(c, table, ce.key, 0L);
+                    legacyAddCounter(c, table, ce.key, ce.delta);
+                    c.commit();
+                } catch (Exception e) {
+                    try { c.rollback(); } catch (SQLException ignored) {}
+                    throw e;
+                } finally {
+                    c.setAutoCommit(prior);
+                }
+            } catch (SQLException e) {
+                throw new BackendException("counter write failed", e);
+            }
+        }
+    }
+
     // ============================== execute dispatch ==============================
 
     private long get(@NotNull StoreId id, @NotNull CounterOps.GetOp<?> op) throws SQLException {
@@ -179,6 +213,9 @@ public final class SqlCounterAdapter implements KindAdapter<Counter<?>> {
 
     private long incrementBy(@NotNull StoreId id, @NotNull CounterOps.IncrementByOp<?> op) throws SQLException {
         String table = dialect.quoteIdentifier(id.name());
+        if (dialect.usesLegacySqliteUpsert()) {
+            return legacyIncrementBy(table, op.key(), op.delta());
+        }
         String upsert = dialect.counterIncrementSql(table);
         if (dialect.supportsReturning()) {
             String sql = upsert + " RETURNING value";
@@ -220,6 +257,9 @@ public final class SqlCounterAdapter implements KindAdapter<Counter<?>> {
 
     private long setIfHigher(@NotNull StoreId id, @NotNull CounterOps.SetIfHigherOp<?> op) throws SQLException {
         String table = dialect.quoteIdentifier(id.name());
+        if (dialect.usesLegacySqliteUpsert()) {
+            return legacySetIfHigher(table, op.key(), op.value());
+        }
         String valCol = dialect.quoteIdentifier("value");
         String greatest = dialect.greatestFn(table + "." + valCol, dialect.excludedRef(valCol));
         String upsert = dialect.counterIncrementSql(table)
@@ -274,6 +314,99 @@ public final class SqlCounterAdapter implements KindAdapter<Counter<?>> {
                 throw e;
             } finally {
                 c.setAutoCommit(prior);
+            }
+        }
+    }
+
+    private long legacyIncrementBy(@NotNull String table, @NotNull Object key, long delta) throws SQLException {
+        try (Connection c = ds.getConnection()) {
+            boolean prior = c.getAutoCommit();
+            c.setAutoCommit(false);
+            try {
+                legacyInsertCounter(c, table, key, 0L);
+                legacyAddCounter(c, table, key, delta);
+                long value = selectCounterValue(c, table, key, delta);
+                c.commit();
+                return value;
+            } catch (Exception e) {
+                try { c.rollback(); } catch (SQLException ignored) {}
+                throw e;
+            } finally {
+                c.setAutoCommit(prior);
+            }
+        }
+    }
+
+    private long legacySetIfHigher(@NotNull String table, @NotNull Object key, long value) throws SQLException {
+        try (Connection c = ds.getConnection()) {
+            boolean prior = c.getAutoCommit();
+            c.setAutoCommit(false);
+            try {
+                legacyInsertCounter(c, table, key, value);
+                legacyMaxCounter(c, table, key, value);
+                long current = selectCounterValue(c, table, key, value);
+                c.commit();
+                return current;
+            } catch (Exception e) {
+                try { c.rollback(); } catch (SQLException ignored) {}
+                throw e;
+            } finally {
+                c.setAutoCommit(prior);
+            }
+        }
+    }
+
+    private void legacyInsertCounter(
+            @NotNull Connection c,
+            @NotNull String table,
+            @NotNull Object key,
+            long value) throws SQLException {
+        try (PreparedStatement ps = c.prepareStatement("INSERT OR IGNORE INTO " + table
+                + " (" + dialect.quoteIdentifier("id") + ", " + dialect.quoteIdentifier("value") + ") VALUES (?, ?)")) {
+            bindKey(ps, 1, key);
+            ps.setLong(2, value);
+            ps.executeUpdate();
+        }
+    }
+
+    private void legacyAddCounter(
+            @NotNull Connection c,
+            @NotNull String table,
+            @NotNull Object key,
+            long delta) throws SQLException {
+        String value = dialect.quoteIdentifier("value");
+        try (PreparedStatement ps = c.prepareStatement("UPDATE " + table
+                + " SET " + value + " = " + value + " + ? WHERE " + dialect.quoteIdentifier("id") + " = ?")) {
+            ps.setLong(1, delta);
+            bindKey(ps, 2, key);
+            ps.executeUpdate();
+        }
+    }
+
+    private void legacyMaxCounter(
+            @NotNull Connection c,
+            @NotNull String table,
+            @NotNull Object key,
+            long incoming) throws SQLException {
+        String value = dialect.quoteIdentifier("value");
+        try (PreparedStatement ps = c.prepareStatement("UPDATE " + table
+                + " SET " + value + " = MAX(" + value + ", ?) WHERE " + dialect.quoteIdentifier("id") + " = ?")) {
+            ps.setLong(1, incoming);
+            bindKey(ps, 2, key);
+            ps.executeUpdate();
+        }
+    }
+
+    private long selectCounterValue(
+            @NotNull Connection c,
+            @NotNull String table,
+            @NotNull Object key,
+            long fallback) throws SQLException {
+        try (PreparedStatement ps = c.prepareStatement("SELECT value FROM " + table
+                + " WHERE " + dialect.quoteIdentifier("id") + " = ?")) {
+            bindKey(ps, 1, key);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() ? rs.getLong("value") : fallback;
             }
         }
     }
