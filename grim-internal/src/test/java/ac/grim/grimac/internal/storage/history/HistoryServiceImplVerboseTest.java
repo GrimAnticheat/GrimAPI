@@ -17,6 +17,7 @@ import ac.grim.grimac.api.storage.verbose.VerboseSchema;
 import ac.grim.grimac.api.storage.verbose.VerboseSink;
 import ac.grim.grimac.internal.storage.checks.CheckRegistry;
 import ac.grim.grimac.internal.storage.checks.InMemoryCheckCatalogPersistence;
+import ac.grim.grimac.internal.storage.verbose.GenericVerboseReader;
 import ac.grim.grimac.internal.storage.verbose.VerboseManifest;
 import ac.grim.grimac.internal.storage.verbose.VerboseRegistry;
 import org.junit.jupiter.api.Test;
@@ -129,6 +130,22 @@ class HistoryServiceImplVerboseTest {
 
         @Override public void register(String stableKey, VerboseSchema schema) {}
         @Override public void registerFormatter(String stableKey, VerboseFormatter formatter) {}
+        @Override public String render(String stableKey, byte[] data, VerboseRenderContext ctx) {
+            StringBuilder out = new StringBuilder();
+            if (formatter != null) {
+                formatter.render(VerboseBuf.wrap(data), ctx, VerboseSink.into(out));
+                return out.toString();
+            }
+            if (layout != null) {
+                try {
+                    GenericVerboseReader.render(layout, VerboseBuf.wrap(data), ctx, VerboseSink.into(out));
+                } catch (Exception ignored) {
+                    return "";
+                }
+                return out.toString();
+            }
+            return "";
+        }
         @Override public Map<Integer, Integer> checkIdVersions(CheckRegistry checks) { return Map.of(); }
         @Override public VerboseFormatter codeFormatter(int flavor, int checkId, int version) { return formatter; }
         @Override public VerboseSchema.Layout layout(int flavor, int checkId, int version) { return layout; }

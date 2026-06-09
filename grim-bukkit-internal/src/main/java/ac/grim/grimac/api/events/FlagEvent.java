@@ -17,8 +17,6 @@ public class FlagEvent extends Event implements GrimUserEvent, Cancellable {
     @Getter private final GrimUser user;
     @Getter private final AbstractCheck check;
     private final Supplier<String> verboseSupplier;
-    private String verbose;
-    private boolean verboseComputed;
     private boolean cancelled;
 
     public FlagEvent(GrimUser user, AbstractCheck check, String verbose) {
@@ -29,20 +27,15 @@ public class FlagEvent extends Event implements GrimUserEvent, Cancellable {
         super(true); // Async!
         this.user = user;
         this.check = check;
-        this.verboseSupplier = verboseSupplier == null ? () -> "" : verboseSupplier;
+        this.verboseSupplier = memoize(verboseSupplier == null ? () -> "" : verboseSupplier);
     }
 
-    public synchronized String getVerbose() {
-        if (!verboseComputed) {
-            try {
-                verbose = verboseSupplier.get();
-                if (verbose == null) verbose = "";
-            } catch (Throwable ignored) {
-                verbose = "";
-            }
-            verboseComputed = true;
-        }
-        return verbose;
+    public Supplier<String> getVerboseSupplier() {
+        return verboseSupplier;
+    }
+
+    public String getVerbose() {
+        return verboseSupplier.get();
     }
 
     @Override
@@ -76,6 +69,27 @@ public class FlagEvent extends Event implements GrimUserEvent, Cancellable {
     private static @NotNull Supplier<String> constant(String verbose) {
         String value = verbose == null ? "" : verbose;
         return () -> value;
+    }
+
+    private static @NotNull Supplier<String> memoize(@NotNull Supplier<String> supplier) {
+        return new Supplier<>() {
+            private String value;
+            private boolean computed;
+
+            @Override
+            public String get() {
+                if (!computed) {
+                    try {
+                        value = supplier.get();
+                        if (value == null) value = "";
+                    } catch (Throwable ignored) {
+                        value = "";
+                    }
+                    computed = true;
+                }
+                return value;
+            }
+        };
     }
 
 }

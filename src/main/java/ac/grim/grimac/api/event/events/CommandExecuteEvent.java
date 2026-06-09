@@ -7,6 +7,8 @@ import ac.grim.grimac.api.plugin.GrimPlugin;
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
 
+import java.util.function.Supplier;
+
 public class CommandExecuteEvent extends GrimVerboseCheckEvent<CommandExecuteEvent.Channel> {
     private String command;
 
@@ -20,9 +22,20 @@ public class CommandExecuteEvent extends GrimVerboseCheckEvent<CommandExecuteEve
         this.command = command;
     }
 
+    public CommandExecuteEvent(GrimUser player, AbstractCheck check, Supplier<String> verboseSupplier, String command) {
+        super(player, check, verboseSupplier);
+        this.command = command;
+    }
+
     @ApiStatus.Internal
     public void init(GrimUser user, AbstractCheck check, String verbose, String command) {
         super.init(user, check, verbose);
+        this.command = command;
+    }
+
+    @ApiStatus.Internal
+    public void init(GrimUser user, AbstractCheck check, Supplier<String> verboseSupplier, String command) {
+        super.init(user, check, verboseSupplier);
         this.command = command;
     }
 
@@ -33,7 +46,11 @@ public class CommandExecuteEvent extends GrimVerboseCheckEvent<CommandExecuteEve
     /**
      * Typed command-execute handler. Returns the new cancelled state — see
      * {@link FlagEvent.Handler} for the cancellation contract.
+     *
+     * @deprecated Prefer {@link LazyHandler}; this handler forces verbose
+     * rendering before your callback runs.
      */
+    @Deprecated
     @FunctionalInterface
     public interface Handler {
         boolean onCommandExecute(@NotNull GrimUser user, @NotNull AbstractCheck check,
@@ -41,51 +58,106 @@ public class CommandExecuteEvent extends GrimVerboseCheckEvent<CommandExecuteEve
                                  boolean currentlyCancelled);
     }
 
-    public static final class Channel extends EventChannel<CommandExecuteEvent, Handler> {
+    @FunctionalInterface
+    public interface LazyHandler {
+        boolean onCommandExecute(@NotNull GrimUser user, @NotNull AbstractCheck check,
+                                 @NotNull Supplier<String> verbose, @NotNull String command,
+                                 boolean currentlyCancelled);
+    }
+
+    public static final class Channel extends EventChannel<CommandExecuteEvent, LazyHandler> {
         private final ThreadLocal<CommandExecuteEvent> legacyPool = ThreadLocal.withInitial(CommandExecuteEvent::new);
 
         public Channel() {
-            super(CommandExecuteEvent.class, Handler.class);
+            super(CommandExecuteEvent.class, LazyHandler.class);
         }
 
-        public void onCommandExecute(@NotNull GrimPlugin plugin, @NotNull Handler handler) {
+        public void onCommandExecuteLazy(@NotNull GrimPlugin plugin, @NotNull LazyHandler handler) {
             subscribe(handler, 0, false, plugin, null);
         }
 
-        public void onCommandExecute(@NotNull GrimPlugin plugin, @NotNull Handler handler, int priority) {
+        public void onCommandExecuteLazy(@NotNull GrimPlugin plugin, @NotNull LazyHandler handler, int priority) {
             subscribe(handler, priority, false, plugin, null);
         }
 
-        public void onCommandExecute(@NotNull GrimPlugin plugin, @NotNull Handler handler, int priority, boolean ignoreCancelled) {
+        public void onCommandExecuteLazy(@NotNull GrimPlugin plugin, @NotNull LazyHandler handler, int priority, boolean ignoreCancelled) {
             subscribe(handler, priority, ignoreCancelled, plugin, null);
+        }
+
+        /**
+         * @deprecated Prefer {@link #onCommandExecuteLazy(GrimPlugin, LazyHandler)}.
+         */
+        @Deprecated
+        public void onCommandExecute(@NotNull GrimPlugin plugin, @NotNull Handler handler) {
+            onCommandExecuteLazy(plugin, adapt(handler));
+        }
+
+        /**
+         * @deprecated Prefer {@link #onCommandExecuteLazy(GrimPlugin, LazyHandler, int)}.
+         */
+        @Deprecated
+        public void onCommandExecute(@NotNull GrimPlugin plugin, @NotNull Handler handler, int priority) {
+            onCommandExecuteLazy(plugin, adapt(handler), priority);
+        }
+
+        /**
+         * @deprecated Prefer {@link #onCommandExecuteLazy(GrimPlugin, LazyHandler, int, boolean)}.
+         */
+        @Deprecated
+        public void onCommandExecute(@NotNull GrimPlugin plugin, @NotNull Handler handler, int priority, boolean ignoreCancelled) {
+            onCommandExecuteLazy(plugin, adapt(handler), priority, ignoreCancelled);
+        }
+
+        /** @deprecated resolve your context once at plugin enable — {@code api.getGrimPlugin(this)} — and call the {@link GrimPlugin}-taking overload. */
+        @Deprecated
+        public void onCommandExecuteLazy(@NotNull Object pluginContext, @NotNull LazyHandler handler) {
+            onCommandExecuteLazy(resolvePlugin(pluginContext), handler);
+        }
+
+        /** @deprecated see {@link #onCommandExecuteLazy(Object, LazyHandler)}. */
+        @Deprecated
+        public void onCommandExecuteLazy(@NotNull Object pluginContext, @NotNull LazyHandler handler, int priority) {
+            onCommandExecuteLazy(resolvePlugin(pluginContext), handler, priority);
+        }
+
+        /** @deprecated see {@link #onCommandExecuteLazy(Object, LazyHandler)}. */
+        @Deprecated
+        public void onCommandExecuteLazy(@NotNull Object pluginContext, @NotNull LazyHandler handler, int priority, boolean ignoreCancelled) {
+            onCommandExecuteLazy(resolvePlugin(pluginContext), handler, priority, ignoreCancelled);
         }
 
         /** @deprecated resolve your context once at plugin enable — {@code api.getGrimPlugin(this)} — and call the {@link GrimPlugin}-taking overload. */
         @Deprecated
         public void onCommandExecute(@NotNull Object pluginContext, @NotNull Handler handler) {
-            onCommandExecute(resolvePlugin(pluginContext), handler);
+            onCommandExecuteLazy(pluginContext, adapt(handler));
         }
 
         /** @deprecated see {@link #onCommandExecute(Object, Handler)}. */
         @Deprecated
         public void onCommandExecute(@NotNull Object pluginContext, @NotNull Handler handler, int priority) {
-            onCommandExecute(resolvePlugin(pluginContext), handler, priority);
+            onCommandExecuteLazy(pluginContext, adapt(handler), priority);
         }
 
         /** @deprecated see {@link #onCommandExecute(Object, Handler)}. */
         @Deprecated
         public void onCommandExecute(@NotNull Object pluginContext, @NotNull Handler handler, int priority, boolean ignoreCancelled) {
-            onCommandExecute(resolvePlugin(pluginContext), handler, priority, ignoreCancelled);
+            onCommandExecuteLazy(pluginContext, adapt(handler), priority, ignoreCancelled);
         }
 
         public boolean fire(@NotNull GrimUser user, @NotNull AbstractCheck check,
                             @NotNull String verbose, @NotNull String command) {
-            Entry<Handler>[] entries = entries();
+            return fire(user, check, constant(verbose), command);
+        }
+
+        public boolean fire(@NotNull GrimUser user, @NotNull AbstractCheck check,
+                            @NotNull Supplier<String> verboseSupplier, @NotNull String command) {
+            Entry<LazyHandler>[] entries = entries();
             if (entries.length == 0) return false;
 
+            Supplier<String> verbose = memoize(verboseSupplier);
             boolean cancelled = false;
             if (!hasLegacy()) {
-                for (Entry<Handler> e : entries) {
+                for (Entry<LazyHandler> e : entries) {
                     if (cancelled && !e.ignoreCancelled) continue;
                     try {
                         cancelled = e.handler.onCommandExecute(user, check, verbose, command, cancelled);
@@ -98,7 +170,7 @@ public class CommandExecuteEvent extends GrimVerboseCheckEvent<CommandExecuteEve
 
             CommandExecuteEvent pooled = legacyPool.get();
             pooled.init(user, check, verbose, command);
-            for (Entry<Handler> e : entries) {
+            for (Entry<LazyHandler> e : entries) {
                 if (cancelled && !e.ignoreCancelled) continue;
                 try {
                     if (e.legacyListener != null) {
@@ -116,26 +188,30 @@ public class CommandExecuteEvent extends GrimVerboseCheckEvent<CommandExecuteEve
         }
 
         @Override
-        protected boolean dispatchTypedFromLegacy(@NotNull CommandExecuteEvent event, @NotNull Handler handler, boolean cancelled) {
-            return handler.onCommandExecute(event.getUser(), event.getCheck(), event.getVerbose(), event.getCommand(), cancelled);
+        protected boolean dispatchTypedFromLegacy(@NotNull CommandExecuteEvent event, @NotNull LazyHandler handler, boolean cancelled) {
+            return handler.onCommandExecute(event.getUser(), event.getCheck(), event.getVerboseSupplier(), event.getCommand(), cancelled);
         }
 
         @ApiStatus.Internal
-        public static @NotNull Handler bridgeFromCheck(@NotNull GrimCheckEvent.Handler abstractHandler) {
+        public static @NotNull LazyHandler bridgeFromCheck(@NotNull GrimCheckEvent.Handler abstractHandler) {
             return (user, check, verbose, command, cancelled) -> abstractHandler.onCheck(user, check, cancelled);
         }
 
         @ApiStatus.Internal
-        public static @NotNull Handler bridgeFromVerboseCheck(@NotNull GrimVerboseCheckEvent.Handler abstractHandler) {
+        public static @NotNull LazyHandler bridgeFromVerboseCheck(@NotNull GrimVerboseCheckEvent.LazyHandler abstractHandler) {
             return (user, check, verbose, command, cancelled) -> abstractHandler.onVerboseCheck(user, check, verbose, cancelled);
         }
 
         @ApiStatus.Internal
-        public static @NotNull Handler bridgeFromAny(@NotNull ac.grim.grimac.api.event.GrimEvent.Handler abstractHandler) {
+        public static @NotNull LazyHandler bridgeFromAny(@NotNull ac.grim.grimac.api.event.GrimEvent.Handler abstractHandler) {
             return (user, check, verbose, command, cancelled) -> {
                 abstractHandler.onAnyEvent(CommandExecuteEvent.class, cancelled);
                 return cancelled;
             };
+        }
+
+        private static @NotNull LazyHandler adapt(@NotNull Handler handler) {
+            return (user, check, verbose, command, cancelled) -> handler.onCommandExecute(user, check, verbose.get(), command, cancelled);
         }
     }
 }
