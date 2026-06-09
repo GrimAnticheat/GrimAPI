@@ -161,9 +161,16 @@ public interface SqlDialect {
      * ON CONFLICT syntax. MySQL overrides with ON DUPLICATE KEY UPDATE.
      */
     default @NotNull String kvUpsertSql(@NotNull String quotedTable) {
-        return "INSERT INTO " + quotedTable + " (scope, scope_key, key, value, updated_at) "
+        String scope = quoteIdentifier("scope");
+        String scopeKey = quoteIdentifier("scope_key");
+        String key = quoteIdentifier("key");
+        String value = quoteIdentifier("value");
+        String updatedAt = quoteIdentifier("updated_at");
+        return "INSERT INTO " + quotedTable + " (" + scope + ", " + scopeKey + ", " + key
+            + ", " + value + ", " + updatedAt + ") "
             + "VALUES (?, ?, ?, ?, ?) "
-            + "ON CONFLICT (scope, scope_key, key) DO UPDATE SET value = " + excludedRef(quoteIdentifier("value"))
-            + ", updated_at = " + excludedRef(quoteIdentifier("updated_at"));
+            + "ON CONFLICT (" + scope + ", " + scopeKey + ", " + key + ") DO UPDATE SET "
+            + value + " = " + excludedRef(value)
+            + ", " + updatedAt + " = " + excludedRef(updatedAt);
     }
 }

@@ -12,7 +12,8 @@ import java.util.Optional;
 /**
  * Narrow storage-engine SPI replacing the old {@link Backend}. Owns
  * connection lifecycle and capability advertisement; per-Kind work is
- * delegated to {@link KindAdapter}.
+ * delegated to {@link KindAdapter}; transactions / search / admin live
+ * behind optional capability adapters.
  * <p>
  * Coexists with the legacy {@link Backend} during the redesign window.
  * Phase 5 deletes the old SPI and renames this to {@code Backend}.
@@ -39,10 +40,17 @@ public interface BackendV2 {
      */
     <K extends DataKind<?, ?>> @NotNull Optional<KindAdapter<K>> adapterFor(@NotNull K kind);
 
+    @NotNull Optional<SearchAdapter> searchAdapter();
+
+    @NotNull Optional<TxAdapter> txAdapter();
+
+    @NotNull Optional<AdminAdapter> adminAdapter();
+
     /**
      * Last-resort escape hatch. Returns the underlying client (e.g.
      * {@code MongoDatabase}, {@code java.sql.Connection}, {@code Jedis}) for
-     * callers that have no portable alternative.
+     * extensions that have called {@code requireBackend(...)} and have no
+     * portable alternative. See {@code .docs/storage-redesign/04-search-tx-admin.md}.
      */
     <X> @NotNull Optional<X> unwrap(@NotNull Class<X> type);
 

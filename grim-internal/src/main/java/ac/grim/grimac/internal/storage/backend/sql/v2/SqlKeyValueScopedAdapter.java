@@ -68,13 +68,18 @@ public final class SqlKeyValueScopedAdapter implements KindAdapter<KeyValueScope
     @Override
     public void ensureStore(@NotNull StoreId id, @NotNull KeyValueScoped<?, ?> kind) throws BackendException {
         String table = dialect.quoteIdentifier(id.name());
+        String scope = dialect.quoteIdentifier("scope");
+        String scopeKey = dialect.quoteIdentifier("scope_key");
+        String key = dialect.quoteIdentifier("key");
+        String value = dialect.quoteIdentifier("value");
+        String updatedAt = dialect.quoteIdentifier("updated_at");
         String ddl = "CREATE TABLE IF NOT EXISTS " + table + " ("
-            + "scope VARCHAR(64) NOT NULL, "
-            + "scope_key VARCHAR(255) NOT NULL, "
-            + "key VARCHAR(255) NOT NULL, "
-            + "value " + dialect.kvValueColumnType() + ", "
-            + "updated_at BIGINT NOT NULL DEFAULT 0, "
-            + "PRIMARY KEY (scope, scope_key, key))";
+            + scope + " VARCHAR(64) NOT NULL, "
+            + scopeKey + " VARCHAR(255) NOT NULL, "
+            + key + " VARCHAR(255) NOT NULL, "
+            + value + " " + dialect.kvValueColumnType() + ", "
+            + updatedAt + " BIGINT NOT NULL DEFAULT 0, "
+            + "PRIMARY KEY (" + scope + ", " + scopeKey + ", " + key + "))";
         try (Connection c = ds.getConnection(); Statement s = c.createStatement()) {
             s.executeUpdate(ddl);
         } catch (SQLException e) {
@@ -96,7 +101,10 @@ public final class SqlKeyValueScopedAdapter implements KindAdapter<KeyValueScope
             @NotNull StoreId id, @NotNull KeyValueScoped<?, ?> kind, @NotNull Category<E> category) {
         String table = dialect.quoteIdentifier(id.name());
         String upsertSql = dialect.kvUpsertSql(table);
-        String deleteSql = "DELETE FROM " + table + " WHERE scope = ? AND scope_key = ? AND key = ?";
+        String deleteSql = "DELETE FROM " + table
+            + " WHERE " + dialect.quoteIdentifier("scope") + " = ?"
+            + " AND " + dialect.quoteIdentifier("scope_key") + " = ?"
+            + " AND " + dialect.quoteIdentifier("key") + " = ?";
         return new KVWriteHandler<>(upsertSql, deleteSql);
     }
 
@@ -186,13 +194,16 @@ public final class SqlKeyValueScopedAdapter implements KindAdapter<KeyValueScope
         String table = dialect.quoteIdentifier(id.name());
         try (Connection c = ds.getConnection();
              PreparedStatement ps = c.prepareStatement(
-                 "SELECT value FROM " + table + " WHERE scope = ? AND scope_key = ? AND key = ?")) {
+                 "SELECT " + dialect.quoteIdentifier("value") + " FROM " + table
+                     + " WHERE " + dialect.quoteIdentifier("scope") + " = ?"
+                     + " AND " + dialect.quoteIdentifier("scope_key") + " = ?"
+                     + " AND " + dialect.quoteIdentifier("key") + " = ?")) {
             ps.setString(1, String.valueOf(op.scope()));
             ps.setString(2, String.valueOf(op.scopeKey()));
             ps.setString(3, op.key());
             try (ResultSet rs = ps.executeQuery()) {
                 if (!rs.next()) return Optional.empty();
-                byte[] v = rs.getBytes("value");
+                byte[] v = rs.getBytes(1);
                 return v == null ? Optional.empty() : Optional.of(v);
             }
         }
@@ -204,13 +215,16 @@ public final class SqlKeyValueScopedAdapter implements KindAdapter<KeyValueScope
         Map<String, Object> out = new LinkedHashMap<>();
         try (Connection c = ds.getConnection();
              PreparedStatement ps = c.prepareStatement(
-                 "SELECT key, value FROM " + table + " WHERE scope = ? AND scope_key = ?")) {
+                 "SELECT " + dialect.quoteIdentifier("key") + ", " + dialect.quoteIdentifier("value")
+                     + " FROM " + table
+                     + " WHERE " + dialect.quoteIdentifier("scope") + " = ?"
+                     + " AND " + dialect.quoteIdentifier("scope_key") + " = ?")) {
             ps.setString(1, String.valueOf(op.scope()));
             ps.setString(2, String.valueOf(op.scopeKey()));
             try (ResultSet rs = ps.executeQuery()) {
                 while (rs.next()) {
-                    byte[] v = rs.getBytes("value");
-                    if (v != null) out.put(rs.getString("key"), v);
+                    byte[] v = rs.getBytes(2);
+                    if (v != null) out.put(rs.getString(1), v);
                 }
             }
         }
@@ -267,7 +281,10 @@ public final class SqlKeyValueScopedAdapter implements KindAdapter<KeyValueScope
         String table = dialect.quoteIdentifier(id.name());
         try (Connection c = ds.getConnection();
              PreparedStatement ps = c.prepareStatement(
-                 "DELETE FROM " + table + " WHERE scope = ? AND scope_key = ? AND key = ?")) {
+                 "DELETE FROM " + table
+                     + " WHERE " + dialect.quoteIdentifier("scope") + " = ?"
+                     + " AND " + dialect.quoteIdentifier("scope_key") + " = ?"
+                     + " AND " + dialect.quoteIdentifier("key") + " = ?")) {
             ps.setString(1, String.valueOf(op.scope()));
             ps.setString(2, String.valueOf(op.scopeKey()));
             ps.setString(3, op.key());
@@ -279,7 +296,9 @@ public final class SqlKeyValueScopedAdapter implements KindAdapter<KeyValueScope
         String table = dialect.quoteIdentifier(id.name());
         try (Connection c = ds.getConnection();
              PreparedStatement ps = c.prepareStatement(
-                 "DELETE FROM " + table + " WHERE scope = ? AND scope_key = ?")) {
+                 "DELETE FROM " + table
+                     + " WHERE " + dialect.quoteIdentifier("scope") + " = ?"
+                     + " AND " + dialect.quoteIdentifier("scope_key") + " = ?")) {
             ps.setString(1, String.valueOf(op.scope()));
             ps.setString(2, String.valueOf(op.scopeKey()));
             ps.executeUpdate();
@@ -290,7 +309,9 @@ public final class SqlKeyValueScopedAdapter implements KindAdapter<KeyValueScope
         String table = dialect.quoteIdentifier(id.name());
         try (Connection c = ds.getConnection();
              PreparedStatement ps = c.prepareStatement(
-                 "SELECT COUNT(*) FROM " + table + " WHERE scope = ? AND scope_key = ?")) {
+                 "SELECT COUNT(*) FROM " + table
+                     + " WHERE " + dialect.quoteIdentifier("scope") + " = ?"
+                     + " AND " + dialect.quoteIdentifier("scope_key") + " = ?")) {
             ps.setString(1, String.valueOf(op.scope()));
             ps.setString(2, String.valueOf(op.scopeKey()));
             try (ResultSet rs = ps.executeQuery()) {
