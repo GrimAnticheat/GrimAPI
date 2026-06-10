@@ -66,7 +66,10 @@ public final class V2BuiltinKinds {
             .eventToRecord(V2BuiltinKinds::violationEventToRecord)
             .timestamp("occurred_at")
             .partition("session_id", "player_uuid", "check_id")
-            .retention(Duration.ofDays(90))
+            // Binary verbose rows are ~70-90 bytes all-in, so half a year of
+            // history is cheap; deployments override (or disable) sweeping
+            // via the storage config's retention.violations rule.
+            .retention(Duration.ofDays(180))
             .granularity(Granularity.SECONDS)
             .build();
     }

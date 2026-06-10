@@ -2,6 +2,7 @@ package ac.grim.grimac.api.storage.verbose;
 
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
 
 import java.io.UnsupportedEncodingException;
 import java.util.ArrayList;
@@ -36,6 +37,10 @@ public final class VerboseSchema {
         if (declarations == null) throw new IllegalArgumentException("declarations");
         List<Field> fields = new ArrayList<>(declarations.length);
         for (String declaration : declarations) parseDeclaration(fields, declaration);
+        return new VerboseSchema(version, fields);
+    }
+
+    public static @NotNull VerboseSchema of(int version, @NotNull List<Field> fields) {
         return new VerboseSchema(version, fields);
     }
 
@@ -91,13 +96,23 @@ public final class VerboseSchema {
             TypeTag type = TypeTag.fromTag(in.readUnsignedByte());
             fields.add(new Field(utf8(nameBytes, 0, nameBytes.length), type));
         }
+        // Layouts written by template-bearing builds append the display
+        // template after the fields; older layouts end here.
+        String template = null;
         if (in.remaining() != 0) {
-            throw new IllegalArgumentException("layout has trailing bytes");
+            template = in.rstr();
+            if (in.remaining() != 0) {
+                throw new IllegalArgumentException("layout has trailing bytes");
+            }
         }
-        return new Layout(fields);
+        return new Layout(fields, template);
     }
 
     private static byte @NotNull [] encodeLayout(@NotNull List<Field> fields) {
+        return encodeLayout(fields, null);
+    }
+
+    public static byte @NotNull [] encodeLayout(@NotNull List<Field> fields, @Nullable String template) {
         VerboseBuf out = new VerboseBuf(Math.max(8, fields.size() * 8));
         out.vi(fields.size());
         for (Field field : fields) {
@@ -108,6 +123,9 @@ public final class VerboseSchema {
             out.vi(name.length);
             out.writeBytes(name);
             out.writeByte(field.type().tag());
+        }
+        if (template != null && !template.isEmpty()) {
+            out.str(template);
         }
         return out.toByteArray();
     }
@@ -241,14 +259,18 @@ public final class VerboseSchema {
         }
     }
 
-    public record Layout(@NotNull List<Field> fields) {
+    public record Layout(@NotNull List<Field> fields, @Nullable String template) {
         public Layout {
             fields = List.copyOf(fields);
             if (fields.isEmpty()) throw new IllegalArgumentException("fields");
         }
 
+        public Layout(@NotNull List<Field> fields) {
+            this(fields, null);
+        }
+
         public byte @NotNull [] layoutBytes() {
-            return encodeLayout(fields);
+            return encodeLayout(fields, template);
         }
     }
 

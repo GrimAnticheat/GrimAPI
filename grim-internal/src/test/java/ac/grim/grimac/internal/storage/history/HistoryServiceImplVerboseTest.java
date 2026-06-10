@@ -130,6 +130,8 @@ class HistoryServiceImplVerboseTest {
 
         @Override public void register(String stableKey, VerboseSchema schema) {}
         @Override public void registerFormatter(String stableKey, VerboseFormatter formatter) {}
+        @Override public void registerTemplate(String stableKey, String checkName, String description, String pluginVersion, ac.grim.grimac.api.storage.verbose.Verbose verbose) {}
+        @Override public void onChange(Runnable listener) {}
         @Override public String render(String stableKey, byte[] data, VerboseRenderContext ctx) {
             StringBuilder out = new StringBuilder();
             if (formatter != null) {

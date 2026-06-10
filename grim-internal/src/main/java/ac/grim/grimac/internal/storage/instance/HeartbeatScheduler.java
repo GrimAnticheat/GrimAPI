@@ -12,6 +12,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -64,7 +65,7 @@ public final class HeartbeatScheduler {
     private final @Nullable String hostname;
     private final @Nullable String grimVersion;
     private final @Nullable String serverVersionString;
-    private final @Nullable byte[] verboseManifest;
+    private final @NotNull Supplier<byte @Nullable []> verboseManifest;
     private final @NotNull Duration interval;
     private final @NotNull Consumer<ServerStartupEvent> publish;
     private final @NotNull Logger logger;
@@ -87,7 +88,7 @@ public final class HeartbeatScheduler {
             @NotNull Consumer<ServerStartupEvent> publish,
             @NotNull Logger logger) {
         this(startupId, instanceId, serverName, startedEpochMs, hostname,
-                grimVersion, serverVersionString, null, interval, publish, logger);
+                grimVersion, serverVersionString, (byte[]) null, interval, publish, logger);
     }
 
     public HeartbeatScheduler(
@@ -99,6 +100,27 @@ public final class HeartbeatScheduler {
             @Nullable String grimVersion,
             @Nullable String serverVersionString,
             @Nullable byte[] verboseManifest,
+            @NotNull Duration interval,
+            @NotNull Consumer<ServerStartupEvent> publish,
+            @NotNull Logger logger) {
+        this(startupId, instanceId, serverName, startedEpochMs, hostname,
+                grimVersion, serverVersionString, () -> verboseManifest, interval, publish, logger);
+    }
+
+    /**
+     * Manifest-supplier variant: the verbose manifest is re-read on every
+     * heartbeat so per-check codec versions interned after startup (templates
+     * register lazily on first flag) reach the durable startup row.
+     */
+    public HeartbeatScheduler(
+            @NotNull UUID startupId,
+            @NotNull UUID instanceId,
+            @NotNull String serverName,
+            long startedEpochMs,
+            @Nullable String hostname,
+            @Nullable String grimVersion,
+            @Nullable String serverVersionString,
+            @NotNull Supplier<byte @Nullable []> verboseManifest,
             @NotNull Duration interval,
             @NotNull Consumer<ServerStartupEvent> publish,
             @NotNull Logger logger) {
@@ -150,6 +172,20 @@ public final class HeartbeatScheduler {
     }
 
     /**
+     * Publish one off-schedule heartbeat as soon as possible on the
+     * scheduler thread. Used when the verbose manifest changes so rows
+     * written immediately after a new template interned stay decodable.
+     * No-op when the scheduler is not running.
+     */
+    public void publishNow() {
+        synchronized (lifecycleLock) {
+            if (executor != null) {
+                executor.execute(this::tick);
+            }
+        }
+    }
+
+    /**
      * Cancel the schedule. Does not publish a final heartbeat — pair
      * with {@link #publishDrainImmediate()} for graceful shutdown.
      */
@@ -186,7 +222,7 @@ public final class HeartbeatScheduler {
                 .hostname(hostname)
                 .grimVersion(grimVersion)
                 .serverVersionString(serverVersionString)
-                .verboseManifest(verboseManifest)
+                .verboseManifest(verboseManifest.get())
                 .closedAtEpochMs(closedAtEpochMs)
                 .closeReason(closeReason);
             publish.accept(event);

@@ -19,6 +19,7 @@ import ac.grim.grimac.api.storage.model.ViolationRecord;
 import ac.grim.grimac.api.storage.query.Cursor;
 import ac.grim.grimac.api.storage.query.Page;
 import ac.grim.grimac.api.storage.query.Queries;
+import ac.grim.grimac.api.storage.verbose.Verbose;
 import ac.grim.grimac.api.storage.verbose.VerboseBuf;
 import ac.grim.grimac.api.storage.verbose.VerboseFormatter;
 import ac.grim.grimac.api.storage.verbose.VerboseRenderContext;
@@ -71,7 +72,7 @@ public final class HistoryServiceImpl implements HistoryService {
     private volatile @Nullable Category<ServerStartupEvent> v2Startups;
     private volatile @Nullable VerboseRegistry verboseRegistry;
     private final Map<UUID, ServerStartupRecord> startupCache = new ConcurrentHashMap<>();
-    private final Map<UUID, VerboseManifest.Decoded> verboseManifestCache = new ConcurrentHashMap<>();
+    private final Map<UUID, CachedManifest> verboseManifestCache = new ConcurrentHashMap<>();
 
     public HistoryServiceImpl(@NotNull DataStore store, @NotNull CheckRegistry checks,
                               int defaultPageSize, long defaultGroupIntervalMs) {
@@ -436,6 +437,13 @@ public final class HistoryServiceImpl implements HistoryService {
 
             VerboseSchema.Layout layout = safeLayout(registry, flavor, checkId, version);
             if (layout != null) {
+                // Rows written by other builds carry their display template in
+                // the stored layout; render through it when the tags resolve.
+                String template = layout.template();
+                if (template != null) {
+                    String rendered = Verbose.renderStored(template, verboseData, ctx);
+                    if (rendered != null) return rendered;
+                }
                 try {
                     StringBuilder rendered = new StringBuilder();
                     GenericVerboseReader.render(layout, VerboseBuf.wrap(verboseData), ctx, VerboseSink.into(rendered));
@@ -451,14 +459,23 @@ public final class HistoryServiceImpl implements HistoryService {
     private @Nullable VerboseManifest.Decoded decodedManifest(@NotNull ServerStartupRecord startup) {
         byte[] manifest = startup.verboseManifest();
         if (manifest == null || manifest.length == 0) return null;
-        return verboseManifestCache.computeIfAbsent(startup.startupId(), ignored -> {
-            try {
-                return VerboseManifest.decode(manifest);
-            } catch (RuntimeException e) {
-                return new VerboseManifest.Decoded(
-                        0, VerboseManifest.FLAVOR_UNKNOWN, Map.of(), false);
-            }
-        });
+        // Manifests grow mid-startup as checks intern templates on first
+        // flag, so the cache is keyed by content hash as well as startup.
+        int manifestHash = java.util.Arrays.hashCode(manifest);
+        CachedManifest cached = verboseManifestCache.get(startup.startupId());
+        if (cached != null && cached.manifestHash() == manifestHash) return cached.decoded();
+        VerboseManifest.Decoded decoded;
+        try {
+            decoded = VerboseManifest.decode(manifest);
+        } catch (RuntimeException e) {
+            decoded = new VerboseManifest.Decoded(
+                    0, VerboseManifest.FLAVOR_UNKNOWN, Map.of(), false);
+        }
+        verboseManifestCache.put(startup.startupId(), new CachedManifest(manifestHash, decoded));
+        return decoded;
+    }
+
+    private record CachedManifest(int manifestHash, @NotNull VerboseManifest.Decoded decoded) {
     }
 
     private static @Nullable VerboseFormatter safeFormatter(

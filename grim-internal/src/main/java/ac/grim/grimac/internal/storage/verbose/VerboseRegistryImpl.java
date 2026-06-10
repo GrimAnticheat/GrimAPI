@@ -6,6 +6,7 @@ import ac.grim.grimac.api.storage.category.Category;
 import ac.grim.grimac.api.storage.event.VerboseSchemaEvent;
 import ac.grim.grimac.api.storage.kind.ops.EntityOps;
 import ac.grim.grimac.api.storage.model.VerboseSchemaRecord;
+import ac.grim.grimac.api.storage.verbose.Verbose;
 import ac.grim.grimac.api.storage.verbose.VerboseBuf;
 import ac.grim.grimac.api.storage.verbose.VerboseFormatter;
 import ac.grim.grimac.api.storage.verbose.VerboseRenderContext;
@@ -36,9 +37,11 @@ public final class VerboseRegistryImpl implements VerboseRegistry {
     private final @NotNull Logger logger;
 
     private final ConcurrentMap<String, VerboseSchema> schemasByStableKey = new ConcurrentHashMap<>();
+    private final ConcurrentMap<String, Verbose> templatesByStableKey = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, VerboseFormatter> formattersByStableKey = new ConcurrentHashMap<>();
     private final ConcurrentMap<FormatterKey, VerboseFormatter> formattersByTuple = new ConcurrentHashMap<>();
     private final ConcurrentMap<LayoutKey, Optional<VerboseSchema.Layout>> layoutCache = new ConcurrentHashMap<>();
+    private volatile @Nullable Runnable changeListener;
 
     public VerboseRegistryImpl(
             @Nullable DataStore store,
@@ -82,6 +85,46 @@ public final class VerboseRegistryImpl implements VerboseRegistry {
         formattersByStableKey.put(stableKey, formatter);
         checks.getId(stableKey).ifPresent(checkId ->
                 formattersByTuple.put(new FormatterKey(flavor, checkId, formatter.version()), formatter));
+    }
+
+    @Override
+    public void registerTemplate(
+            @NotNull String stableKey,
+            @NotNull String checkName,
+            @Nullable String description,
+            @Nullable String pluginVersion,
+            @NotNull Verbose verbose) {
+        if (stableKey.isEmpty()) throw new IllegalArgumentException("stableKey");
+        Verbose existing = templatesByStableKey.get(stableKey);
+        if (existing == verbose) return; // hot path: already registered, one map read
+        if (existing != null && existing.template().equals(verbose.template())) return;
+        if (existing != null) {
+            logger.warning(() -> "verbose template for " + stableKey + " replaced without restart: \""
+                    + existing.template() + "\" -> \"" + verbose.template() + "\"");
+        }
+
+        templatesByStableKey.put(stableKey, verbose);
+        schemasByStableKey.put(stableKey, verbose.schema());
+        VerboseFormatter formatter = verbose.asFormatter();
+        formattersByStableKey.put(stableKey, formatter);
+        checks.intern(stableKey, checkName, description, pluginVersion);
+        resolveAndIntern(stableKey, verbose.schema(), checks);
+        checks.getId(stableKey).ifPresent(checkId ->
+                formattersByTuple.put(new FormatterKey(flavor, checkId, verbose.version()), formatter));
+
+        Runnable listener = changeListener;
+        if (listener != null) {
+            try {
+                listener.run();
+            } catch (RuntimeException e) {
+                logger.log(Level.WARNING, "verbose registry change listener failed", e);
+            }
+        }
+    }
+
+    @Override
+    public void onChange(@Nullable Runnable listener) {
+        this.changeListener = listener;
     }
 
     @Override
@@ -190,9 +233,9 @@ public final class VerboseRegistryImpl implements VerboseRegistry {
             @NotNull VerboseSchema schema) {
         if (!isBinaryVersion(schema.version())) return Optional.empty();
         String schemaKey = VerboseSchemaRecord.keyOf(flavor, checkId, schema.version());
-        byte[] layoutBytes = schema.layoutBytes();
+        byte[] layoutBytes = layoutBytesFor(stableKey, schema);
         if (store == null) {
-            return Optional.of(new VerboseSchema.Layout(schema.fields()));
+            return Optional.of(VerboseSchema.decodeLayout(layoutBytes));
         }
         // loadRecord().join() may block the calling pool thread on first resolution; amortized once per schema.
         RecordLookup existing = loadRecord(schemaKey);
@@ -210,7 +253,7 @@ public final class VerboseRegistryImpl implements VerboseRegistry {
             }
         }
         if (existing.lookupFailed()) {
-            return Optional.of(new VerboseSchema.Layout(schema.fields()));
+            return Optional.of(VerboseSchema.decodeLayout(layoutBytes));
         }
 
         long now = System.currentTimeMillis();
@@ -221,7 +264,15 @@ public final class VerboseRegistryImpl implements VerboseRegistry {
                 .version(schema.version())
                 .layout(layoutBytes)
                 .introducedAt(now));
-        return Optional.of(new VerboseSchema.Layout(schema.fields()));
+        return Optional.of(VerboseSchema.decodeLayout(layoutBytes));
+    }
+
+    /** Template-bearing layout bytes when {@code stableKey} registered via template. */
+    private byte @NotNull [] layoutBytesFor(@NotNull String stableKey, @NotNull VerboseSchema schema) {
+        Verbose verbose = templatesByStableKey.get(stableKey);
+        return verbose != null && verbose.version() == schema.version()
+                ? verbose.layoutBytes()
+                : schema.layoutBytes();
     }
 
     private @NotNull LayoutLookup loadLayout(@NotNull LayoutKey key) {
@@ -230,7 +281,8 @@ public final class VerboseRegistryImpl implements VerboseRegistry {
             if (stableKey.isPresent()) {
                 VerboseSchema schema = schemasByStableKey.get(stableKey.get());
                 if (schema != null && schema.version() == key.version()) {
-                    return LayoutLookup.confirmed(Optional.of(new VerboseSchema.Layout(schema.fields())));
+                    return LayoutLookup.confirmed(Optional.of(
+                            VerboseSchema.decodeLayout(layoutBytesFor(stableKey.get(), schema))));
                 }
             }
         }
