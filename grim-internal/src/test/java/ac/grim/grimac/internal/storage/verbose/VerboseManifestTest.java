@@ -8,6 +8,7 @@ import java.util.Map;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class VerboseManifestTest {
@@ -20,7 +21,7 @@ class VerboseManifestTest {
         assertTrue(decoded.supported());
         assertEquals(VerboseManifest.FORMAT_VERSION, decoded.formatVersion());
         assertEquals(VerboseManifest.FLAVOR_V3_PREMIUM, decoded.flavor());
-        assertEquals(-1, decoded.codecVersionOrText(42));
+        assertEquals(0, decoded.codecVersionOrText(42));
     }
 
     @Test
@@ -42,7 +43,13 @@ class VerboseManifestTest {
         assertEquals(1, decoded.codecVersionOrText(3));
         assertEquals(2, decoded.codecVersionOrText(9));
         assertEquals(4, decoded.codecVersionOrText(130));
-        assertEquals(-1, decoded.codecVersionOrText(131));
+        assertEquals(0, decoded.codecVersionOrText(131));
+    }
+
+    @Test
+    void encodeRejectsTextVersionEntries() {
+        assertThrows(IllegalArgumentException.class,
+                () -> VerboseManifest.encode(VerboseManifest.FLAVOR_V2_PUBLIC, Map.of(42, 0)));
     }
 
     @Test
@@ -52,6 +59,6 @@ class VerboseManifestTest {
         assertFalse(decoded.supported());
         assertEquals(99, decoded.formatVersion());
         assertEquals(VerboseManifest.FLAVOR_UNKNOWN, decoded.flavor());
-        assertEquals(-1, decoded.codecVersionOrText(1));
+        assertEquals(0, decoded.codecVersionOrText(1));
     }
 }

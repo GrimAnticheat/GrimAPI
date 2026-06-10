@@ -43,8 +43,12 @@ public final class VerboseManifest {
             if (checkId < previousCheckId) {
                 throw new IllegalArgumentException("check ids must be non-decreasing");
             }
+            int codecVersion = entry.getValue();
+            if (codecVersion < 1) {
+                throw new IllegalArgumentException("codec version must be positive");
+            }
             writeUVarInt(out, checkId - previousCheckId);
-            writeUVarInt(out, entry.getValue());
+            writeUVarInt(out, codecVersion);
             previousCheckId = checkId;
         }
         return out.toByteArray();
@@ -84,7 +88,7 @@ public final class VerboseManifest {
     public record Decoded(int formatVersion, int flavor, @NotNull Map<Integer, Integer> checkCodecVersions,
                           boolean supported) {
         public int codecVersionOrText(int checkId) {
-            return checkCodecVersions.getOrDefault(checkId, -1);
+            return checkCodecVersions.getOrDefault(checkId, 0);
         }
     }
 

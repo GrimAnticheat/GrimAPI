@@ -196,6 +196,7 @@ public final class RingRegistry {
         if (event instanceof ac.grim.grimac.api.storage.event.CheckCatalogEvent c) { c.reset(); return (E) c; }
         if (event instanceof ac.grim.grimac.api.storage.event.ServerInstanceEvent i) { i.reset(); return (E) i; }
         if (event instanceof ac.grim.grimac.api.storage.event.ServerStartupEvent s) { s.reset(); return (E) s; }
+        if (event instanceof ac.grim.grimac.api.storage.event.VerboseSchemaEvent v) { v.reset(); return (E) v; }
         if (event instanceof ac.grim.grimac.api.storage.kind.CounterEvent<?> co) { co.clear(); return (E) co; }
         return event;
     }

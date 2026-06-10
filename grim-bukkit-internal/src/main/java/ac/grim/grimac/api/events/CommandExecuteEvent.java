@@ -6,6 +6,8 @@ import lombok.Getter;
 import org.bukkit.event.HandlerList;
 import org.jetbrains.annotations.NotNull;
 
+import java.util.function.Supplier;
+
 @Deprecated(since = "1.2.1.0", forRemoval = true)
 public class CommandExecuteEvent extends FlagEvent {
 
@@ -13,6 +15,11 @@ public class CommandExecuteEvent extends FlagEvent {
     @Getter private final String command;
 
     public CommandExecuteEvent(GrimUser player, AbstractCheck check, String verbose, String command) {
+        super(player, check, verbose); // Async!
+        this.command = command;
+    }
+
+    public CommandExecuteEvent(GrimUser player, AbstractCheck check, Supplier<String> verbose, String command) {
         super(player, check, verbose); // Async!
         this.command = command;
     }

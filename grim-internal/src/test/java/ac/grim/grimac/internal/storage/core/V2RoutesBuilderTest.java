@@ -6,9 +6,7 @@ import ac.grim.grimac.api.storage.backend.BackendContext;
 import ac.grim.grimac.api.storage.backend.BackendException;
 import ac.grim.grimac.api.storage.backend.BackendV2;
 import ac.grim.grimac.api.storage.backend.KindAdapter;
-import ac.grim.grimac.api.storage.backend.SearchAdapter;
 import ac.grim.grimac.api.storage.backend.StorageEventHandler;
-import ac.grim.grimac.api.storage.backend.TxAdapter;
 import ac.grim.grimac.api.storage.category.Capability;
 import ac.grim.grimac.api.storage.category.Categories;
 import ac.grim.grimac.api.storage.category.Category;
@@ -133,9 +131,6 @@ class V2RoutesBuilderTest {
         @Override public void init(@NotNull BackendContext ctx) {}
         @Override public void flush() {}
         @Override public void close() {}
-        @Override public @NotNull Optional<SearchAdapter> searchAdapter() { return Optional.empty(); }
-        @Override public @NotNull Optional<TxAdapter> txAdapter() { return Optional.empty(); }
-        @Override public @NotNull Optional<AdminAdapter> adminAdapter() { return Optional.empty(); }
         @Override public <X> @NotNull Optional<X> unwrap(@NotNull Class<X> type) { return Optional.empty(); }
 
         @Override

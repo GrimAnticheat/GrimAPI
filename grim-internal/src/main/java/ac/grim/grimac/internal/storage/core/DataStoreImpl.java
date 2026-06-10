@@ -115,7 +115,8 @@ public final class DataStoreImpl implements DataStore {
         java.util.Set<Category<?>> out = new java.util.LinkedHashSet<>();
         for (Category<?> c : new Category<?>[] {
                 Categories.VIOLATION, Categories.SESSION,
-                Categories.PLAYER_IDENTITY, Categories.SETTING }) {
+                Categories.PLAYER_IDENTITY, Categories.SETTING,
+                Categories.SERVER_STARTUP, Categories.VERBOSE_SCHEMA }) {
             if (v2Routes.contains(c)) out.add(c);
         }
         return out;

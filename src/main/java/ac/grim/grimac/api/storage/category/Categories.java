@@ -5,12 +5,14 @@ import ac.grim.grimac.api.storage.event.PlayerIdentityEvent;
 import ac.grim.grimac.api.storage.event.ServerStartupEvent;
 import ac.grim.grimac.api.storage.event.SessionEvent;
 import ac.grim.grimac.api.storage.event.SettingEvent;
+import ac.grim.grimac.api.storage.event.VerboseSchemaEvent;
 import ac.grim.grimac.api.storage.event.ViolationEvent;
 import ac.grim.grimac.api.storage.model.PlayerIdentity;
 import ac.grim.grimac.api.storage.model.ServerStartupRecord;
 import ac.grim.grimac.api.storage.model.SessionBlobRecord;
 import ac.grim.grimac.api.storage.model.SessionRecord;
 import ac.grim.grimac.api.storage.model.SettingRecord;
+import ac.grim.grimac.api.storage.model.VerboseSchemaRecord;
 import ac.grim.grimac.api.storage.model.ViolationRecord;
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
@@ -42,6 +44,14 @@ public final class Categories {
             ServerStartupEvent.class,
             ServerStartupEvent::new,
             ServerStartupRecord.class,
+            EnumSet.of(Capability.KIND_ENTITY),
+            AccessPattern.INDEXED_KV);
+
+    public static final Category<VerboseSchemaEvent> VERBOSE_SCHEMA = new Builtin<>(
+            "verbose-schema",
+            VerboseSchemaEvent.class,
+            VerboseSchemaEvent::new,
+            VerboseSchemaRecord.class,
             EnumSet.of(Capability.KIND_ENTITY),
             AccessPattern.INDEXED_KV);
 

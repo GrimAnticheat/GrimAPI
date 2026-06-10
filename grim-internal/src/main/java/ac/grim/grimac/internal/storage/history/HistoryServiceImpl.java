@@ -19,7 +19,15 @@ import ac.grim.grimac.api.storage.model.ViolationRecord;
 import ac.grim.grimac.api.storage.query.Cursor;
 import ac.grim.grimac.api.storage.query.Page;
 import ac.grim.grimac.api.storage.query.Queries;
+import ac.grim.grimac.api.storage.verbose.VerboseBuf;
+import ac.grim.grimac.api.storage.verbose.VerboseFormatter;
+import ac.grim.grimac.api.storage.verbose.VerboseRenderContext;
+import ac.grim.grimac.api.storage.verbose.VerboseSchema;
+import ac.grim.grimac.api.storage.verbose.VerboseSink;
 import ac.grim.grimac.internal.storage.checks.CheckRegistry;
+import ac.grim.grimac.internal.storage.verbose.GenericVerboseReader;
+import ac.grim.grimac.internal.storage.verbose.VerboseManifest;
+import ac.grim.grimac.internal.storage.verbose.VerboseRegistry;
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
@@ -61,7 +69,9 @@ public final class HistoryServiceImpl implements HistoryService {
      */
     private volatile @Nullable EventStreamCategory<ViolationEvent, ViolationRecord> v2Violations;
     private volatile @Nullable Category<ServerStartupEvent> v2Startups;
+    private volatile @Nullable VerboseRegistry verboseRegistry;
     private final Map<UUID, ServerStartupRecord> startupCache = new ConcurrentHashMap<>();
+    private final Map<UUID, VerboseManifest.Decoded> verboseManifestCache = new ConcurrentHashMap<>();
 
     public HistoryServiceImpl(@NotNull DataStore store, @NotNull CheckRegistry checks,
                               int defaultPageSize, long defaultGroupIntervalMs) {
@@ -69,6 +79,13 @@ public final class HistoryServiceImpl implements HistoryService {
         this.checks = checks;
         this.defaultPageSize = defaultPageSize;
         this.defaultGroupIntervalMs = defaultGroupIntervalMs;
+    }
+
+    public HistoryServiceImpl(@NotNull DataStore store, @NotNull CheckRegistry checks,
+                              int defaultPageSize, long defaultGroupIntervalMs,
+                              @Nullable VerboseRegistry verboseRegistry) {
+        this(store, checks, defaultPageSize, defaultGroupIntervalMs);
+        this.verboseRegistry = verboseRegistry;
     }
 
     /**
@@ -83,6 +100,12 @@ public final class HistoryServiceImpl implements HistoryService {
     /** Install the v2 server-startup category for startup metadata resolution. */
     public HistoryServiceImpl withV2Startups(@NotNull Category<ServerStartupEvent> v2) {
         this.v2Startups = v2;
+        return this;
+    }
+
+    /** Install the binary verbose registry used by history rendering. */
+    public HistoryServiceImpl withVerboseRegistry(@NotNull VerboseRegistry registry) {
+        this.verboseRegistry = registry;
         return this;
     }
 
@@ -293,7 +316,11 @@ public final class HistoryServiceImpl implements HistoryService {
             String description = checks.descriptionFor(v.checkId()).orElse("");
             entries.add(new ViolationEntry(
                     v.checkId(), stable, display, description,
-                    offset, v.vl(), renderVerbose(v.verboseData(), startup, v.checkId()),
+                    offset, v.vl(), renderVerbose(
+                            v.verboseData(),
+                            startup,
+                            v.checkId(),
+                            new VerboseRenderContext(s.clientVersion(), serverVersion(s, startup))),
                     ac.grim.grimac.api.storage.model.VerboseFormat.TEXT));
 
             long bucket = offset / bucketSize;
@@ -374,15 +401,108 @@ public final class HistoryServiceImpl implements HistoryService {
         return startup != null ? startup.grimVersion() : session.grimVersion();
     }
 
-    private static @Nullable String renderVerbose(
+    private static @Nullable String serverVersion(
+            @NotNull SessionRecord session,
+            @Nullable ServerStartupRecord startup) {
+        String startupVersion = startup == null ? null : startup.serverVersionString();
+        return startupVersion != null ? startupVersion : session.serverVersionString();
+    }
+
+    @Nullable String renderVerbose(
             @Nullable byte[] verboseData,
             @Nullable ServerStartupRecord startup,
-            int checkId) {
+            int checkId,
+            @NotNull VerboseRenderContext ctx) {
         if (verboseData == null || verboseData.length == 0) return null;
-        byte[] manifest = startup == null ? null : startup.verboseManifest();
-        // Empty or absent manifest means the payload is legacy UTF-8 text.
-        // Check-specific binary decoders plug in here once the hot checks are
-        // ported; unsupported binary payloads must never break history reads.
+        VerboseManifest.Decoded manifest = startup == null ? null : decodedManifest(startup);
+        if (manifest == null) return renderText(verboseData);
+
+        int version = manifest.codecVersionOrText(checkId);
+        if (!manifest.supported() || version <= 0) return renderText(verboseData);
+
+        int flavor = manifest.flavor();
+        VerboseRegistry registry = this.verboseRegistry;
+        if (registry != null) {
+            VerboseFormatter formatter = safeFormatter(registry, flavor, checkId, version);
+            if (formatter != null) {
+                try {
+                    StringBuilder rendered = new StringBuilder();
+                    formatter.render(VerboseBuf.wrap(verboseData), ctx, VerboseSink.into(rendered));
+                    return rendered.toString();
+                } catch (Throwable ignored) {
+                    return placeholder(verboseData, version, "decode failed");
+                }
+            }
+
+            VerboseSchema.Layout layout = safeLayout(registry, flavor, checkId, version);
+            if (layout != null) {
+                try {
+                    StringBuilder rendered = new StringBuilder();
+                    GenericVerboseReader.render(layout, VerboseBuf.wrap(verboseData), ctx, VerboseSink.into(rendered));
+                    return rendered.toString();
+                } catch (GenericVerboseReader.UnderflowException | RuntimeException ignored) {
+                    return placeholder(verboseData, version, "decode failed");
+                }
+            }
+        }
+        return placeholder(verboseData, version, "schema unavailable");
+    }
+
+    private @Nullable VerboseManifest.Decoded decodedManifest(@NotNull ServerStartupRecord startup) {
+        byte[] manifest = startup.verboseManifest();
+        if (manifest == null || manifest.length == 0) return null;
+        return verboseManifestCache.computeIfAbsent(startup.startupId(), ignored -> {
+            try {
+                return VerboseManifest.decode(manifest);
+            } catch (RuntimeException e) {
+                return new VerboseManifest.Decoded(
+                        0, VerboseManifest.FLAVOR_UNKNOWN, Map.of(), false);
+            }
+        });
+    }
+
+    private static @Nullable VerboseFormatter safeFormatter(
+            @NotNull VerboseRegistry registry,
+            int flavor,
+            int checkId,
+            int version) {
+        try {
+            return registry.codeFormatter(flavor, checkId, version);
+        } catch (RuntimeException e) {
+            return null;
+        }
+    }
+
+    private static @Nullable VerboseSchema.Layout safeLayout(
+            @NotNull VerboseRegistry registry,
+            int flavor,
+            int checkId,
+            int version) {
+        try {
+            return registry.layout(flavor, checkId, version);
+        } catch (RuntimeException e) {
+            return null;
+        }
+    }
+
+    private static @NotNull String renderText(byte @NotNull [] verboseData) {
         return new String(verboseData, StandardCharsets.UTF_8);
+    }
+
+    private static @NotNull String placeholder(byte @NotNull [] verboseData, int version, @NotNull String reason) {
+        return "[binary verbose v" + version + ", " + reason + "] " + hex(verboseData);
+    }
+
+    private static @NotNull String hex(byte @NotNull [] bytes) {
+        char[] out = new char[2 + bytes.length * 2];
+        out[0] = '0';
+        out[1] = 'x';
+        char[] digits = "0123456789abcdef".toCharArray();
+        int j = 2;
+        for (byte b : bytes) {
+            out[j++] = digits[(b >>> 4) & 0x0F];
+            out[j++] = digits[b & 0x0F];
+        }
+        return new String(out);
     }
 }
