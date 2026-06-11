@@ -32,7 +32,7 @@ public record ServerStartupRecord(
         @Value @Name("last_heartbeat")                        long lastHeartbeatEpochMs,
         @Value @Name("closed_at") @Sentinel(OPEN)             long closedAtEpochMs,
         @Value @Name("close_reason") @Nullable @PreserveOnNonNull String closeReason,
-        @Value @Name("verbose_manifest") @Nullable @PreserveOnNonNull byte[] verboseManifest) {
+        @Value @Name("verbose_manifest") @Nullable byte[] verboseManifest) {
 
     public static final long OPEN = 0L;
 

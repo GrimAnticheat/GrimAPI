@@ -263,9 +263,22 @@ class V2BackendIntegrationTest {
         UUID firstStartup = UUID.randomUUID();
         UUID secondStartup = UUID.randomUUID();
         UUID closedStartup = UUID.randomUUID();
-        writeStartup(startupHandler, firstStartup, instance, "test", now - 3000L, now - 2000L, ServerStartupRecord.OPEN);
+        byte[] emptyManifest = new byte[] {1, 1, 0, 0};
+        byte[] grownManifest = new byte[] {1, 1, 0, 1, 42, 7};
+        writeStartup(startupHandler, firstStartup, instance, "test", now - 3000L, now - 2000L,
+                ServerStartupRecord.OPEN, emptyManifest);
+        writeStartup(startupHandler, firstStartup, instance, "test", now - 3000L, now - 1500L,
+                ServerStartupRecord.OPEN, grownManifest);
         writeStartup(startupHandler, secondStartup, instance, "test", now - 2000L, now - 1000L, ServerStartupRecord.OPEN);
         writeStartup(startupHandler, closedStartup, instance, "test", now - 1000L, now, now + 1000L);
+
+        EntityOps.GetByIdOp<UUID, ServerStartupRecord> firstStartupById = new EntityOps.GetByIdOp<>(
+                Categories.SERVER_STARTUP, firstStartup);
+        Optional<ServerStartupRecord> firstStartupRecord = (Optional<ServerStartupRecord>)
+                startupAdapter.execute(startupStore, startupsKind, firstStartupById);
+        assertTrue(firstStartupRecord.isPresent(), backend.id() + ": startup row reloads by id");
+        assertArrayEquals(grownManifest, firstStartupRecord.get().verboseManifest(),
+                backend.id() + ": startup verbose manifest grows after lazy template registration");
 
         EntityOps.FindByIndexOp<ServerStartupRecord> byInstanceOpenOp = new EntityOps.FindByIndexOp<>(
             Categories.SERVER_STARTUP, "by_instance_open", instance, null, 10);
@@ -368,6 +381,12 @@ class V2BackendIntegrationTest {
     private static void writeStartup(ac.grim.grimac.api.storage.backend.StorageEventHandler<ServerStartupEvent> handler,
                                      UUID startupId, UUID instanceId, String serverName, long started,
                                      long lastHeartbeat, long closedAt) throws Exception {
+        writeStartup(handler, startupId, instanceId, serverName, started, lastHeartbeat, closedAt, null);
+    }
+
+    private static void writeStartup(ac.grim.grimac.api.storage.backend.StorageEventHandler<ServerStartupEvent> handler,
+                                     UUID startupId, UUID instanceId, String serverName, long started,
+                                     long lastHeartbeat, long closedAt, byte[] verboseManifest) throws Exception {
         ServerStartupEvent se = new ServerStartupEvent();
         se.startupId(startupId)
             .instanceId(instanceId)
@@ -378,7 +397,8 @@ class V2BackendIntegrationTest {
             .grimVersion("test")
             .serverVersionString("1.21.11")
             .hostname("localhost")
-            .closeReason(closedAt == ServerStartupRecord.OPEN ? null : "graceful");
+            .closeReason(closedAt == ServerStartupRecord.OPEN ? null : "graceful")
+            .verboseManifest(verboseManifest);
         handler.onEvent(se, 0L, true);
     }
 
