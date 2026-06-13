@@ -29,6 +29,7 @@ import java.nio.file.Path;
 import java.util.UUID;
 import java.util.logging.Logger;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 
@@ -83,10 +84,16 @@ class SqliteBackendDialectTest {
 
             // --- violations: 5 rows (no upsert, plain insert) ---
             StorageEventHandler<ViolationEvent> vh = b.eventHandlerFor(Categories.VIOLATION);
+            byte[] structuredPayload = new byte[] {0x01, (byte) 0xff, 0x02};
             for (int i = 0; i < 5; i++) {
                 ViolationEvent v = new ViolationEvent();
                 v.id(UuidV7.fromTimestampMs(t0, i + 1L)).sessionId(session).playerUuid(player).checkId(42 + i).vl(1.0 + i)
-                        .occurredEpochMs(t0).verbose("v" + i).verboseFormat(VerboseFormat.TEXT);
+                        .occurredEpochMs(t0);
+                if (i == 0) {
+                    v.verboseData(structuredPayload).verboseFormat(VerboseFormat.STRUCTURED_V1);
+                } else {
+                    v.verbose("v" + i).verboseFormat(VerboseFormat.TEXT);
+                }
                 vh.onEvent(v, i, i == 4);
             }
 
@@ -124,6 +131,12 @@ class SqliteBackendDialectTest {
             Page<ViolationRecord> vs = b.read(Categories.VIOLATION,
                     new Queries.ListViolationsInSession(session, 10, null));
             assertEquals(5, vs.items().size(), "violation row count");
+            ViolationRecord structuredViolation = vs.items().stream()
+                    .filter(v -> v.checkId() == 42)
+                    .findFirst()
+                    .orElseThrow();
+            assertEquals(VerboseFormat.STRUCTURED_V1, structuredViolation.verboseFormat(), "structured verbose format");
+            assertArrayEquals(structuredPayload, structuredViolation.verboseData(), "structured verbose bytes");
 
             Page<SettingRecord> sr = b.read(Categories.SETTING,
                     new Queries.GetSetting(SettingScope.SERVER, "grim-core", "hello"));

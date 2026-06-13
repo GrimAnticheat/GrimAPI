@@ -35,12 +35,25 @@ public record ViolationRecord(
         @Partition                                             int checkId,
         @Value                                                 double vl,
         @Timestamp @Name("occurred_at")                        long occurredEpochMs,
-        @Value @Name("verbose") @Nullable                      byte[] verboseData) {
+        @Value @Name("verbose") @Nullable                      byte[] verboseData,
+        @Value @Name("verbose_format")                         VerboseFormat verboseFormat) {
 
     public ViolationRecord {
         if (id == null) throw new IllegalArgumentException("id");
         if (sessionId == null) throw new IllegalArgumentException("sessionId");
         if (playerUuid == null) throw new IllegalArgumentException("playerUuid");
+        if (verboseFormat == null) verboseFormat = VerboseFormat.TEXT;
+    }
+
+    public ViolationRecord(
+            UUID id,
+            UUID sessionId,
+            UUID playerUuid,
+            int checkId,
+            double vl,
+            long occurredEpochMs,
+            byte[] verboseData) {
+        this(id, sessionId, playerUuid, checkId, vl, occurredEpochMs, verboseData, VerboseFormat.TEXT);
     }
 
     public ViolationRecord(
@@ -53,14 +66,12 @@ public record ViolationRecord(
             @org.jetbrains.annotations.Nullable String verbose,
             VerboseFormat verboseFormat) {
         this(id, sessionId, playerUuid, checkId, vl, occurredEpochMs,
-                verbose == null ? null : verbose.getBytes(StandardCharsets.UTF_8));
+                verbose == null ? null : verbose.getBytes(StandardCharsets.UTF_8),
+                verboseFormat);
     }
 
     public @org.jetbrains.annotations.Nullable String verbose() {
         return verboseData == null ? null : new String(verboseData, StandardCharsets.UTF_8);
     }
 
-    public VerboseFormat verboseFormat() {
-        return VerboseFormat.TEXT;
-    }
 }

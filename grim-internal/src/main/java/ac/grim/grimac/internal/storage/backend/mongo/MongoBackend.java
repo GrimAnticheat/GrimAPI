@@ -57,6 +57,7 @@ import org.jetbrains.annotations.NotNull;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Base64;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.Locale;
@@ -346,7 +347,8 @@ public final class MongoBackend implements Backend {
         protected void append(ViolationEvent v) {
             UUID id = v.id();
             pending.add(new InsertOneModel<>(violationDoc(id, v.sessionId(), v.playerUuid(),
-                    v.checkId(), v.vl(), v.occurredEpochMs(), v.verbose(), v.verboseFormat())));
+                    v.checkId(), v.vl(), v.occurredEpochMs(),
+                    encodeVerbose(v.verboseData(), v.verboseFormat()), v.verboseFormat())));
         }
     }
 
@@ -536,7 +538,7 @@ public final class MongoBackend implements Backend {
         List<Document> docs = new ArrayList<>(rows.size());
         for (ViolationRecord v : rows) {
             docs.add(violationDoc(v.id(), v.sessionId(), v.playerUuid(), v.checkId(), v.vl(),
-                    v.occurredEpochMs(), verboseString(v.verboseData()), VerboseFormat.TEXT));
+                    v.occurredEpochMs(), encodeVerbose(v.verboseData(), v.verboseFormat()), v.verboseFormat()));
         }
         if (!docs.isEmpty()) {
             violations.insertMany(docs, new InsertManyOptions().ordered(false));
@@ -735,8 +737,20 @@ public final class MongoBackend implements Backend {
         return binBytes(raw);
     }
 
-    private static String verboseString(byte[] verboseData) {
-        return verboseData == null ? null : new String(verboseData, StandardCharsets.UTF_8);
+    private static String encodeVerbose(byte[] verboseData, VerboseFormat verboseFormat) {
+        if (verboseData == null) return null;
+        if (verboseFormat == VerboseFormat.STRUCTURED_V1) {
+            return Base64.getEncoder().encodeToString(verboseData);
+        }
+        return new String(verboseData, StandardCharsets.UTF_8);
+    }
+
+    private static byte[] decodeVerbose(Object raw, VerboseFormat verboseFormat) {
+        if (raw == null) return null;
+        if (verboseFormat == VerboseFormat.STRUCTURED_V1 && raw instanceof String s) {
+            return Base64.getDecoder().decode(s);
+        }
+        return verboseBytes(raw);
     }
 
     private static SessionRecord mapSession(Document d) {
@@ -759,6 +773,7 @@ public final class MongoBackend implements Backend {
     }
 
     private static ViolationRecord mapViolation(Document d) {
+        VerboseFormat verboseFormat = VerboseFormat.fromCode(d.getInteger("verbose_format", 0));
         return new ViolationRecord(
                 UuidCodec.fromBytes(binBytes(d.get("id"))),
                 UuidCodec.fromBytes(binBytes(d.get("session_id"))),
@@ -766,7 +781,8 @@ public final class MongoBackend implements Backend {
                 d.getInteger("check_id"),
                 d.getDouble("vl"),
                 d.getLong("occurred_at"),
-                verboseBytes(d.get("verbose")));
+                decodeVerbose(d.get("verbose"), verboseFormat),
+                verboseFormat);
     }
 
     private static PlayerIdentity mapIdentity(Document d) {

@@ -87,7 +87,8 @@ public final class V2BuiltinKinds {
             e.checkId(),
             e.vl(),
             e.occurredEpochMs(),
-            e.verboseData());
+            e.verboseData(),
+            e.verboseFormat());
     }
 
     /**

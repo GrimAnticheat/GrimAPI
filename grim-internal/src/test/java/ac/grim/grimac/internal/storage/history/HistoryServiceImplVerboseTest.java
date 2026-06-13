@@ -7,6 +7,7 @@ import ac.grim.grimac.api.storage.category.Category;
 import ac.grim.grimac.api.storage.check.CheckCatalogRow;
 import ac.grim.grimac.api.storage.kind.Operation;
 import ac.grim.grimac.api.storage.model.ServerStartupRecord;
+import ac.grim.grimac.api.storage.model.VerboseFormat;
 import ac.grim.grimac.api.storage.query.DeleteCriteria;
 import ac.grim.grimac.api.storage.query.Page;
 import ac.grim.grimac.api.storage.query.Query;
@@ -42,11 +43,28 @@ class HistoryServiceImplVerboseTest {
 
         String rendered = history.renderVerbose(
                 text,
+                VerboseFormat.STRUCTURED_V1,
                 startup(VerboseManifest.textOnly(VerboseManifest.FLAVOR_V2_PUBLIC)),
                 42,
                 UNKNOWN_CONTEXT);
 
         assertEquals("legacy verbose", rendered);
+    }
+
+    @Test
+    void renderVerboseUsesTextDirectlyForTextFormat() {
+        VerboseSchema schema = VerboseSchema.of(1, "offset:f64");
+        HistoryServiceImpl history = history(new FixedVerboseRegistry(VerboseSchema.decodeLayout(schema.layoutBytes())));
+        byte[] text = "plain text".getBytes(StandardCharsets.UTF_8);
+
+        String rendered = history.renderVerbose(
+                text,
+                VerboseFormat.TEXT,
+                startup(VerboseManifest.encode(VerboseManifest.FLAVOR_V2_PUBLIC, Map.of(42, 1))),
+                42,
+                UNKNOWN_CONTEXT);
+
+        assertEquals("plain text", rendered);
     }
 
     @Test
@@ -57,6 +75,7 @@ class HistoryServiceImplVerboseTest {
 
         String rendered = history.renderVerbose(
                 payload,
+                VerboseFormat.STRUCTURED_V1,
                 startup(VerboseManifest.encode(VerboseManifest.FLAVOR_V2_PUBLIC, Map.of(42, 1))),
                 42,
                 UNKNOWN_CONTEXT);
@@ -70,6 +89,7 @@ class HistoryServiceImplVerboseTest {
 
         String rendered = history.renderVerbose(
                 new byte[] {0x01, 0x02},
+                VerboseFormat.STRUCTURED_V1,
                 startup(VerboseManifest.encode(VerboseManifest.FLAVOR_V2_PUBLIC, Map.of(42, 1))),
                 42,
                 UNKNOWN_CONTEXT);
@@ -92,6 +112,7 @@ class HistoryServiceImplVerboseTest {
 
         String rendered = history.renderVerbose(
                 new byte[] {0x01},
+                VerboseFormat.STRUCTURED_V1,
                 startup(VerboseManifest.encode(VerboseManifest.FLAVOR_V2_PUBLIC, Map.of(42, 1))),
                 42,
                 new VerboseRenderContext(772, "1.21.11"));

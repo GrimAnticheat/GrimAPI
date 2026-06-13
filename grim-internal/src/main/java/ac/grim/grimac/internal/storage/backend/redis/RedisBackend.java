@@ -299,9 +299,9 @@ public final class RedisBackend implements Backend {
             h.put("check_id", Integer.toString(v.checkId()));
             h.put("vl", Double.toString(v.vl()));
             h.put("occurred_at", Long.toString(v.occurredEpochMs()));
-            String verbose = verboseString(v.verboseData());
+            String verbose = encodeVerbose(v.verboseData(), v.verboseFormat());
             if (verbose != null) h.put("verbose", verbose);
-            h.put("verbose_format", Integer.toString(VerboseFormat.TEXT.code()));
+            h.put("verbose_format", Integer.toString(v.verboseFormat().code()));
             Pipeline p = j.pipelined();
             p.hset(recordKey, h);
             p.zadd(tableKey(config.tableNames().violations()) + ":by-session:" + sessionHex, v.occurredEpochMs(), idHex);
@@ -420,9 +420,9 @@ public final class RedisBackend implements Backend {
             h.put("check_id", Integer.toString(v.checkId()));
             h.put("vl", Double.toString(v.vl()));
             h.put("occurred_at", Long.toString(v.occurredEpochMs()));
-            String verbose = verboseString(v.verboseData());
+            String verbose = encodeVerbose(v.verboseData(), v.verboseFormat());
             if (verbose != null) h.put("verbose", verbose);
-            h.put("verbose_format", Integer.toString(VerboseFormat.TEXT.code()));
+            h.put("verbose_format", Integer.toString(v.verboseFormat().code()));
             Pipeline p = j.pipelined();
             p.hset(key, h);
             p.zadd(tableKey(config.tableNames().violations()) + ":by-session:" + sessionHex, v.occurredEpochMs(), idHex);
@@ -663,6 +663,7 @@ public final class RedisBackend implements Backend {
     }
 
     private static ViolationRecord mapViolation(Map<String, String> h) {
+        VerboseFormat verboseFormat = VerboseFormat.fromCode(Integer.parseInt(h.getOrDefault("verbose_format", "0")));
         return new ViolationRecord(
                 fromHex(h.get("id")),
                 fromHex(h.get("session_id")),
@@ -670,7 +671,8 @@ public final class RedisBackend implements Backend {
                 Integer.parseInt(h.get("check_id")),
                 Double.parseDouble(h.get("vl")),
                 Long.parseLong(h.get("occurred_at")),
-                h.get("verbose") == null ? null : h.get("verbose").getBytes(StandardCharsets.UTF_8));
+                decodeVerbose(h.get("verbose"), verboseFormat),
+                verboseFormat);
     }
 
     private static PlayerIdentity mapIdentity(Map<String, String> h) {
@@ -690,8 +692,20 @@ public final class RedisBackend implements Backend {
                 Long.parseLong(h.get("updated_at")));
     }
 
-    private static String verboseString(byte[] verboseData) {
-        return verboseData == null ? null : new String(verboseData, StandardCharsets.UTF_8);
+    private static String encodeVerbose(byte[] verboseData, VerboseFormat verboseFormat) {
+        if (verboseData == null) return null;
+        if (verboseFormat == VerboseFormat.STRUCTURED_V1) {
+            return Base64.getEncoder().encodeToString(verboseData);
+        }
+        return new String(verboseData, StandardCharsets.UTF_8);
+    }
+
+    private static byte[] decodeVerbose(String verbose, VerboseFormat verboseFormat) {
+        if (verbose == null) return null;
+        if (verboseFormat == VerboseFormat.STRUCTURED_V1) {
+            return Base64.getDecoder().decode(verbose);
+        }
+        return verbose.getBytes(StandardCharsets.UTF_8);
     }
 
     @Override

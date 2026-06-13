@@ -44,6 +44,7 @@ import java.util.UUID;
 import java.util.logging.Logger;
 import java.util.stream.Stream;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -172,10 +173,16 @@ class BackendIntegrationTest {
 
             // --- violations ---
             StorageEventHandler<ViolationEvent> vh = b.eventHandlerFor(Categories.VIOLATION);
+            byte[] structuredPayload = new byte[] {0x01, (byte) 0xff, 0x02};
             for (int i = 0; i < 5; i++) {
                 ViolationEvent v = new ViolationEvent();
                 v.id(UuidV7.fromTimestampMs(now, i + 1L)).sessionId(session).playerUuid(player).checkId(42 + i).vl(1.0 + i)
-                        .occurredEpochMs(now).verbose("v" + i).verboseFormat(VerboseFormat.TEXT);
+                        .occurredEpochMs(now);
+                if (i == 0) {
+                    v.verboseData(structuredPayload).verboseFormat(VerboseFormat.STRUCTURED_V1);
+                } else {
+                    v.verbose("v" + i).verboseFormat(VerboseFormat.TEXT);
+                }
                 vh.onEvent(v, i, i == 4);
             }
 
@@ -205,6 +212,12 @@ class BackendIntegrationTest {
             Page<ViolationRecord> vs = b.read(Categories.VIOLATION,
                     new Queries.ListViolationsInSession(session, 10, null));
             assertEquals(5, vs.items().size(), label + ": violation page size");
+            ViolationRecord structuredViolation = vs.items().stream()
+                    .filter(v -> v.checkId() == 42)
+                    .findFirst()
+                    .orElseThrow();
+            assertEquals(VerboseFormat.STRUCTURED_V1, structuredViolation.verboseFormat(), label + ": structured verbose format");
+            assertArrayEquals(structuredPayload, structuredViolation.verboseData(), label + ": structured verbose bytes");
 
             assertEquals(5L, b.countViolationsInSession(session), label + ": countViolationsInSession");
             assertEquals(5L, b.countUniqueChecksInSession(session), label + ": countUniqueChecksInSession");

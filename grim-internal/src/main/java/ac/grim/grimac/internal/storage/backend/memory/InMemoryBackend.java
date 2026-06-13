@@ -164,7 +164,7 @@ public final class InMemoryBackend implements Backend {
         UUID id = v.id();
         ViolationRecord stored = new ViolationRecord(
                 id, v.sessionId(), v.playerUuid(), v.checkId(), v.vl(),
-                v.occurredEpochMs(), v.verboseData());
+                v.occurredEpochMs(), v.verboseData(), v.verboseFormat());
         synchronized (writeMutex) {
             violationsBySession.computeIfAbsent(stored.sessionId(), k -> new ArrayList<>()).add(stored);
             violationsByPlayer.computeIfAbsent(stored.playerUuid(), k -> new ArrayList<>()).add(stored);
@@ -259,7 +259,8 @@ public final class InMemoryBackend implements Backend {
                         catalogId,
                         v.vl(),
                         v.occurredEpochMs(),
-                        v.verboseData()));
+                        v.verboseData(),
+                        v.verboseFormat()));
                 updated++;
             }
         }

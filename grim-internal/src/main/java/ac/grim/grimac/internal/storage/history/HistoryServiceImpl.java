@@ -319,10 +319,11 @@ public final class HistoryServiceImpl implements HistoryService {
                     v.checkId(), stable, display, description,
                     offset, v.vl(), renderVerbose(
                             v.verboseData(),
+                            v.verboseFormat(),
                             startup,
                             v.checkId(),
                             new VerboseRenderContext(s.clientVersion(), serverVersion(s, startup))),
-                    ac.grim.grimac.api.storage.model.VerboseFormat.TEXT));
+                    v.verboseFormat()));
 
             long bucket = offset / bucketSize;
             bucketCounts.computeIfAbsent(bucket, k -> new LinkedHashMap<>())
@@ -411,10 +412,12 @@ public final class HistoryServiceImpl implements HistoryService {
 
     @Nullable String renderVerbose(
             @Nullable byte[] verboseData,
+            @NotNull ac.grim.grimac.api.storage.model.VerboseFormat verboseFormat,
             @Nullable ServerStartupRecord startup,
             int checkId,
             @NotNull VerboseRenderContext ctx) {
         if (verboseData == null || verboseData.length == 0) return null;
+        if (verboseFormat == ac.grim.grimac.api.storage.model.VerboseFormat.TEXT) return renderText(verboseData);
         VerboseManifest.Decoded manifest = startup == null ? null : decodedManifest(startup);
         if (manifest == null) return renderText(verboseData);
 

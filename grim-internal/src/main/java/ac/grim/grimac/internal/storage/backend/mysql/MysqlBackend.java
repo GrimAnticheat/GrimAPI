@@ -466,7 +466,7 @@ public final class MysqlBackend implements Backend {
             int checkId = v.checkId();
             double vl = v.vl();
             long occurredEpochMs = v.occurredEpochMs();
-            String verbose = v.verbose();
+            byte[] verboseData = v.verboseData();
             int verboseFormat = v.verboseFormat().code();
             return ps -> {
                 ps.setBytes(1, UuidCodec.toBytes(id));
@@ -475,7 +475,7 @@ public final class MysqlBackend implements Backend {
                 ps.setInt(4, checkId);
                 ps.setDouble(5, vl);
                 ps.setLong(6, occurredEpochMs);
-                ps.setString(7, verbose);
+                ps.setString(7, encodeVerbose(verboseData, VerboseFormat.fromCode(verboseFormat)));
                 ps.setInt(8, verboseFormat);
             };
         }
@@ -596,8 +596,8 @@ public final class MysqlBackend implements Backend {
                 ps.setInt(4, v.checkId());
                 ps.setDouble(5, v.vl());
                 ps.setLong(6, v.occurredEpochMs());
-                ps.setString(7, verboseString(v.verboseData()));
-                ps.setInt(8, VerboseFormat.TEXT.code());
+                ps.setString(7, encodeVerbose(v.verboseData(), v.verboseFormat()));
+                ps.setInt(8, v.verboseFormat().code());
                 ps.addBatch();
             }
             ps.executeBatch();
@@ -830,6 +830,7 @@ public final class MysqlBackend implements Backend {
     }
 
     private static ViolationRecord mapViolation(ResultSet rs) throws SQLException {
+        VerboseFormat verboseFormat = VerboseFormat.fromCode(rs.getInt("verbose_format"));
         return new ViolationRecord(
                 UuidCodec.fromBytes(rs.getBytes("id")),
                 UuidCodec.fromBytes(rs.getBytes("session_id")),
@@ -837,7 +838,8 @@ public final class MysqlBackend implements Backend {
                 rs.getInt("check_id"),
                 rs.getDouble("vl"),
                 rs.getLong("occurred_at"),
-                rs.getBytes("verbose"));
+                decodeVerbose(rs.getString("verbose"), verboseFormat),
+                verboseFormat);
     }
 
     private static PlayerIdentity mapIdentity(ResultSet rs) throws SQLException {
@@ -857,8 +859,20 @@ public final class MysqlBackend implements Backend {
                 rs.getLong("updated_at"));
     }
 
-    private static String verboseString(byte[] verboseData) {
-        return verboseData == null ? null : new String(verboseData, java.nio.charset.StandardCharsets.UTF_8);
+    private static String encodeVerbose(byte[] verboseData, VerboseFormat verboseFormat) {
+        if (verboseData == null) return null;
+        if (verboseFormat == VerboseFormat.STRUCTURED_V1) {
+            return java.util.Base64.getEncoder().encodeToString(verboseData);
+        }
+        return new String(verboseData, java.nio.charset.StandardCharsets.UTF_8);
+    }
+
+    private static byte[] decodeVerbose(String verbose, VerboseFormat verboseFormat) {
+        if (verbose == null) return null;
+        if (verboseFormat == VerboseFormat.STRUCTURED_V1) {
+            return java.util.Base64.getDecoder().decode(verbose);
+        }
+        return verbose.getBytes(java.nio.charset.StandardCharsets.UTF_8);
     }
 
     @Override
