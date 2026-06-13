@@ -6,8 +6,9 @@ import ac.grim.grimac.api.storage.DeletionReport;
 import ac.grim.grimac.api.storage.category.Categories;
 import ac.grim.grimac.api.storage.category.Category;
 import ac.grim.grimac.api.storage.check.CheckCatalogRow;
-import ac.grim.grimac.api.storage.event.CheckCatalogEvent;
 import ac.grim.grimac.api.storage.kind.Operation;
+import ac.grim.grimac.api.storage.kind.ops.EntityOps;
+import ac.grim.grimac.api.storage.model.CheckCatalogRecord;
 import ac.grim.grimac.api.storage.query.DeleteCriteria;
 import ac.grim.grimac.api.storage.query.Page;
 import ac.grim.grimac.api.storage.query.Query;
@@ -27,7 +28,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 class DataStoreCheckCatalogPersistenceTest {
 
     @Test
-    void insertAllocatesLocallyAndSubmitsRoutedCatalogEvent() {
+    void insertAllocatesLocallyAndPersistsRoutedCatalogRecord() {
         CapturingDataStore store = new CapturingDataStore();
         DataStoreCheckCatalogPersistence persistence = new DataStoreCheckCatalogPersistence(
                 List.of(new CheckCatalogRow(7, "existing", "Existing", null, "2.0", 1L)),
@@ -39,14 +40,14 @@ class DataStoreCheckCatalogPersistenceTest {
 
         assertEquals(7, existing);
         assertEquals(8, inserted);
-        assertEquals(1, store.events.size(), "existing row is served from local cache");
-        CheckCatalogEvent event = store.events.get(0);
-        assertEquals("new.check", event.stableKey());
-        assertEquals(8, event.checkId());
-        assertEquals("NewCheck", event.display());
-        assertEquals("desc", event.description());
-        assertEquals("3.0", event.introducedVersion());
-        assertEquals(2L, event.introducedAt());
+        assertEquals(1, store.records.size(), "existing row is served from local cache");
+        CheckCatalogRecord record = store.records.get(0);
+        assertEquals("new.check", record.stableKey());
+        assertEquals(8, record.checkId());
+        assertEquals("NewCheck", record.display());
+        assertEquals("desc", record.description());
+        assertEquals("3.0", record.introducedVersion());
+        assertEquals(2L, record.introducedAt());
     }
 
     @Test
@@ -63,7 +64,7 @@ class DataStoreCheckCatalogPersistenceTest {
     }
 
     @Test
-    void updateDisplaySubmitsReplacementRow() {
+    void updateDisplayPersistsReplacementRow() {
         CapturingDataStore store = new CapturingDataStore();
         DataStoreCheckCatalogPersistence persistence = new DataStoreCheckCatalogPersistence(
                 List.of(new CheckCatalogRow(4, "existing", "Old", "old", "2.0", 1L)),
@@ -72,28 +73,22 @@ class DataStoreCheckCatalogPersistenceTest {
 
         persistence.updateDisplayAndDescription(4, "New", "new");
 
-        assertEquals(1, store.events.size());
-        CheckCatalogEvent event = store.events.get(0);
-        assertEquals("existing", event.stableKey());
-        assertEquals(4, event.checkId());
-        assertEquals("New", event.display());
-        assertEquals("new", event.description());
-        assertEquals("2.0", event.introducedVersion());
-        assertEquals(1L, event.introducedAt());
+        assertEquals(1, store.records.size());
+        CheckCatalogRecord record = store.records.get(0);
+        assertEquals("existing", record.stableKey());
+        assertEquals(4, record.checkId());
+        assertEquals("New", record.display());
+        assertEquals("new", record.description());
+        assertEquals("2.0", record.introducedVersion());
+        assertEquals(1L, record.introducedAt());
     }
 
     private static final class CapturingDataStore implements DataStore {
-        final List<CheckCatalogEvent> events = new ArrayList<>();
+        final List<CheckCatalogRecord> records = new ArrayList<>();
 
         @Override
-        @SuppressWarnings("unchecked")
         public <E> void submit(Category<E> cat, Consumer<E> configurer) {
-            if (cat != Categories.CHECK_CATALOG) {
-                throw new AssertionError("unexpected category " + cat.id());
-            }
-            CheckCatalogEvent event = new CheckCatalogEvent();
-            configurer.accept((E) event);
-            events.add(event);
+            throw new AssertionError("unexpected ring submit for " + cat.id());
         }
 
         @Override
@@ -102,7 +97,14 @@ class DataStoreCheckCatalogPersistenceTest {
         }
 
         @Override
+        @SuppressWarnings("unchecked")
         public <R> CompletionStage<R> execute(Operation<R> op) {
+            if (op instanceof EntityOps.UpsertOp<?> upsert
+                    && upsert.category() == Categories.CHECK_CATALOG
+                    && upsert.record() instanceof CheckCatalogRecord record) {
+                records.add(record);
+                return CompletableFuture.completedFuture(null);
+            }
             return CompletableFuture.failedFuture(new UnsupportedOperationException());
         }
 

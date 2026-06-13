@@ -19,10 +19,10 @@ public interface VerboseRegistry {
     void registerFormatter(@NotNull String stableKey, @NotNull VerboseFormatter formatter);
 
     /**
-     * Intern a template-described verbose format on first use. Idempotent and
-     * cheap when already registered; on a new registration the check is
-     * interned, the schema record (layout + template text) is persisted, and
-     * the change listener fires so the startup manifest can be republished.
+     * Intern a template-described verbose format during check/template registration.
+     * On a new registration the check is interned, the schema record (layout +
+     * template text) is persisted, and the change listener fires so the startup
+     * manifest can be republished.
      */
     void registerTemplate(
             @NotNull String stableKey,
@@ -30,6 +30,15 @@ public interface VerboseRegistry {
             @Nullable String description,
             @Nullable String pluginVersion,
             @NotNull Verbose verbose);
+
+    /**
+     * Run multiple template registrations as one manifest change. Implementations
+     * still persist each check/schema row immediately, but should notify the
+     * startup-manifest listener once after the batch instead of once per template.
+     */
+    default void registerTemplates(@NotNull Runnable registration) {
+        registration.run();
+    }
 
     /** Invoked after a new template registration lands; replaces any previous listener. */
     void onChange(@Nullable Runnable listener);

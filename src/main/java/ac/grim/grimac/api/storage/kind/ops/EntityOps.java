@@ -18,8 +18,12 @@ public final class EntityOps {
     private EntityOps() {}
 
     public sealed interface Op<R> extends Operation<R>
-            permits GetByIdOp, GetManyOp, FindByIndexOp, PrefixIndexOp, DeleteByIdOp, DeleteByIndexOp, CountByIndexOp {
+            permits UpsertOp, GetByIdOp, GetManyOp, FindByIndexOp, PrefixIndexOp, DeleteByIdOp, DeleteByIndexOp, CountByIndexOp {
     }
+
+    public record UpsertOp<R>(
+            @NotNull Category<?> category,
+            @NotNull R record) implements Op<Void> {}
 
     public record GetByIdOp<ID, R>(
             @NotNull Category<?> category,

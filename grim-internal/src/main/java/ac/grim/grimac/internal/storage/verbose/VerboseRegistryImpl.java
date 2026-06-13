@@ -20,6 +20,7 @@ import org.jetbrains.annotations.Nullable;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
@@ -41,7 +42,10 @@ public final class VerboseRegistryImpl implements VerboseRegistry {
     private final ConcurrentMap<String, VerboseFormatter> formattersByStableKey = new ConcurrentHashMap<>();
     private final ConcurrentMap<FormatterKey, VerboseFormatter> formattersByTuple = new ConcurrentHashMap<>();
     private final ConcurrentMap<LayoutKey, Optional<VerboseSchema.Layout>> layoutCache = new ConcurrentHashMap<>();
+    private final Object changeLock = new Object();
     private volatile @Nullable Runnable changeListener;
+    private int changeBatchDepth;
+    private boolean changePending;
 
     public VerboseRegistryImpl(
             @Nullable DataStore store,
@@ -112,19 +116,54 @@ public final class VerboseRegistryImpl implements VerboseRegistry {
         checks.getId(stableKey).ifPresent(checkId ->
                 formattersByTuple.put(new FormatterKey(flavor, checkId, verbose.version()), formatter));
 
-        Runnable listener = changeListener;
-        if (listener != null) {
-            try {
-                listener.run();
-            } catch (RuntimeException e) {
-                logger.log(Level.WARNING, "verbose registry change listener failed", e);
+        emitChange();
+    }
+
+    @Override
+    public void registerTemplates(@NotNull Runnable registration) {
+        Objects.requireNonNull(registration, "registration");
+        synchronized (changeLock) {
+            changeBatchDepth++;
+        }
+        try {
+            registration.run();
+        } finally {
+            Runnable listener = null;
+            synchronized (changeLock) {
+                changeBatchDepth--;
+                if (changeBatchDepth == 0 && changePending) {
+                    changePending = false;
+                    listener = changeListener;
+                }
             }
+            runChangeListener(listener);
         }
     }
 
     @Override
     public void onChange(@Nullable Runnable listener) {
         this.changeListener = listener;
+    }
+
+    private void emitChange() {
+        Runnable listener;
+        synchronized (changeLock) {
+            if (changeBatchDepth > 0) {
+                changePending = true;
+                return;
+            }
+            listener = changeListener;
+        }
+        runChangeListener(listener);
+    }
+
+    private void runChangeListener(@Nullable Runnable listener) {
+        if (listener == null) return;
+        try {
+            listener.run();
+        } catch (RuntimeException e) {
+            logger.log(Level.WARNING, "verbose registry change listener failed", e);
+        }
     }
 
     @Override
@@ -257,13 +296,20 @@ public final class VerboseRegistryImpl implements VerboseRegistry {
         }
 
         long now = System.currentTimeMillis();
-        store.submit(category, event -> event
-                .schemaKey(schemaKey)
-                .flavor(flavor)
-                .checkId(checkId)
-                .version(schema.version())
-                .layout(layoutBytes)
-                .introducedAt(now));
+        VerboseSchemaRecord record = new VerboseSchemaRecord(
+                schemaKey,
+                flavor,
+                checkId,
+                schema.version(),
+                layoutBytes,
+                now);
+        try {
+            store.execute(new EntityOps.UpsertOp<>(category, record))
+                    .toCompletableFuture()
+                    .join();
+        } catch (RuntimeException e) {
+            logger.log(Level.WARNING, "failed to persist verbose schema " + schemaKey, e);
+        }
         return Optional.of(VerboseSchema.decodeLayout(layoutBytes));
     }
 

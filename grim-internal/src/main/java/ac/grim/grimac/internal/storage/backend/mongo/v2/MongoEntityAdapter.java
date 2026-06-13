@@ -207,6 +207,7 @@ public final class MongoEntityAdapter implements KindAdapter<Entity<?, ?, ?>> {
     @Override
     public <R> R execute(@NotNull StoreId id, @NotNull Entity<?, ?, ?> kind, @NotNull Operation<R> op) throws BackendException {
         try {
+            if (op instanceof EntityOps.UpsertOp u)       { upsertRecord(id, kind, u.record()); return null; }
             if (op instanceof EntityOps.GetByIdOp g)         return (R) getById(id, kind, g);
             if (op instanceof EntityOps.GetManyOp g)         return (R) getMany(id, kind, g);
             if (op instanceof EntityOps.FindByIndexOp f)     return (R) findByIndex(id, kind, f);
@@ -227,6 +228,18 @@ public final class MongoEntityAdapter implements KindAdapter<Entity<?, ?, ?>> {
         // migration itself short-circuits if the kind has no UUID
         // fields, so it's safe to attach unconditionally.
         return List.of(new MongoEntityV6ToV7UuidSubtypeMigration());
+    }
+
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    private void upsertRecord(
+            @NotNull StoreId id,
+            @NotNull Entity<?, ?, ?> kind,
+            @NotNull Object record) throws BackendException {
+        if (!kind.recordType().isInstance(record)) {
+            throw new IllegalArgumentException("record type " + record.getClass().getName()
+                    + " does not match entity " + kind.recordType().getName());
+        }
+        new EntityHandler(id, kind, rawCollection(id)).upsertRecord(record);
     }
 
     // ============================== ensureStore helpers ==============================
@@ -330,14 +343,18 @@ public final class MongoEntityAdapter implements KindAdapter<Entity<?, ?, ?>> {
         public void onEvent(E event, long sequence, boolean endOfBatch) throws BackendException {
             try {
                 Object record = eventToRecord.apply(event);
-                Object idValue = idExtractor.apply(record);
-                if (hasMergeFields) {
-                    writePipeline(record, idValue);
-                } else {
-                    writeRawBson(record, idValue);
-                }
+                upsertRecord(record);
             } catch (RuntimeException e) {
                 throw new BackendException("entity upsert failed for " + id, e);
+            }
+        }
+
+        private void upsertRecord(@NotNull Object record) {
+            Object idValue = idExtractor.apply(record);
+            if (hasMergeFields) {
+                writePipeline(record, idValue);
+            } else {
+                writeRawBson(record, idValue);
             }
         }
 

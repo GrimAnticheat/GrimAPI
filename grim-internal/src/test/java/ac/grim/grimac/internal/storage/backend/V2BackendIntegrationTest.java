@@ -179,22 +179,28 @@ class V2BackendIntegrationTest {
         event.lastSeenEpochMs(System.currentTimeMillis());
         handler.onEvent(event, 0, true);
 
+        String updatedName = testName + "Z";
+        long nowForIdentity = System.currentTimeMillis();
+        adapter.execute(playerStore, playersKind, new EntityOps.UpsertOp<>(
+                Categories.PLAYER_IDENTITY,
+                new PlayerIdentity(testUuid, updatedName, nowForIdentity - 1000L, nowForIdentity + 1000L)));
+
         EntityOps.GetByIdOp getOp = new EntityOps.GetByIdOp(Categories.PLAYER_IDENTITY, testUuid);
         Optional<PlayerIdentity> result = (Optional<PlayerIdentity>) adapter.execute(playerStore, playersKind, getOp);
 
         assertTrue(result.isPresent(), backend.id() + ": should read back written player");
-        assertEquals(testName, result.get().currentName(), backend.id() + ": name match");
+        assertEquals(updatedName, result.get().currentName(), backend.id() + ": name match after UpsertOp");
         assertEquals(testUuid, result.get().uuid(), backend.id() + ": uuid match");
 
         EntityOps.FindByIndexOp<PlayerIdentity> byNameOp = new EntityOps.FindByIndexOp<>(
-            Categories.PLAYER_IDENTITY, "by_name", testName.toLowerCase(java.util.Locale.ROOT), null, 10);
+            Categories.PLAYER_IDENTITY, "by_name", updatedName.toLowerCase(java.util.Locale.ROOT), null, 10);
         var byName = (ac.grim.grimac.api.storage.query.Page<PlayerIdentity>)
             adapter.execute(playerStore, playersKind, byNameOp);
         assertTrue(byName.items().stream().anyMatch(p -> p.uuid().equals(testUuid)),
             backend.id() + ": case-insensitive player exact lookup");
 
         EntityOps.PrefixIndexOp<PlayerIdentity> byPrefixOp = new EntityOps.PrefixIndexOp<>(
-            Categories.PLAYER_IDENTITY, "by_name", testName.substring(0, 7).toUpperCase(java.util.Locale.ROOT), null, 10);
+            Categories.PLAYER_IDENTITY, "by_name", updatedName.substring(0, 7).toUpperCase(java.util.Locale.ROOT), null, 10);
         var byPrefix = (ac.grim.grimac.api.storage.query.Page<PlayerIdentity>)
             adapter.execute(playerStore, playersKind, byPrefixOp);
         assertTrue(byPrefix.items().stream().anyMatch(p -> p.uuid().equals(testUuid)),
@@ -278,7 +284,7 @@ class V2BackendIntegrationTest {
                 startupAdapter.execute(startupStore, startupsKind, firstStartupById);
         assertTrue(firstStartupRecord.isPresent(), backend.id() + ": startup row reloads by id");
         assertArrayEquals(grownManifest, firstStartupRecord.get().verboseManifest(),
-                backend.id() + ": startup verbose manifest grows after lazy template registration");
+                backend.id() + ": startup verbose manifest grows after template registration");
 
         EntityOps.FindByIndexOp<ServerStartupRecord> byInstanceOpenOp = new EntityOps.FindByIndexOp<>(
             Categories.SERVER_STARTUP, "by_instance_open", instance, null, 10);

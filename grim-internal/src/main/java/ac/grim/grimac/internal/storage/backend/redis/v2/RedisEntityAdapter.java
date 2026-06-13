@@ -86,29 +86,10 @@ public final class RedisEntityAdapter implements KindAdapter<Entity<?, ?, ?>> {
     @Override
     public <E> @NotNull StorageEventHandler<E> writeHandler(
             @NotNull StoreId id, @NotNull Entity<?, ?, ?> kind, @NotNull Category<E> category) {
-        BsonCodec codec = BsonCodecs.regular(kind.recordType());
-        EncodeShape shape = kind.codec().shape();
         String storePrefix = keyPrefix + id.name() + ":";
         return (event, sequence, endOfBatch) -> {
             Object record = ((Entity) kind).eventToRecord().apply(event);
-            Object idVal = codec.readField(record, idFieldIndex(shape));
-            String redisKey = storePrefix + RedisKeys.encode(idVal);
-            Map<byte[], byte[]> fields = new LinkedHashMap<>();
-            for (int i = 0; i < shape.fields().size(); i++) {
-                Object v = codec.readField(record, i);
-                if (v != null) {
-                    EncodeShape.FieldDef f = shape.fields().get(i);
-                    fields.put(bytes(f.name()), fieldValueBytes(f, v));
-                }
-            }
-            try (var j = pool.getResource()) {
-                Map<byte[], byte[]> existing = j.hgetAll(bytes(redisKey));
-                if (existing != null && !existing.isEmpty()) {
-                    removeIndexEntries(j, storePrefix, kind, shape, existing);
-                }
-                j.hset(bytes(redisKey), fields);
-                addIndexEntries(j, storePrefix, kind, shape, codec, record, idVal);
-            }
+            upsertRecord(storePrefix, kind, record);
         };
     }
 
@@ -118,6 +99,8 @@ public final class RedisEntityAdapter implements KindAdapter<Entity<?, ?, ?>> {
                          @NotNull Operation<R> op) throws BackendException {
         String storePrefix = keyPrefix + id.name() + ":";
         try {
+            if (op instanceof EntityOps.UpsertOp u)
+                { upsertRecord(storePrefix, kind, u.record()); return null; }
             if (op instanceof EntityOps.GetByIdOp g)
                 return (R) getById(storePrefix, kind, g);
             if (op instanceof EntityOps.GetManyOp g)
@@ -139,6 +122,36 @@ public final class RedisEntityAdapter implements KindAdapter<Entity<?, ?, ?>> {
     }
 
     @Override public @NotNull List<Migration<Entity<?, ?, ?>>> migrations(@NotNull Entity<?, ?, ?> kind) { return List.of(); }
+
+    private void upsertRecord(
+            @NotNull String storePrefix,
+            @NotNull Entity<?, ?, ?> kind,
+            @NotNull Object record) {
+        if (!kind.recordType().isInstance(record)) {
+            throw new IllegalArgumentException("record type " + record.getClass().getName()
+                    + " does not match entity " + kind.recordType().getName());
+        }
+        BsonCodec codec = BsonCodecs.regular(kind.recordType());
+        EncodeShape shape = kind.codec().shape();
+        Object idVal = codec.readField(record, idFieldIndex(shape));
+        String redisKey = storePrefix + RedisKeys.encode(idVal);
+        Map<byte[], byte[]> fields = new LinkedHashMap<>();
+        for (int i = 0; i < shape.fields().size(); i++) {
+            Object v = codec.readField(record, i);
+            if (v != null) {
+                EncodeShape.FieldDef f = shape.fields().get(i);
+                fields.put(bytes(f.name()), fieldValueBytes(f, v));
+            }
+        }
+        try (var j = pool.getResource()) {
+            Map<byte[], byte[]> existing = j.hgetAll(bytes(redisKey));
+            if (existing != null && !existing.isEmpty()) {
+                removeIndexEntries(j, storePrefix, kind, shape, existing);
+            }
+            j.hset(bytes(redisKey), fields);
+            addIndexEntries(j, storePrefix, kind, shape, codec, record, idVal);
+        }
+    }
 
     @SuppressWarnings({"unchecked", "rawtypes"})
     private <ID, R> Optional<R> getById(String prefix, Entity<?, ?, ?> kind, EntityOps.GetByIdOp<ID, R> op) {

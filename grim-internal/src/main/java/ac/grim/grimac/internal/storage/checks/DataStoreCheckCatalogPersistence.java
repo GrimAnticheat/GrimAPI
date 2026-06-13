@@ -4,6 +4,8 @@ import ac.grim.grimac.api.storage.DataStore;
 import ac.grim.grimac.api.storage.category.Categories;
 import ac.grim.grimac.api.storage.check.CheckCatalogPersistence;
 import ac.grim.grimac.api.storage.check.CheckCatalogRow;
+import ac.grim.grimac.api.storage.kind.ops.EntityOps;
+import ac.grim.grimac.api.storage.model.CheckCatalogRecord;
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
@@ -18,10 +20,10 @@ import java.util.logging.Logger;
  * Check-catalog persistence backed by the normal datastore write path.
  * <p>
  * The existing catalog is loaded before construction. Subsequent inserts and
- * metadata updates update the local view synchronously, then enqueue an
- * idempotent {@link Categories#CHECK_CATALOG} write. This keeps lazy check /
- * verbose registration out of backend-specific JDBC writers and on the same
- * routed storage plane as other v2 metadata.
+ * metadata updates update the local view synchronously, then persist an
+ * idempotent {@link Categories#CHECK_CATALOG} write through the v2 operation
+ * path. This keeps check / verbose metadata registration out of backend-specific
+ * JDBC writers and on the same routed storage plane as other v2 metadata.
  */
 @ApiStatus.Internal
 public final class DataStoreCheckCatalogPersistence implements CheckCatalogPersistence {
@@ -63,7 +65,7 @@ public final class DataStoreCheckCatalogPersistence implements CheckCatalogPersi
         CheckCatalogRow row = new CheckCatalogRow(
                 checkId, stableKey, display, description, introducedVersion, introducedAt);
         putLocal(row);
-        enqueue(row);
+        persist(row);
         return checkId;
     }
 
@@ -80,7 +82,7 @@ public final class DataStoreCheckCatalogPersistence implements CheckCatalogPersi
                     + " already maps to stable key " + existingById.stableKey());
         }
         putLocal(row);
-        enqueue(row);
+        persist(row);
     }
 
     @Override
@@ -102,7 +104,7 @@ public final class DataStoreCheckCatalogPersistence implements CheckCatalogPersi
                 existing.introducedVersion(),
                 existing.introducedAt());
         putLocal(updated);
-        enqueue(updated);
+        persist(updated);
     }
 
     private int nextAvailableId() {
@@ -115,18 +117,21 @@ public final class DataStoreCheckCatalogPersistence implements CheckCatalogPersi
         byId.put(row.checkId(), row);
     }
 
-    private void enqueue(@NotNull CheckCatalogRow row) {
+    private void persist(@NotNull CheckCatalogRow row) {
+        CheckCatalogRecord record = new CheckCatalogRecord(
+                row.stableKey(),
+                row.checkId(),
+                row.display(),
+                row.description(),
+                row.introducedVersion(),
+                row.introducedAt());
         try {
-            store.submit(Categories.CHECK_CATALOG, event -> event
-                    .stableKey(row.stableKey())
-                    .checkId(row.checkId())
-                    .display(row.display())
-                    .description(row.description())
-                    .introducedVersion(row.introducedVersion())
-                    .introducedAt(row.introducedAt()));
+            store.execute(new EntityOps.UpsertOp<>(Categories.CHECK_CATALOG, record))
+                    .toCompletableFuture()
+                    .join();
         } catch (RuntimeException e) {
             logger.log(Level.WARNING,
-                    "[grim-datastore] failed to enqueue check-catalog row for " + row.stableKey(), e);
+                    "[grim-datastore] failed to persist check-catalog row for " + row.stableKey(), e);
         }
     }
 }

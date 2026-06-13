@@ -320,12 +320,7 @@ public final class SqlEntityAdapter implements KindAdapter<Entity<?, ?, ?>> {
 
         private void bindAllFields(@NotNull PreparedStatement ps, @NotNull Object record)
                 throws SQLException {
-            int n = shape.fields().size();
-            for (int i = 0; i < n; i++) {
-                EncodeShape.FieldDef f = shape.fields().get(i);
-                Object v = codec.readField(record, i);
-                SqlBindings.bind(ps, i + 1, f, v);
-            }
+            bindRecordFields(ps, shape, codec, record);
         }
     }
 
@@ -413,21 +408,11 @@ public final class SqlEntityAdapter implements KindAdapter<Entity<?, ?, ?>> {
 
         private void bindAllFields(@NotNull PreparedStatement ps, @NotNull Object record)
                 throws SQLException {
-            int n = shape.fields().size();
-            for (int i = 0; i < n; i++) {
-                EncodeShape.FieldDef f = shape.fields().get(i);
-                SqlBindings.bind(ps, i + 1, f, codec.readField(record, i));
-            }
+            bindRecordFields(ps, shape, codec, record);
         }
 
         private void bindUpdate(@NotNull PreparedStatement ps, @NotNull Object record) throws SQLException {
-            int param = 1;
-            for (int fieldIndex : updateIndexes) {
-                EncodeShape.FieldDef f = shape.fields().get(fieldIndex);
-                SqlBindings.bind(ps, param++, f, codec.readField(record, fieldIndex));
-            }
-            EncodeShape.FieldDef idField = shape.fields().get(idIndex);
-            SqlBindings.bind(ps, param, idField, codec.readField(record, idIndex));
+            bindLegacyUpdate(ps, shape, codec, record, updateIndexes, idIndex);
         }
     }
 
@@ -499,6 +484,7 @@ public final class SqlEntityAdapter implements KindAdapter<Entity<?, ?, ?>> {
     @Override
     public <R> R execute(@NotNull StoreId id, @NotNull Entity<?, ?, ?> kind, @NotNull Operation<R> op) throws BackendException {
         try {
+            if (op instanceof EntityOps.UpsertOp u)       { upsertRecord(id, kind, u.record()); return null; }
             if (op instanceof EntityOps.GetByIdOp g)         return (R) getById(id, kind, g);
             if (op instanceof EntityOps.GetManyOp g)         return (R) getMany(id, kind, g);
             if (op instanceof EntityOps.DeleteByIdOp d)    { deleteById(id, kind, d); return null; }
@@ -515,6 +501,95 @@ public final class SqlEntityAdapter implements KindAdapter<Entity<?, ?, ?>> {
     }
 
     // ============================== execute dispatch ==============================
+
+    private void upsertRecord(
+            @NotNull StoreId id,
+            @NotNull Entity<?, ?, ?> kind,
+            @NotNull Object record) throws SQLException {
+        if (!kind.recordType().isInstance(record)) {
+            throw new IllegalArgumentException("record type " + record.getClass().getName()
+                    + " does not match entity " + kind.recordType().getName());
+        }
+        EncodeShape shape = kind.codec().shape();
+        BsonCodec codec = BsonCodecs.regular(kind.recordType());
+        if (dialect.usesLegacySqliteUpsert()) {
+            upsertLegacySqliteRecord(id, shape, codec, record);
+        } else {
+            upsertModernSqlRecord(id, shape, codec, record);
+        }
+    }
+
+    private void upsertModernSqlRecord(
+            @NotNull StoreId id,
+            @NotNull EncodeShape shape,
+            @NotNull BsonCodec codec,
+            @NotNull Object record) throws SQLException {
+        try (Connection c = ds.getConnection();
+             PreparedStatement ps = c.prepareStatement(dialect.upsertSql(id.name(), shape))) {
+            bindRecordFields(ps, shape, codec, record);
+            ps.executeUpdate();
+        }
+    }
+
+    private void upsertLegacySqliteRecord(
+            @NotNull StoreId id,
+            @NotNull EncodeShape shape,
+            @NotNull BsonCodec codec,
+            @NotNull Object record) throws SQLException {
+        List<Integer> updateIndexes = legacyUpdateIndexes(shape);
+        String updateSql = updateIndexes.isEmpty() ? null : legacyUpdateSql(id.name(), shape, updateIndexes);
+        int idIndex = idFieldIndex(shape);
+        try (Connection c = ds.getConnection()) {
+            boolean priorAutoCommit = c.getAutoCommit();
+            c.setAutoCommit(false);
+            try {
+                try (PreparedStatement insert = c.prepareStatement(legacyInsertSql(id.name(), shape))) {
+                    bindRecordFields(insert, shape, codec, record);
+                    insert.executeUpdate();
+                }
+                if (updateSql != null) {
+                    try (PreparedStatement update = c.prepareStatement(updateSql)) {
+                        bindLegacyUpdate(update, shape, codec, record, updateIndexes, idIndex);
+                        update.executeUpdate();
+                    }
+                }
+                c.commit();
+            } catch (SQLException | RuntimeException e) {
+                try { c.rollback(); } catch (SQLException ignored) {}
+                throw e;
+            } finally {
+                c.setAutoCommit(priorAutoCommit);
+            }
+        }
+    }
+
+    private static void bindRecordFields(
+            @NotNull PreparedStatement ps,
+            @NotNull EncodeShape shape,
+            @NotNull BsonCodec codec,
+            @NotNull Object record) throws SQLException {
+        int n = shape.fields().size();
+        for (int i = 0; i < n; i++) {
+            EncodeShape.FieldDef f = shape.fields().get(i);
+            SqlBindings.bind(ps, i + 1, f, codec.readField(record, i));
+        }
+    }
+
+    private static void bindLegacyUpdate(
+            @NotNull PreparedStatement ps,
+            @NotNull EncodeShape shape,
+            @NotNull BsonCodec codec,
+            @NotNull Object record,
+            @NotNull List<Integer> updateIndexes,
+            int idIndex) throws SQLException {
+        int param = 1;
+        for (int fieldIndex : updateIndexes) {
+            EncodeShape.FieldDef f = shape.fields().get(fieldIndex);
+            SqlBindings.bind(ps, param++, f, codec.readField(record, fieldIndex));
+        }
+        EncodeShape.FieldDef idField = shape.fields().get(idIndex);
+        SqlBindings.bind(ps, param, idField, codec.readField(record, idIndex));
+    }
 
     @SuppressWarnings({"rawtypes", "unchecked"})
     private <ID, R> Optional<R> getById(@NotNull StoreId id, @NotNull Entity<?, ?, ?> kind,

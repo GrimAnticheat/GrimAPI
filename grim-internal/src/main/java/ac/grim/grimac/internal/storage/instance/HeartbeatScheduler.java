@@ -8,8 +8,10 @@ import org.jetbrains.annotations.Nullable;
 import java.time.Duration;
 import java.util.UUID;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
@@ -73,6 +75,7 @@ public final class HeartbeatScheduler {
     private final Object lifecycleLock = new Object();
     private @Nullable ScheduledExecutorService executor;
     private @Nullable ScheduledFuture<?> task;
+    private volatile @Nullable Thread schedulerThread;
     private volatile long closedAtEpochMs;
     private volatile @Nullable String closeReason;
 
@@ -147,6 +150,7 @@ public final class HeartbeatScheduler {
             executor = Executors.newSingleThreadScheduledExecutor(r -> {
                 Thread t = new Thread(r, "grim-storage-heartbeat-" + serverName);
                 t.setDaemon(true);
+                schedulerThread = t;
                 return t;
             });
             long periodMs = interval.toMillis();
@@ -186,6 +190,32 @@ public final class HeartbeatScheduler {
     }
 
     /**
+     * Publish one off-schedule heartbeat and wait until the publish callback
+     * returns. Used for metadata barriers where a caller has just persisted a
+     * verbose schema and needs the startup manifest row to reflect it before
+     * the related violation row is submitted.
+     */
+    public void publishNowAndWait() {
+        ScheduledExecutorService current;
+        synchronized (lifecycleLock) {
+            current = executor;
+        }
+        if (current == null) return;
+        if (Thread.currentThread() == schedulerThread) {
+            tick();
+            return;
+        }
+        Future<?> future = current.submit(this::tick);
+        try {
+            future.get();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        } catch (ExecutionException e) {
+            logger.log(Level.WARNING, "heartbeat publish failed for startup " + startupId, e.getCause());
+        }
+    }
+
+    /**
      * Cancel the schedule. Does not publish a final heartbeat — pair
      * with {@link #publishDrainImmediate()} for graceful shutdown.
      */
@@ -198,6 +228,7 @@ public final class HeartbeatScheduler {
             if (executor != null) {
                 executor.shutdownNow();
                 executor = null;
+                schedulerThread = null;
             }
         }
     }

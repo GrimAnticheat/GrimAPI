@@ -198,11 +198,12 @@ public final class DataStoreImpl implements DataStore {
      * honest in the meantime.
      * <p>
      * Covered write-shaped op names today (across all per-Kind op families):
-     * Delete*, Remove*, Put*, IncrementBy*, SetIfHigher*.
+     * Upsert*, Delete*, Remove*, Put*, IncrementBy*, SetIfHigher*.
      */
     private static boolean isReadOperation(@NotNull Operation<?> op) {
         String n = op.getClass().getSimpleName();
-        return !(n.startsWith("Delete")
+        return !(n.startsWith("Upsert")
+              || n.startsWith("Delete")
               || n.startsWith("Remove")
               || n.startsWith("Put")
               || n.startsWith("IncrementBy")
