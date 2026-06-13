@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Test;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
@@ -210,6 +211,23 @@ class VerboseTest {
     }
 
     @Test
+    void declaredByTracksOwningClassAndFinalChainedShape() {
+        assertSame(DeclaredTemplates.SINGLE, DeclaredTemplates.SINGLE);
+        List<Verbose> templates = Verbose.declaredBy(DeclaredTemplates.class, Object.class);
+
+        assertEquals(List.of(DeclaredTemplates.SINGLE, DeclaredTemplates.MULTI), templates);
+        assertFalse(templates.contains(Verbose.of("declared_base={uint}")));
+    }
+
+    @Test
+    void declaredByWalksSuperclassTemplates() {
+        assertSame(ChildDeclaredTemplates.CHILD, ChildDeclaredTemplates.CHILD);
+        assertEquals(
+                List.of(ChildDeclaredTemplates.CHILD, ParentDeclaredTemplates.PARENT),
+                Verbose.declaredBy(ChildDeclaredTemplates.class, ParentDeclaredTemplates.class));
+    }
+
+    @Test
     void groupPipeStillMeansBranchInsideGroups() {
         Verbose v = Verbose.of("x=[{uint}|none], tail={uint}");
         byte[] data = v.write(new VerboseBuf()).bool(false).uint(0).uint(9).end().toByteArray();
@@ -227,5 +245,18 @@ class VerboseTest {
 
     private enum Sample {
         FIRST, SECOND
+    }
+
+    private static final class DeclaredTemplates {
+        private static final Verbose SINGLE = Verbose.of("declared_single={uint}");
+        private static final Verbose MULTI = Verbose.of("declared_base={uint}").or("declared_next={str}");
+    }
+
+    private static class ParentDeclaredTemplates {
+        private static final Verbose PARENT = Verbose.of("declared_parent={uint}");
+    }
+
+    private static final class ChildDeclaredTemplates extends ParentDeclaredTemplates {
+        private static final Verbose CHILD = Verbose.of("declared_child={uint}");
     }
 }

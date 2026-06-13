@@ -8,6 +8,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
  * A verbose payload described by a single display template.
@@ -66,6 +67,8 @@ import java.util.concurrent.ConcurrentMap;
 public final class Verbose {
 
     private static final ConcurrentMap<String, Verbose> INTERNED = new ConcurrentHashMap<>();
+    private static final ConcurrentMap<Class<?>, CopyOnWriteArrayList<Verbose>> DECLARED_BY_CLASS = new ConcurrentHashMap<>();
+    private static final StackWalker STACK_WALKER = StackWalker.getInstance(StackWalker.Option.RETAIN_CLASS_REFERENCE);
 
     private final @NotNull String template;
     private final int version;
@@ -82,7 +85,9 @@ public final class Verbose {
      */
     public static @NotNull Verbose of(@NotNull String template) {
         if (template.isEmpty()) throw new IllegalArgumentException("template");
-        return INTERNED.computeIfAbsent(template, Verbose::new);
+        Verbose verbose = intern(template);
+        declareFor(declarationCaller(), verbose);
+        return verbose;
     }
 
     /**
@@ -94,7 +99,31 @@ public final class Verbose {
      */
     public @NotNull Verbose or(@NotNull String nextShape) {
         if (nextShape.isEmpty()) throw new IllegalArgumentException("nextShape");
-        return of(template + "|" + nextShape);
+        Class<?> owner = declarationCaller();
+        Verbose combined = intern(template + "|" + nextShape);
+        replaceDeclaration(owner, this, combined);
+        return combined;
+    }
+
+    /**
+     * Templates declared while the supplied class hierarchy initialized.
+     * Intended for check startup registration; not part of the flag path.
+     */
+    @ApiStatus.Internal
+    public static @NotNull List<Verbose> declaredBy(@NotNull Class<?> type, @NotNull Class<?> rootType) {
+        List<Verbose> templates = new ArrayList<>(1);
+        Class<?> cursor = type;
+        while (cursor != null && rootType.isAssignableFrom(cursor)) {
+            List<Verbose> declared = DECLARED_BY_CLASS.get(cursor);
+            if (declared != null) {
+                for (Verbose verbose : declared) {
+                    if (!templates.contains(verbose)) templates.add(verbose);
+                }
+            }
+            if (cursor == rootType) break;
+            cursor = cursor.getSuperclass();
+        }
+        return List.copyOf(templates);
     }
 
     public @NotNull String template() {
@@ -178,7 +207,7 @@ public final class Verbose {
             @NotNull VerboseRenderContext ctx) {
         if (template.isEmpty()) return null;
         try {
-            Verbose verbose = of(template);
+            Verbose verbose = intern(template);
             StringBuilder out = new StringBuilder(template.length() + 16);
             verbose.renderTo(VerboseBuf.wrap(data), ctx, out);
             return out.toString();
@@ -254,6 +283,35 @@ public final class Verbose {
             parsed = cached;
         }
         return cached;
+    }
+
+    private static @NotNull Verbose intern(@NotNull String template) {
+        return INTERNED.computeIfAbsent(template, Verbose::new);
+    }
+
+    private static @Nullable Class<?> declarationCaller() {
+        return STACK_WALKER.walk(frames -> frames
+                .map(StackWalker.StackFrame::getDeclaringClass)
+                .filter(type -> type != Verbose.class)
+                .findFirst()
+                .orElse(null));
+    }
+
+    private static void declareFor(@Nullable Class<?> owner, @NotNull Verbose verbose) {
+        if (owner == null) return;
+        DECLARED_BY_CLASS.computeIfAbsent(owner, ignored -> new CopyOnWriteArrayList<>())
+                .addIfAbsent(verbose);
+    }
+
+    private static void replaceDeclaration(
+            @Nullable Class<?> owner,
+            @NotNull Verbose previous,
+            @NotNull Verbose replacement) {
+        if (owner == null) return;
+        CopyOnWriteArrayList<Verbose> templates =
+                DECLARED_BY_CLASS.computeIfAbsent(owner, ignored -> new CopyOnWriteArrayList<>());
+        templates.remove(previous);
+        templates.addIfAbsent(replacement);
     }
 
     private static int versionOf(@NotNull String template) {
