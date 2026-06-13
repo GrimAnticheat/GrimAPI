@@ -49,12 +49,14 @@ public final class SqlCounterAdapter implements KindAdapter<Counter<?>> {
     private final @NotNull DataSource ds;
     private final @NotNull SqlDialect dialect;
     private final @NotNull Logger logger;
+    private final @NotNull CounterPlan counterPlan;
 
     public SqlCounterAdapter(@NotNull DataSource ds, @NotNull SqlDialect dialect,
                              @NotNull Logger logger) {
         this.ds = ds;
         this.dialect = dialect;
         this.logger = logger;
+        this.counterPlan = CounterPlan.of(dialect, CounterSql.of(dialect));
     }
 
     @SuppressWarnings("unchecked")
@@ -93,11 +95,7 @@ public final class SqlCounterAdapter implements KindAdapter<Counter<?>> {
     public <E> @NotNull StorageEventHandler<E> writeHandler(
             @NotNull StoreId id, @NotNull Counter<?> kind, @NotNull Category<E> category) {
         String table = dialect.quoteIdentifier(id.name());
-        String upsertSql = dialect.counterIncrementSql(table);
-        if (dialect.usesLegacySqliteUpsert()) {
-            return new LegacyCounterWriteHandler<>(table);
-        }
-        return new CounterWriteHandler<>(upsertSql);
+        return counterPlan.writeHandler(this, table);
     }
 
     @SuppressWarnings({"unchecked", "rawtypes"})
@@ -174,6 +172,130 @@ public final class SqlCounterAdapter implements KindAdapter<Counter<?>> {
         }
     }
 
+    private interface CounterPlan {
+        static @NotNull CounterPlan of(@NotNull SqlDialect dialect, @NotNull CounterSql sql) {
+            if (dialect.usesLegacySqliteUpsert()) return LegacyCounterPlan.INSTANCE;
+            if (dialect.supportsReturning()) return new ReturningCounterPlan(sql);
+            return new SelectCounterPlan(sql);
+        }
+
+        <E> @NotNull StorageEventHandler<E> writeHandler(@NotNull SqlCounterAdapter adapter, @NotNull String table);
+
+        long incrementBy(@NotNull SqlCounterAdapter adapter, @NotNull String table,
+                         @NotNull Object key, long delta) throws SQLException;
+
+        long setIfHigher(@NotNull SqlCounterAdapter adapter, @NotNull String table,
+                         @NotNull Object key, long value) throws SQLException;
+    }
+
+    private record LegacyCounterPlan() implements CounterPlan {
+        private static final @NotNull CounterPlan INSTANCE = new LegacyCounterPlan();
+
+        @Override
+        public <E> @NotNull StorageEventHandler<E> writeHandler(@NotNull SqlCounterAdapter adapter, @NotNull String table) {
+            return adapter.new LegacyCounterWriteHandler<>(table);
+        }
+
+        @Override
+        public long incrementBy(@NotNull SqlCounterAdapter adapter, @NotNull String table,
+                                @NotNull Object key, long delta) throws SQLException {
+            return adapter.legacyIncrementBy(table, key, delta);
+        }
+
+        @Override
+        public long setIfHigher(@NotNull SqlCounterAdapter adapter, @NotNull String table,
+                                @NotNull Object key, long value) throws SQLException {
+            return adapter.legacySetIfHigher(table, key, value);
+        }
+    }
+
+    private record ReturningCounterPlan(@NotNull CounterSql sql) implements CounterPlan {
+        @Override
+        public <E> @NotNull StorageEventHandler<E> writeHandler(@NotNull SqlCounterAdapter adapter, @NotNull String table) {
+            return adapter.new CounterWriteHandler<>(sql.increment(table));
+        }
+
+        @Override
+        public long incrementBy(@NotNull SqlCounterAdapter adapter, @NotNull String table,
+                                @NotNull Object key, long delta) throws SQLException {
+            return adapter.incrementReturning(sql.increment(table), key, delta);
+        }
+
+        @Override
+        public long setIfHigher(@NotNull SqlCounterAdapter adapter, @NotNull String table,
+                                @NotNull Object key, long value) throws SQLException {
+            return adapter.setIfHigherReturning(sql.setIfHigher(table), key, value);
+        }
+    }
+
+    private record SelectCounterPlan(@NotNull CounterSql sql) implements CounterPlan {
+        @Override
+        public <E> @NotNull StorageEventHandler<E> writeHandler(@NotNull SqlCounterAdapter adapter, @NotNull String table) {
+            return adapter.new CounterWriteHandler<>(sql.increment(table));
+        }
+
+        @Override
+        public long incrementBy(@NotNull SqlCounterAdapter adapter, @NotNull String table,
+                                @NotNull Object key, long delta) throws SQLException {
+            return adapter.incrementSelect(table, sql.increment(table), key, delta);
+        }
+
+        @Override
+        public long setIfHigher(@NotNull SqlCounterAdapter adapter, @NotNull String table,
+                                @NotNull Object key, long value) throws SQLException {
+            return adapter.setIfHigherSelect(table, sql.setIfHigher(table), key, value);
+        }
+    }
+
+    private interface CounterSql {
+        static @NotNull CounterSql of(@NotNull SqlDialect dialect) {
+            if ("mysql".equals(dialect.name())) return new MysqlCounterSql(dialect);
+            return new ConflictCounterSql(dialect);
+        }
+
+        @NotNull String increment(@NotNull String table);
+
+        @NotNull String setIfHigher(@NotNull String table);
+    }
+
+    private record MysqlCounterSql(@NotNull SqlDialect dialect) implements CounterSql {
+        @Override
+        public @NotNull String increment(@NotNull String table) {
+            String id = dialect.quoteIdentifier("id");
+            String value = dialect.quoteIdentifier("value");
+            return "INSERT INTO " + table + " (" + id + ", " + value + ") VALUES (?, ?) "
+                + "ON DUPLICATE KEY UPDATE " + value + " = " + value + " + " + dialect.excludedRef(value);
+        }
+
+        @Override
+        public @NotNull String setIfHigher(@NotNull String table) {
+            String id = dialect.quoteIdentifier("id");
+            String value = dialect.quoteIdentifier("value");
+            return "INSERT INTO " + table + " (" + id + ", " + value + ") VALUES (?, ?) "
+                + "ON DUPLICATE KEY UPDATE " + value + " = " + dialect.greatestFn(value, dialect.excludedRef(value));
+        }
+    }
+
+    private record ConflictCounterSql(@NotNull SqlDialect dialect) implements CounterSql {
+        @Override
+        public @NotNull String increment(@NotNull String table) {
+            String id = dialect.quoteIdentifier("id");
+            String value = dialect.quoteIdentifier("value");
+            return "INSERT INTO " + table + " (" + id + ", " + value + ") VALUES (?, ?) "
+                + "ON CONFLICT (" + id + ") DO UPDATE SET " + value + " = "
+                + table + "." + value + " + " + dialect.excludedRef(value);
+        }
+
+        @Override
+        public @NotNull String setIfHigher(@NotNull String table) {
+            String id = dialect.quoteIdentifier("id");
+            String value = dialect.quoteIdentifier("value");
+            return "INSERT INTO " + table + " (" + id + ", " + value + ") VALUES (?, ?) "
+                + "ON CONFLICT (" + id + ") DO UPDATE SET " + value + " = "
+                + dialect.greatestFn(table + "." + value, dialect.excludedRef(value));
+        }
+    }
+
     // ============================== execute dispatch ==============================
 
     private long get(@NotNull StoreId id, @NotNull CounterOps.GetOp<?> op) throws SQLException {
@@ -213,100 +335,65 @@ public final class SqlCounterAdapter implements KindAdapter<Counter<?>> {
 
     private long incrementBy(@NotNull StoreId id, @NotNull CounterOps.IncrementByOp<?> op) throws SQLException {
         String table = dialect.quoteIdentifier(id.name());
-        if (dialect.usesLegacySqliteUpsert()) {
-            return legacyIncrementBy(table, op.key(), op.delta());
-        }
-        String upsert = dialect.counterIncrementSql(table);
-        if (dialect.supportsReturning()) {
-            String sql = upsert + " RETURNING value";
-            try (Connection c = ds.getConnection();
-                 PreparedStatement ps = c.prepareStatement(sql)) {
-                bindKey(ps, 1, op.key());
-                ps.setLong(2, op.delta());
-                try (ResultSet rs = ps.executeQuery()) {
-                    return rs.next() ? rs.getLong("value") : op.delta();
-                }
+        return counterPlan.incrementBy(this, table, op.key(), op.delta());
+    }
+
+    private long setIfHigher(@NotNull StoreId id, @NotNull CounterOps.SetIfHigherOp<?> op) throws SQLException {
+        String table = dialect.quoteIdentifier(id.name());
+        return counterPlan.setIfHigher(this, table, op.key(), op.value());
+    }
+
+    private long incrementReturning(@NotNull String upsert, @NotNull Object key, long delta) throws SQLException {
+        String sql = upsert + " RETURNING value";
+        try (Connection c = ds.getConnection();
+             PreparedStatement ps = c.prepareStatement(sql)) {
+            bindKey(ps, 1, key);
+            ps.setLong(2, delta);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() ? rs.getLong("value") : delta;
             }
         }
-        // No RETURNING (MySQL): upsert then SELECT in a transaction.
+    }
+
+    private long incrementSelect(@NotNull String table, @NotNull String upsert,
+                                 @NotNull Object key, long delta) throws SQLException {
+        return upsertThenSelect(table, upsert, key, delta);
+    }
+
+    private long setIfHigherReturning(@NotNull String upsert, @NotNull Object key, long value) throws SQLException {
+        String sql = upsert + " RETURNING value";
+        try (Connection c = ds.getConnection();
+             PreparedStatement ps = c.prepareStatement(sql)) {
+            bindKey(ps, 1, key);
+            ps.setLong(2, value);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() ? rs.getLong("value") : value;
+            }
+        }
+    }
+
+    private long setIfHigherSelect(@NotNull String table, @NotNull String upsert,
+                                   @NotNull Object key, long value) throws SQLException {
+        return upsertThenSelect(table, upsert, key, value);
+    }
+
+    private long upsertThenSelect(@NotNull String table, @NotNull String upsert,
+                                  @NotNull Object key, long fallback) throws SQLException {
         try (Connection c = ds.getConnection()) {
             boolean prior = c.getAutoCommit();
             c.setAutoCommit(false);
             try {
                 try (PreparedStatement ps = c.prepareStatement(upsert)) {
-                    bindKey(ps, 1, op.key());
-                    ps.setLong(2, op.delta());
+                    bindKey(ps, 1, key);
+                    ps.setLong(2, fallback);
                     ps.executeUpdate();
                 }
                 try (PreparedStatement sel = c.prepareStatement(
                         "SELECT value FROM " + table + " WHERE id = ?")) {
-                    bindKey(sel, 1, op.key());
+                    bindKey(sel, 1, key);
                     try (ResultSet rs = sel.executeQuery()) {
                         c.commit();
-                        return rs.next() ? rs.getLong("value") : op.delta();
-                    }
-                }
-            } catch (Exception e) {
-                try { c.rollback(); } catch (SQLException ignored) {}
-                throw e;
-            } finally {
-                c.setAutoCommit(prior);
-            }
-        }
-    }
-
-    private long setIfHigher(@NotNull StoreId id, @NotNull CounterOps.SetIfHigherOp<?> op) throws SQLException {
-        String table = dialect.quoteIdentifier(id.name());
-        if (dialect.usesLegacySqliteUpsert()) {
-            return legacySetIfHigher(table, op.key(), op.value());
-        }
-        String valCol = dialect.quoteIdentifier("value");
-        String greatest = dialect.greatestFn(table + "." + valCol, dialect.excludedRef(valCol));
-        String upsert = dialect.counterIncrementSql(table)
-            .replace(table + ".value + " + dialect.excludedRef(valCol), greatest);
-        // The replace above adapts the increment upsert into a
-        // set-if-higher upsert by swapping the UPDATE SET expression.
-        // This is fragile but avoids adding yet another dialect method.
-        // TODO: add a dedicated dialect.counterSetIfHigherSql() if this
-        // breaks across vendors.
-
-        // Actually, let's build it properly:
-        String upsertFixed;
-        if ("mysql".equals(dialect.name())) {
-            upsertFixed = "INSERT INTO " + table + " (`id`, `value`) VALUES (?, ?) "
-                + "ON DUPLICATE KEY UPDATE `value` = GREATEST(`value`, VALUES(`value`))";
-        } else {
-            String excl = dialect.excludedRef(valCol);
-            upsertFixed = "INSERT INTO " + table + " (" + dialect.quoteIdentifier("id") + ", " + valCol + ") VALUES (?, ?) "
-                + "ON CONFLICT (id) DO UPDATE SET " + valCol + " = " + dialect.greatestFn(table + "." + valCol, excl);
-        }
-
-        if (dialect.supportsReturning()) {
-            String sql = upsertFixed + " RETURNING value";
-            try (Connection c = ds.getConnection();
-                 PreparedStatement ps = c.prepareStatement(sql)) {
-                bindKey(ps, 1, op.key());
-                ps.setLong(2, op.value());
-                try (ResultSet rs = ps.executeQuery()) {
-                    return rs.next() ? rs.getLong("value") : op.value();
-                }
-            }
-        }
-        try (Connection c = ds.getConnection()) {
-            boolean prior = c.getAutoCommit();
-            c.setAutoCommit(false);
-            try {
-                try (PreparedStatement ps = c.prepareStatement(upsertFixed)) {
-                    bindKey(ps, 1, op.key());
-                    ps.setLong(2, op.value());
-                    ps.executeUpdate();
-                }
-                try (PreparedStatement sel = c.prepareStatement(
-                        "SELECT value FROM " + table + " WHERE id = ?")) {
-                    bindKey(sel, 1, op.key());
-                    try (ResultSet rs = sel.executeQuery()) {
-                        c.commit();
-                        return rs.next() ? rs.getLong("value") : op.value();
+                        return rs.next() ? rs.getLong("value") : fallback;
                     }
                 }
             } catch (Exception e) {

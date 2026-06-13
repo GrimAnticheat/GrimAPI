@@ -316,13 +316,7 @@ public final class MongoEntityAdapter implements KindAdapter<Entity<?, ?, ?>> {
          * empty when the kind declares no such indexes.
          */
         private final @NotNull LowerCompanion[] lowerCompanions;
-        /**
-         * True when the kind has at least one field whose
-         * {@link ac.grim.grimac.api.storage.codec.EncodeShape.FieldDef#mergeMode()}
-         * is not {@link ac.grim.grimac.api.storage.codec.MergeMode#OVERWRITE}.
-         * Drives the slower aggregation-pipeline write path below.
-         */
-        private final boolean hasMergeFields;
+        private final @NotNull UpsertPlan upsertPlan;
 
         @SuppressWarnings({"rawtypes", "unchecked"})
         EntityHandler(@NotNull StoreId id, @NotNull Entity<?, E, ?> kind, @NotNull MongoCollection<RawBsonDocument> coll) {
@@ -335,8 +329,7 @@ public final class MongoEntityAdapter implements KindAdapter<Entity<?, ?, ?>> {
             this.idExtractor = (Function) kind.idOf();
             this.idField = shape.idField();
             this.lowerCompanions = buildLowerCompanions(kind);
-            this.hasMergeFields = shape.fields().stream()
-                .anyMatch(f -> f.mergeMode() != MergeMode.OVERWRITE);
+            this.upsertPlan = UpsertPlan.of(shape);
         }
 
         @Override
@@ -351,11 +344,7 @@ public final class MongoEntityAdapter implements KindAdapter<Entity<?, ?, ?>> {
 
         private void upsertRecord(@NotNull Object record) {
             Object idValue = idExtractor.apply(record);
-            if (hasMergeFields) {
-                writePipeline(record, idValue);
-            } else {
-                writeRawBson(record, idValue);
-            }
+            upsertPlan.write(this, record, idValue);
         }
 
         /**
@@ -556,6 +545,29 @@ public final class MongoEntityAdapter implements KindAdapter<Entity<?, ?, ?>> {
      * codec's EncodeShape; {@code columnName} is the Mongo column to
      * write (suffix {@code _lower} appended to the source name).
      */
+    private record UpsertPlan(@NotNull UpsertWriter writer) {
+        private static final @NotNull UpsertPlan RAW_BSON =
+            new UpsertPlan((handler, record, idValue) -> handler.writeRawBson(record, idValue));
+        private static final @NotNull UpsertPlan PIPELINE =
+            new UpsertPlan((handler, record, idValue) -> handler.writePipeline(record, idValue));
+
+        private static @NotNull UpsertPlan of(@NotNull EncodeShape shape) {
+            for (EncodeShape.FieldDef field : shape.fields()) {
+                if (field.mergeMode() != MergeMode.OVERWRITE) return PIPELINE;
+            }
+            return RAW_BSON;
+        }
+
+        private void write(@NotNull EntityHandler<?> handler, @NotNull Object record, @NotNull Object idValue) {
+            writer.write(handler, record, idValue);
+        }
+    }
+
+    @FunctionalInterface
+    private interface UpsertWriter {
+        void write(@NotNull EntityHandler<?> handler, @NotNull Object record, @NotNull Object idValue);
+    }
+
     private record LowerCompanion(int fieldIndex, @NotNull String columnName) {}
 
     private static @NotNull LowerCompanion[] buildLowerCompanions(@NotNull Entity<?, ?, ?> kind) {
