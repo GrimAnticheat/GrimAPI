@@ -25,6 +25,7 @@ import org.jetbrains.annotations.Nullable;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.concurrent.Executor;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
@@ -85,16 +86,12 @@ public final class RingRegistry {
             @NotNull StoreId storeId,
             @NotNull DataKind kind) throws BackendException {
         StorageEventHandler<E> handler = adapter.writeHandler(storeId, kind, cat);
-        boolean singleWriter = backend.writerThreads(cat) <= 1
-            && !backend.capabilities().contains(Capability.MULTI_WRITER);
-        if (singleWriter) {
+        if (usesSharedSingleWriter(backend, cat)) {
             // Wrap the handler to submit work to a shared single-thread
             // executor per backend. The Disruptor thread does the fast
             // submit; the actual I/O runs on the executor thread. No
             // locks — the executor IS the serialization.
-            java.util.concurrent.ExecutorService exec = singleWriterExecutors.computeIfAbsent(
-                backend.id(), id -> java.util.concurrent.Executors.newSingleThreadExecutor(
-                    namedDaemon("grim-datastore-" + id + "-writer")));
+            java.util.concurrent.ExecutorService exec = singleWriterExecutor(backend.id());
             StorageEventHandler<E> original = handler;
             handler = (event, sequence, endOfBatch) -> {
                 // Snapshot the event state before submitting — the
@@ -115,6 +112,25 @@ public final class RingRegistry {
             };
         }
         registerInternal(cat, backend.id(), backend, handler, false);
+    }
+
+    public @NotNull Executor executorForBackendOperation(
+            @NotNull BackendV2 backend,
+            @NotNull Category<?> cat,
+            @NotNull Executor fallback) {
+        return usesSharedSingleWriter(backend, cat) ? singleWriterExecutor(backend.id()) : fallback;
+    }
+
+    private static boolean usesSharedSingleWriter(@NotNull BackendV2 backend, @NotNull Category<?> cat) {
+        return backend.writerThreads(cat) <= 1
+                && !backend.capabilities().contains(Capability.MULTI_WRITER);
+    }
+
+    private java.util.concurrent.ExecutorService singleWriterExecutor(@NotNull String backendId) {
+        return singleWriterExecutors.computeIfAbsent(
+                backendId,
+                id -> java.util.concurrent.Executors.newSingleThreadExecutor(
+                        namedDaemon("grim-datastore-" + id + "-writer")));
     }
 
     /**

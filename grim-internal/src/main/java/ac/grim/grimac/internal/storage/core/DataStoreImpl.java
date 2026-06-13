@@ -28,6 +28,7 @@ import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -116,7 +117,8 @@ public final class DataStoreImpl implements DataStore {
         for (Category<?> c : new Category<?>[] {
                 Categories.VIOLATION, Categories.SESSION,
                 Categories.PLAYER_IDENTITY, Categories.SETTING,
-                Categories.SERVER_STARTUP, Categories.VERBOSE_SCHEMA }) {
+                Categories.SERVER_STARTUP, Categories.VERBOSE_SCHEMA,
+                Categories.CHECK_CATALOG }) {
             if (v2Routes.contains(c)) out.add(c);
         }
         return out;
@@ -170,6 +172,9 @@ public final class DataStoreImpl implements DataStore {
             return f;
         }
         boolean isReadShaped = isReadOperation(op);
+        Executor executor = isReadShaped
+                ? reader
+                : rings.executorForBackendOperation(route.backend(), cat, reader);
         return CompletableFuture.supplyAsync(() -> {
             long start = System.nanoTime();
             try {
@@ -183,7 +188,7 @@ public final class DataStoreImpl implements DataStore {
                 // Operation<Void> deletes would otherwise pollute that histogram.
                 if (isReadShaped) metrics.observeReadLatencyMs(ms);
             }
-        }, reader);
+        }, executor);
     }
 
     /**

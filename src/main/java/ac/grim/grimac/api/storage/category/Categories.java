@@ -1,12 +1,14 @@
 package ac.grim.grimac.api.storage.category;
 
 import ac.grim.grimac.api.storage.event.BlobEvent;
+import ac.grim.grimac.api.storage.event.CheckCatalogEvent;
 import ac.grim.grimac.api.storage.event.PlayerIdentityEvent;
 import ac.grim.grimac.api.storage.event.ServerStartupEvent;
 import ac.grim.grimac.api.storage.event.SessionEvent;
 import ac.grim.grimac.api.storage.event.SettingEvent;
 import ac.grim.grimac.api.storage.event.VerboseSchemaEvent;
 import ac.grim.grimac.api.storage.event.ViolationEvent;
+import ac.grim.grimac.api.storage.model.CheckCatalogRecord;
 import ac.grim.grimac.api.storage.model.PlayerIdentity;
 import ac.grim.grimac.api.storage.model.ServerStartupRecord;
 import ac.grim.grimac.api.storage.model.SessionBlobRecord;
@@ -52,6 +54,14 @@ public final class Categories {
             VerboseSchemaEvent.class,
             VerboseSchemaEvent::new,
             VerboseSchemaRecord.class,
+            EnumSet.of(Capability.KIND_ENTITY),
+            AccessPattern.INDEXED_KV);
+
+    public static final Category<CheckCatalogEvent> CHECK_CATALOG = new Builtin<>(
+            "check-catalog",
+            CheckCatalogEvent.class,
+            CheckCatalogEvent::new,
+            CheckCatalogRecord.class,
             EnumSet.of(Capability.KIND_ENTITY),
             AccessPattern.INDEXED_KV);
 
