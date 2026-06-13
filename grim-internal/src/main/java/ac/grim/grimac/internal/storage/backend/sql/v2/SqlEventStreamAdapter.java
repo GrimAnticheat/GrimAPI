@@ -52,8 +52,6 @@ public final class SqlEventStreamAdapter implements KindAdapter<EventStream<?, ?
     private final @NotNull DataSource ds;
     private final @NotNull SqlDialect dialect;
     private final @NotNull Logger logger;
-    private static final int SQLITE_BUSY_RETRIES = 8;
-    private static final long SQLITE_BUSY_BACKOFF_MS = 25L;
 
     public SqlEventStreamAdapter(@NotNull DataSource ds, @NotNull SqlDialect dialect,
                                  @NotNull Logger logger) {
@@ -172,47 +170,17 @@ public final class SqlEventStreamAdapter implements KindAdapter<EventStream<?, ?
             try {
                 Object record = kind.eventToRecord().apply(event);
                 BsonCodec codec = BsonCodecs.regular(kind.recordType());
-                for (int attempt = 0; ; attempt++) {
-                    try (Connection c = ds.getConnection();
-                         PreparedStatement ps = c.prepareStatement(insertSql)) {
-                        int idx = 1;
-                        for (int i = 0; i < shape.fields().size(); i++) {
-                            SqlBindings.bind(ps, idx++, shape.fields().get(i), codec.readField(record, i));
-                        }
-                        ps.executeUpdate();
-                        return;
-                    } catch (SQLException e) {
-                        if (!isSqliteBusy(e) || attempt >= SQLITE_BUSY_RETRIES) {
-                            throw e;
-                        }
-                        sleepBeforeBusyRetry(attempt);
+                try (Connection c = ds.getConnection();
+                     PreparedStatement ps = c.prepareStatement(insertSql)) {
+                    int idx = 1;
+                    for (int i = 0; i < shape.fields().size(); i++) {
+                        SqlBindings.bind(ps, idx++, shape.fields().get(i), codec.readField(record, i));
                     }
+                    ps.executeUpdate();
                 }
             } catch (Exception e) {
                 throw new BackendException("event stream write failed", e);
             }
-        }
-    }
-
-    private static boolean isSqliteBusy(@NotNull SQLException e) {
-        for (SQLException current = e; current != null; current = current.getNextException()) {
-            if (current.getErrorCode() == 5) return true; // SQLITE_BUSY
-            String message = current.getMessage();
-            if (message != null && (message.contains("SQLITE_BUSY")
-                    || message.contains("database is locked"))) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private static void sleepBeforeBusyRetry(int attempt) throws BackendException {
-        long delayMs = Math.min(500L, SQLITE_BUSY_BACKOFF_MS << Math.min(attempt, 5));
-        try {
-            Thread.sleep(delayMs);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new BackendException("interrupted while waiting for SQLite busy retry", e);
         }
     }
 
