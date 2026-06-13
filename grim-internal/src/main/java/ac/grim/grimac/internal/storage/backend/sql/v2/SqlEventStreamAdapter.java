@@ -49,6 +49,8 @@ import java.util.logging.Logger;
 @ApiStatus.Internal
 public final class SqlEventStreamAdapter implements KindAdapter<EventStream<?, ?>> {
 
+    private static final int SQL_BATCH_SIZE = 256;
+
     private final @NotNull DataSource ds;
     private final @NotNull SqlDialect dialect;
     private final @NotNull Logger logger;
@@ -157,29 +159,59 @@ public final class SqlEventStreamAdapter implements KindAdapter<EventStream<?, ?
         private final String insertSql;
         private final EventStream kind;
         private final EncodeShape shape;
-        private final List<PreparedStatement> pending = new ArrayList<>();
+        private final BsonCodec codec;
+        private final List<Object> pendingRecords = new ArrayList<>(SQL_BATCH_SIZE);
 
         EventStreamWriteHandler(String insertSql, EventStream<?, ?> kind, EncodeShape shape) {
             this.insertSql = insertSql;
             this.kind = kind;
             this.shape = shape;
+            this.codec = BsonCodecs.regular(kind.recordType());
         }
 
         @Override
         public void onEvent(E event, long sequence, boolean endOfBatch) throws BackendException {
+            Object record;
             try {
-                Object record = kind.eventToRecord().apply(event);
-                BsonCodec codec = BsonCodecs.regular(kind.recordType());
-                try (Connection c = ds.getConnection();
-                     PreparedStatement ps = c.prepareStatement(insertSql)) {
-                    int idx = 1;
-                    for (int i = 0; i < shape.fields().size(); i++) {
-                        SqlBindings.bind(ps, idx++, shape.fields().get(i), codec.readField(record, i));
-                    }
-                    ps.executeUpdate();
-                }
+                record = kind.eventToRecord().apply(event);
+            } catch (RuntimeException e) {
+                throw new BackendException("event stream write failed", e);
+            }
+            try {
+                pendingRecords.add(record);
+                if (endOfBatch || pendingRecords.size() >= SQL_BATCH_SIZE) flushBatch();
             } catch (Exception e) {
                 throw new BackendException("event stream write failed", e);
+            }
+        }
+
+        private void flushBatch() throws SQLException {
+            if (pendingRecords.isEmpty()) return;
+            try (Connection c = ds.getConnection()) {
+                boolean priorAutoCommit = c.getAutoCommit();
+                c.setAutoCommit(false);
+                try (PreparedStatement ps = c.prepareStatement(insertSql)) {
+                    for (Object record : pendingRecords) {
+                        bindRecord(ps, record);
+                        ps.addBatch();
+                    }
+                    ps.executeBatch();
+                    c.commit();
+                } catch (SQLException | RuntimeException e) {
+                    try { c.rollback(); } catch (SQLException ignored) {}
+                    throw e;
+                } finally {
+                    c.setAutoCommit(priorAutoCommit);
+                }
+            } finally {
+                pendingRecords.clear();
+            }
+        }
+
+        private void bindRecord(@NotNull PreparedStatement ps, @NotNull Object record) throws SQLException {
+            int idx = 1;
+            for (int i = 0; i < shape.fields().size(); i++) {
+                SqlBindings.bind(ps, idx++, shape.fields().get(i), codec.readField(record, i));
             }
         }
     }

@@ -108,6 +108,8 @@ import java.util.logging.Logger;
 @ApiStatus.Internal
 public final class SqlEntityAdapter implements KindAdapter<Entity<?, ?, ?>> {
 
+    private static final int SQL_BATCH_SIZE = 256;
+
     private final @NotNull DataSource ds;
     private final @NotNull SqlDialect dialect;
     private final @NotNull Logger logger;
@@ -251,10 +253,8 @@ public final class SqlEntityAdapter implements KindAdapter<Entity<?, ?, ?>> {
     /**
      * Atomic upsert handler. One PreparedStatement template per
      * (table, shape) cached in {@link #upsertSql}; the handler
-     * acquires a pooled connection per event, binds shape.fields()
-     * positionally via {@link SqlBindings#bind}, and executes.
-     * Hikari (or whichever DataSource the backend wires) absorbs
-     * the connection-acquisition overhead.
+     * accumulates records until the Disruptor batch ends (or a fixed
+     * cap is reached), then writes them through one JDBC batch.
      */
     private final class SqlEntityHandler<E> implements StorageEventHandler<E> {
 
@@ -264,6 +264,7 @@ public final class SqlEntityAdapter implements KindAdapter<Entity<?, ?, ?>> {
         private final @NotNull BsonCodec codec;
         private final @NotNull EncodeShape shape;
         private final @NotNull Function<E, Object> eventToRecord;
+        private final @NotNull List<Object> pendingRecords = new ArrayList<>(SQL_BATCH_SIZE);
 
         @SuppressWarnings({"unchecked", "rawtypes"})
         SqlEntityHandler(@NotNull StoreId id, @NotNull Entity<?, E, ?> kind) {
@@ -280,20 +281,50 @@ public final class SqlEntityAdapter implements KindAdapter<Entity<?, ?, ?>> {
         @Override
         @SuppressWarnings({"unchecked", "rawtypes"})
         public void onEvent(E event, long sequence, boolean endOfBatch) throws BackendException {
+            Object record;
             try {
-                Object record = eventToRecord.apply(event);
-                try (Connection c = ds.getConnection();
-                     PreparedStatement ps = c.prepareStatement(upsertSql)) {
-                    int n = shape.fields().size();
-                    for (int i = 0; i < n; i++) {
-                        EncodeShape.FieldDef f = shape.fields().get(i);
-                        Object v = codec.readField(record, i);
-                        SqlBindings.bind(ps, i + 1, f, v);
-                    }
-                    ps.executeUpdate();
-                }
+                record = eventToRecord.apply(event);
+            } catch (RuntimeException e) {
+                throw new BackendException("sql entity upsert failed for " + id, e);
+            }
+            try {
+                pendingRecords.add(record);
+                if (endOfBatch || pendingRecords.size() >= SQL_BATCH_SIZE) flushBatch();
             } catch (SQLException | RuntimeException e) {
                 throw new BackendException("sql entity upsert failed for " + id, e);
+            }
+        }
+
+        private void flushBatch() throws SQLException {
+            if (pendingRecords.isEmpty()) return;
+            try (Connection c = ds.getConnection()) {
+                boolean priorAutoCommit = c.getAutoCommit();
+                c.setAutoCommit(false);
+                try (PreparedStatement ps = c.prepareStatement(upsertSql)) {
+                    for (Object record : pendingRecords) {
+                        bindAllFields(ps, record);
+                        ps.addBatch();
+                    }
+                    ps.executeBatch();
+                    c.commit();
+                } catch (SQLException | RuntimeException e) {
+                    try { c.rollback(); } catch (SQLException ignored) {}
+                    throw e;
+                } finally {
+                    c.setAutoCommit(priorAutoCommit);
+                }
+            } finally {
+                pendingRecords.clear();
+            }
+        }
+
+        private void bindAllFields(@NotNull PreparedStatement ps, @NotNull Object record)
+                throws SQLException {
+            int n = shape.fields().size();
+            for (int i = 0; i < n; i++) {
+                EncodeShape.FieldDef f = shape.fields().get(i);
+                Object v = codec.readField(record, i);
+                SqlBindings.bind(ps, i + 1, f, v);
             }
         }
     }
@@ -315,6 +346,7 @@ public final class SqlEntityAdapter implements KindAdapter<Entity<?, ?, ?>> {
         private final @NotNull EncodeShape shape;
         private final int idIndex;
         private final @NotNull Function<E, Object> eventToRecord;
+        private final @NotNull List<Object> pendingRecords = new ArrayList<>(SQL_BATCH_SIZE);
 
         @SuppressWarnings({"unchecked", "rawtypes"})
         LegacySqliteEntityHandler(@NotNull StoreId id, @NotNull Entity<?, E, ?> kind) {
@@ -331,38 +363,51 @@ public final class SqlEntityAdapter implements KindAdapter<Entity<?, ?, ?>> {
         @Override
         @SuppressWarnings({"unchecked", "rawtypes"})
         public void onEvent(E event, long sequence, boolean endOfBatch) throws BackendException {
+            Object record;
             try {
-                Object record = eventToRecord.apply(event);
-                try (Connection c = ds.getConnection()) {
-                    boolean priorAutoCommit = c.getAutoCommit();
-                    c.setAutoCommit(false);
-                    try {
-                        try (PreparedStatement insert = c.prepareStatement(insertSql)) {
-                            bindAllFields(insert, record);
-                            insert.executeUpdate();
-                        }
-                        if (updateSql != null) {
-                            try (PreparedStatement update = c.prepareStatement(updateSql)) {
-                                int param = 1;
-                                for (int fieldIndex : updateIndexes) {
-                                    EncodeShape.FieldDef f = shape.fields().get(fieldIndex);
-                                    SqlBindings.bind(update, param++, f, codec.readField(record, fieldIndex));
-                                }
-                                EncodeShape.FieldDef idField = shape.fields().get(idIndex);
-                                SqlBindings.bind(update, param, idField, codec.readField(record, idIndex));
-                                update.executeUpdate();
-                            }
-                        }
-                        c.commit();
-                    } catch (Exception e) {
-                        try { c.rollback(); } catch (SQLException ignored) {}
-                        throw e;
-                    } finally {
-                        c.setAutoCommit(priorAutoCommit);
-                    }
-                }
+                record = eventToRecord.apply(event);
+            } catch (RuntimeException e) {
+                throw new BackendException("sql entity upsert failed for " + id, e);
+            }
+            try {
+                pendingRecords.add(record);
+                if (endOfBatch || pendingRecords.size() >= SQL_BATCH_SIZE) flushBatch();
             } catch (SQLException | RuntimeException e) {
                 throw new BackendException("sql entity upsert failed for " + id, e);
+            }
+        }
+
+        private void flushBatch() throws SQLException {
+            if (pendingRecords.isEmpty()) return;
+            try (Connection c = ds.getConnection()) {
+                boolean priorAutoCommit = c.getAutoCommit();
+                c.setAutoCommit(false);
+                try {
+                    try (PreparedStatement insert = c.prepareStatement(insertSql)) {
+                        for (Object record : pendingRecords) {
+                            bindAllFields(insert, record);
+                            insert.addBatch();
+                        }
+                        insert.executeBatch();
+                    }
+                    if (updateSql != null) {
+                        try (PreparedStatement update = c.prepareStatement(updateSql)) {
+                            for (Object record : pendingRecords) {
+                                bindUpdate(update, record);
+                                update.addBatch();
+                            }
+                            update.executeBatch();
+                        }
+                    }
+                    c.commit();
+                } catch (SQLException | RuntimeException e) {
+                    try { c.rollback(); } catch (SQLException ignored) {}
+                    throw e;
+                } finally {
+                    c.setAutoCommit(priorAutoCommit);
+                }
+            } finally {
+                pendingRecords.clear();
             }
         }
 
@@ -373,6 +418,16 @@ public final class SqlEntityAdapter implements KindAdapter<Entity<?, ?, ?>> {
                 EncodeShape.FieldDef f = shape.fields().get(i);
                 SqlBindings.bind(ps, i + 1, f, codec.readField(record, i));
             }
+        }
+
+        private void bindUpdate(@NotNull PreparedStatement ps, @NotNull Object record) throws SQLException {
+            int param = 1;
+            for (int fieldIndex : updateIndexes) {
+                EncodeShape.FieldDef f = shape.fields().get(fieldIndex);
+                SqlBindings.bind(ps, param++, f, codec.readField(record, fieldIndex));
+            }
+            EncodeShape.FieldDef idField = shape.fields().get(idIndex);
+            SqlBindings.bind(ps, param, idField, codec.readField(record, idIndex));
         }
     }
 
