@@ -49,14 +49,14 @@ public final class SqlCounterAdapter implements KindAdapter<Counter<?>> {
     private final @NotNull DataSource ds;
     private final @NotNull SqlDialect dialect;
     private final @NotNull Logger logger;
-    private final @NotNull CounterPlan counterPlan;
+    private final @NotNull CounterStrategy counterStrategy;
 
     public SqlCounterAdapter(@NotNull DataSource ds, @NotNull SqlDialect dialect,
                              @NotNull Logger logger) {
         this.ds = ds;
         this.dialect = dialect;
         this.logger = logger;
-        this.counterPlan = CounterPlan.of(dialect, CounterSql.of(dialect));
+        this.counterStrategy = CounterStrategy.of(dialect, CounterSql.of(dialect));
     }
 
     @SuppressWarnings("unchecked")
@@ -95,7 +95,7 @@ public final class SqlCounterAdapter implements KindAdapter<Counter<?>> {
     public <E> @NotNull StorageEventHandler<E> writeHandler(
             @NotNull StoreId id, @NotNull Counter<?> kind, @NotNull Category<E> category) {
         String table = dialect.quoteIdentifier(id.name());
-        return counterPlan.writeHandler(this, table);
+        return counterStrategy.writeHandler(this, table);
     }
 
     @SuppressWarnings({"unchecked", "rawtypes"})
@@ -172,11 +172,11 @@ public final class SqlCounterAdapter implements KindAdapter<Counter<?>> {
         }
     }
 
-    private interface CounterPlan {
-        static @NotNull CounterPlan of(@NotNull SqlDialect dialect, @NotNull CounterSql sql) {
-            if (dialect.usesLegacySqliteUpsert()) return LegacyCounterPlan.INSTANCE;
-            if (dialect.supportsReturning()) return new ReturningCounterPlan(sql);
-            return new SelectCounterPlan(sql);
+    private interface CounterStrategy {
+        static @NotNull CounterStrategy of(@NotNull SqlDialect dialect, @NotNull CounterSql sql) {
+            if (dialect.usesLegacySqliteUpsert()) return LegacyCounterStrategy.INSTANCE;
+            if (dialect.supportsReturning()) return new ReturningCounterStrategy(sql);
+            return new SelectCounterStrategy(sql);
         }
 
         <E> @NotNull StorageEventHandler<E> writeHandler(@NotNull SqlCounterAdapter adapter, @NotNull String table);
@@ -188,8 +188,8 @@ public final class SqlCounterAdapter implements KindAdapter<Counter<?>> {
                          @NotNull Object key, long value) throws SQLException;
     }
 
-    private record LegacyCounterPlan() implements CounterPlan {
-        private static final @NotNull CounterPlan INSTANCE = new LegacyCounterPlan();
+    private record LegacyCounterStrategy() implements CounterStrategy {
+        private static final @NotNull CounterStrategy INSTANCE = new LegacyCounterStrategy();
 
         @Override
         public <E> @NotNull StorageEventHandler<E> writeHandler(@NotNull SqlCounterAdapter adapter, @NotNull String table) {
@@ -209,7 +209,7 @@ public final class SqlCounterAdapter implements KindAdapter<Counter<?>> {
         }
     }
 
-    private record ReturningCounterPlan(@NotNull CounterSql sql) implements CounterPlan {
+    private record ReturningCounterStrategy(@NotNull CounterSql sql) implements CounterStrategy {
         @Override
         public <E> @NotNull StorageEventHandler<E> writeHandler(@NotNull SqlCounterAdapter adapter, @NotNull String table) {
             return adapter.new CounterWriteHandler<>(sql.increment(table));
@@ -228,7 +228,7 @@ public final class SqlCounterAdapter implements KindAdapter<Counter<?>> {
         }
     }
 
-    private record SelectCounterPlan(@NotNull CounterSql sql) implements CounterPlan {
+    private record SelectCounterStrategy(@NotNull CounterSql sql) implements CounterStrategy {
         @Override
         public <E> @NotNull StorageEventHandler<E> writeHandler(@NotNull SqlCounterAdapter adapter, @NotNull String table) {
             return adapter.new CounterWriteHandler<>(sql.increment(table));
@@ -335,12 +335,12 @@ public final class SqlCounterAdapter implements KindAdapter<Counter<?>> {
 
     private long incrementBy(@NotNull StoreId id, @NotNull CounterOps.IncrementByOp<?> op) throws SQLException {
         String table = dialect.quoteIdentifier(id.name());
-        return counterPlan.incrementBy(this, table, op.key(), op.delta());
+        return counterStrategy.incrementBy(this, table, op.key(), op.delta());
     }
 
     private long setIfHigher(@NotNull StoreId id, @NotNull CounterOps.SetIfHigherOp<?> op) throws SQLException {
         String table = dialect.quoteIdentifier(id.name());
-        return counterPlan.setIfHigher(this, table, op.key(), op.value());
+        return counterStrategy.setIfHigher(this, table, op.key(), op.value());
     }
 
     private long incrementReturning(@NotNull String upsert, @NotNull Object key, long delta) throws SQLException {
