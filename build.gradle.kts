@@ -98,8 +98,44 @@ java {
 // --- Environment Variable Loading for Publishing ---
 val envProperties = Properties()
 file(".env").takeIf { it.exists() }?.reader(Charsets.UTF_8)?.use(envProperties::load)
+fun String?.nonBlank(): String? = this?.takeIf { it.isNotBlank() }
 fun getEnvVar(name: String): String? =
-    System.getenv(name) ?: envProperties.getProperty(name)
+    System.getProperty(name).nonBlank()
+        ?: project.findProperty(name)?.toString().nonBlank()
+        ?: System.getenv(name).nonBlank()
+        ?: envProperties.getProperty(name).nonBlank()
+
+fun requireMavenPublishUrl(repoUrl: String, isSnapshot: Boolean): String {
+    val normalized = repoUrl.trim().trimEnd('/')
+    val conflictingSuffix = if (isSnapshot) "releases" else "snapshots"
+    if (normalized.endsWith("/$conflictingSuffix")) {
+        throw org.gradle.api.GradleException(
+            "Refusing to publish ${if (isSnapshot) "snapshot" else "release"} Grim API artifacts to '$normalized'."
+        )
+    }
+    return normalized
+}
+
+fun mavenPublishUrlFromBase(repoUrl: String, isSnapshot: Boolean): String {
+    val normalized = requireMavenPublishUrl(repoUrl, isSnapshot)
+    val desiredSuffix = if (isSnapshot) "snapshots" else "releases"
+    if (normalized.endsWith("/$desiredSuffix")) return normalized
+
+    return "$normalized/$desiredSuffix"
+}
+
+fun grimApiPublishUrl(publishedVersion: String): String? {
+    val isSnapshot = publishedVersion.endsWith("-SNAPSHOT")
+    val explicit = if (isSnapshot) {
+        getEnvVar("MAVEN_SNAPSHOT_URL") ?: getEnvVar("GRIM_MAVEN_SNAPSHOTS_URL")
+    } else {
+        getEnvVar("MAVEN_RELEASE_URL") ?: getEnvVar("GRIM_MAVEN_RELEASES_URL")
+    }
+    if (!explicit.isNullOrBlank()) return requireMavenPublishUrl(explicit, isSnapshot)
+
+    return (getEnvVar("MAVEN_REPO_URL") ?: getEnvVar("GRIM_MAVEN_REPO_URL"))
+        ?.let { mavenPublishUrlFromBase(it, isSnapshot) }
+}
 
 // --- Publishing Configuration ---
 allprojects {
@@ -114,7 +150,7 @@ allprojects {
     publishing {
         repositories {
             mavenLocal()
-            getEnvVar("MAVEN_REPO_URL")?.let { repoUrl ->
+            grimApiPublishUrl(project.version.toString())?.let { repoUrl ->
                 maven {
                     name = getEnvVar("MAVEN_REPO_NAME") ?: "CustomMaven"
                     url = uri(repoUrl)
