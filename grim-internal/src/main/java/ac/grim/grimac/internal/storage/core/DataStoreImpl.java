@@ -14,6 +14,7 @@ import ac.grim.grimac.api.storage.kind.DataKind;
 import ac.grim.grimac.api.storage.kind.Operation;
 import ac.grim.grimac.api.storage.kind.ops.EntityOps;
 import ac.grim.grimac.api.storage.kind.ops.EventStreamOps;
+import ac.grim.grimac.api.storage.instance.ServerOwnershipGate;
 import ac.grim.grimac.api.storage.query.DeleteCriteria;
 import ac.grim.grimac.api.storage.query.Deletes;
 import ac.grim.grimac.api.storage.query.Page;
@@ -52,6 +53,7 @@ public final class DataStoreImpl implements DataStore {
     private final long shutdownDrainTimeoutMs;
     private final Logger logger;
     private volatile boolean closed;
+    private volatile ServerOwnershipGate ownershipGate = ServerOwnershipGate.disabled();
 
     /**
      * v2 routing table — categories registered on the new
@@ -81,6 +83,12 @@ public final class DataStoreImpl implements DataStore {
     }
 
     public V2Routes v2Routes() { return v2Routes; }
+
+    public DataStoreImpl withOwnershipGate(@NotNull ServerOwnershipGate ownershipGate) {
+        this.ownershipGate = ownershipGate;
+        this.rings.withWriteGate(() -> this.ownershipGate.allowWrites());
+        return this;
+    }
 
     /**
      * Wires one ring per routed category. Must be called after
@@ -139,6 +147,7 @@ public final class DataStoreImpl implements DataStore {
     @Override
     public <E> void submit(Category<E> cat, Consumer<E> configurer) {
         if (closed) return;
+        if (!ownershipGate.allowWrites()) return;
         if (cat == Categories.VIOLATION) {
             submitViolation(configurer);
             return;
@@ -162,6 +171,13 @@ public final class DataStoreImpl implements DataStore {
             f.completeExceptionally(new IllegalStateException("DataStore is closed"));
             return f;
         }
+        boolean isReadShaped = isReadOperation(op);
+        if (!isReadShaped && !ownershipGate.allowWrites()) {
+            CompletableFuture<R> f = new CompletableFuture<>();
+            f.completeExceptionally(new IllegalStateException(
+                    "persistent writes are disabled: " + ownershipGate.closeReason()));
+            return f;
+        }
         Category<?> cat = op.category();
         V2Routes.Route<? extends DataKind<?, ?>> route = v2Routes.routeFor(cat);
         if (route == null) {
@@ -171,13 +187,13 @@ public final class DataStoreImpl implements DataStore {
                     + " — operation " + op.getClass().getSimpleName() + " cannot dispatch"));
             return f;
         }
-        boolean isReadShaped = isReadOperation(op);
         Executor executor = isReadShaped
                 ? reader
                 : rings.executorForBackendOperation(route.backend(), cat, reader);
         return CompletableFuture.supplyAsync(() -> {
             long start = System.nanoTime();
             try {
+                if (!isReadShaped) requireWritesAllowed();
                 KindAdapter adapter = route.adapter();
                 return (R) adapter.execute(route.storeId(), route.kind(), op);
             } catch (BackendException e) {
@@ -292,6 +308,12 @@ public final class DataStoreImpl implements DataStore {
 
     @Override
     public <E> CompletionStage<Void> delete(Category<E> cat, DeleteCriteria criteria) {
+        if (!ownershipGate.allowWrites()) {
+            CompletableFuture<Void> f = new CompletableFuture<>();
+            f.completeExceptionally(new IllegalStateException(
+                    "persistent writes are disabled: " + ownershipGate.closeReason()));
+            return f;
+        }
         V2Routes.Route<?> route = v2Routes.routeFor(cat);
         if (route != null) {
             Operation<Void> v2Op = DeleteCriteriaTranslator.translate(cat, criteria);
@@ -322,6 +344,12 @@ public final class DataStoreImpl implements DataStore {
     }
 
     private <E> CompletionStage<Void> legacyDelete(Category<E> cat, DeleteCriteria criteria) {
+        if (!ownershipGate.allowWrites()) {
+            CompletableFuture<Void> f = new CompletableFuture<>();
+            f.completeExceptionally(new IllegalStateException(
+                    "persistent writes are disabled: " + ownershipGate.closeReason()));
+            return f;
+        }
         Backend b = router.backendFor(cat);
         if (b == null) {
             CompletableFuture<Void> f = new CompletableFuture<>();
@@ -332,6 +360,7 @@ public final class DataStoreImpl implements DataStore {
         }
         return CompletableFuture.runAsync(() -> {
             try {
+                requireWritesAllowed();
                 b.delete(cat, criteria);
             } catch (BackendException e) {
                 throw new RuntimeException("backend delete failed", e);
@@ -432,11 +461,13 @@ public final class DataStoreImpl implements DataStore {
 
     @SuppressWarnings({"unchecked", "rawtypes"})
     private Object executeSync(@NotNull V2Routes.Route<?> route, @NotNull Operation<?> op) throws BackendException {
+        if (!isReadOperation(op)) requireWritesAllowed();
         KindAdapter adapter = route.adapter();
         return adapter.execute(route.storeId(), route.kind(), op);
     }
 
     private <E> void deleteSync(@NotNull Category<E> cat, @NotNull DeleteCriteria criteria) throws BackendException {
+        requireWritesAllowed();
         V2Routes.Route<?> route = v2Routes.routeFor(cat);
         if (route != null) {
             Operation<Void> v2Op = DeleteCriteriaTranslator.translate(cat, criteria);
@@ -447,6 +478,13 @@ public final class DataStoreImpl implements DataStore {
         }
         Backend b = router.backendFor(cat);
         b.delete(cat, criteria);
+    }
+
+    private void requireWritesAllowed() {
+        if (!ownershipGate.allowWrites()) {
+            throw new IllegalStateException(
+                    "persistent writes are disabled: " + ownershipGate.closeReason());
+        }
     }
 
     @Override

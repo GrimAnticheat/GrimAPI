@@ -24,6 +24,7 @@ public record DataStoreConfig(
         Map<Category<?>, String> routing,
         Map<String, BackendConfig> backends,
         SessionConfig session,
+        OwnershipConfig ownership,
         WritePathConfig writePath,
         Map<Category<?>, RetentionRule> retention,
         MigrationConfig migration,
@@ -35,6 +36,7 @@ public record DataStoreConfig(
         routing = routing == null ? Map.of() : Map.copyOf(routing);
         backends = backends == null ? Map.of() : Map.copyOf(backends);
         session = session == null ? SessionConfig.defaults() : session;
+        ownership = ownership == null ? OwnershipConfig.defaults() : ownership;
         writePath = writePath == null ? WritePathConfig.defaults() : writePath;
         retention = retention == null ? Map.of() : Map.copyOf(retention);
         migration = migration == null ? MigrationConfig.defaults() : migration;

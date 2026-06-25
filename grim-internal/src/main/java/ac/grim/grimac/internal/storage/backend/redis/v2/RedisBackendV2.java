@@ -30,6 +30,7 @@ public final class RedisBackendV2 implements BackendV2 {
     private RedisEventStreamAdapter eventStreamAdapter;
     private RedisKVScopedAdapter kvScopedAdapter;
     private RedisCounterAdapter counterAdapter;
+    private RedisServerOwnershipAdapter ownershipAdapter;
 
     public RedisBackendV2(@NotNull RedisBackendConfig config) {
         this.config = config;
@@ -75,6 +76,7 @@ public final class RedisBackendV2 implements BackendV2 {
         this.eventStreamAdapter = new RedisEventStreamAdapter(pool, prefix, logger);
         this.kvScopedAdapter = new RedisKVScopedAdapter(pool, prefix, logger);
         this.counterAdapter = new RedisCounterAdapter(pool, prefix, logger);
+        this.ownershipAdapter = new RedisServerOwnershipAdapter(pool, prefix, logger);
     }
 
     @Override public void flush() {}
@@ -97,6 +99,9 @@ public final class RedisBackendV2 implements BackendV2 {
     @Override public @NotNull Optional<SearchAdapter> searchAdapter() { return Optional.empty(); }
     @Override public @NotNull Optional<TxAdapter> txAdapter() { return Optional.empty(); }
     @Override public @NotNull Optional<AdminAdapter> adminAdapter() { return Optional.empty(); }
+    @Override public @NotNull Optional<ac.grim.grimac.api.storage.instance.ServerOwnershipAdapter> ownershipAdapter() {
+        return Optional.ofNullable(ownershipAdapter);
+    }
 
     @Override @SuppressWarnings("unchecked")
     public <X> @NotNull Optional<X> unwrap(@NotNull Class<X> type) {
