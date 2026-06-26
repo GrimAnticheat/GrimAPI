@@ -116,18 +116,6 @@ fun requireMavenPublishUrl(repoUrl: String, isSnapshot: Boolean): String {
     return normalized
 }
 
-fun mavenPublishUrlFromBase(repoUrl: String, isSnapshot: Boolean): String {
-    val normalized = repoUrl.trim().trimEnd('/')
-    val desiredSuffix = if (isSnapshot) "snapshots" else "releases"
-    val conflictingSuffix = if (isSnapshot) "releases" else "snapshots"
-    if (normalized.endsWith("/$desiredSuffix")) return normalized
-    if (normalized.endsWith("/$conflictingSuffix")) {
-        return normalized.removeSuffix("/$conflictingSuffix") + "/$desiredSuffix"
-    }
-
-    return "$normalized/$desiredSuffix"
-}
-
 fun grimApiPublishUrl(isReleaseBuild: Boolean): String? {
     val isSnapshot = !isReleaseBuild
     val explicit = if (isSnapshot) {
@@ -138,7 +126,8 @@ fun grimApiPublishUrl(isReleaseBuild: Boolean): String? {
     if (!explicit.isNullOrBlank()) return requireMavenPublishUrl(explicit, isSnapshot)
 
     return (getEnvVar("MAVEN_REPO_URL") ?: getEnvVar("GRIM_MAVEN_REPO_URL"))
-        ?.let { mavenPublishUrlFromBase(it, isSnapshot) }
+        ?.trim()
+        ?.trimEnd('/')
 }
 
 // --- Publishing Configuration ---
