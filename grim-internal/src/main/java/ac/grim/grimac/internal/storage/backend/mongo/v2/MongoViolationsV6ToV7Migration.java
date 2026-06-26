@@ -53,11 +53,9 @@ import java.util.logging.Logger;
  *           re-apply TTL (idempotent) and return.</li>
  *       <li>{@code canonical.count < backup.count} → prior partial copy;
  *           drop canonical + recreate as timeseries + re-copy from backup.</li>
- *       <li>{@code canonical.count > backup.count} → canonical has MORE rows
- *           than backup, which the offline-only migration contract can't
- *           produce on its own. Implies concurrent writes or operator
- *           insertion; throws for manual review rather than destroying
- *           canonical.</li>
+ *       <li>{@code canonical.count > backup.count} → migration completed
+ *           earlier and new v7 rows were written afterward. Preserve the
+ *           backup, re-apply TTL, and continue.</li>
  *       <li>No backup → clean v2-only state; skip.</li>
  *     </ul>
  *   </li>
@@ -164,22 +162,17 @@ public final class MongoViolationsV6ToV7Migration implements Migration<EventStre
                 // Drop canonical and re-copy from backup. Safe — the
                 // missing rows live in backup and copy is idempotent.
                 //
-                // tsCount > bakCount: canonical has MORE rows than the
-                // legacy backup ever contained. The migration contract
-                // is offline-only and the copy never inserts rows that
-                // aren't in backup, so the extras must come from
-                // concurrent live writes (a writer kept writing v2 after
-                // the crash) or operator/manual insertion. Either way
-                // dropping canonical would destroy data the backup
-                // can't replace — throw for manual review.
+                // tsCount > bakCount: the copy already completed and new
+                // v7 rows landed in canonical afterward. This is the normal
+                // state once we preserve _v6_bak for operator rollback and
+                // then boot again after live traffic. Do not drop canonical
+                // and do not block route registration.
                 if (tsCount > bakCount) {
-                    throw new IllegalStateException(
-                        canonical + " timeseries has " + tsCount + " rows but " + backup
-                            + " has only " + bakCount + " — canonical has more rows than backup."
-                            + " This implies concurrent writes during/after migration or manual"
-                            + " insertion; refusing to drop canonical. Manual operator review"
-                            + " required (compare canonical+backup, decide whether to keep"
-                            + " canonical as-is or restore from backup).");
+                    logger.warning(() -> canonical + " is timeseries with " + tsCount + " rows while "
+                        + backup + " has " + bakCount + " — treating as already migrated with "
+                        + "post-migration writes; preserving backup and ensuring TTL");
+                    applyTtl(db, canonical, kind);
+                    return;
                 }
                 logger.warning(() -> canonical + " is timeseries with " + tsCount + " rows but "
                     + backup + " has " + bakCount + " — partial copy detected; re-copying from backup");
