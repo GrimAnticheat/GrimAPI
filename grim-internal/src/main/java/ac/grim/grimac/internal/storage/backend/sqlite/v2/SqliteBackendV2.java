@@ -23,6 +23,7 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.EnumSet;
 import java.util.Optional;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.logging.Logger;
 
 /**
@@ -46,6 +47,7 @@ public final class SqliteBackendV2 implements BackendV2 {
     private Connection connection;
     private javax.sql.DataSource singleConnDs;
     private SqlEntityAdapter entityAdapter;
+    private ac.grim.grimac.internal.storage.backend.sql.v2.SqlServerOwnershipAdapter ownershipAdapter;
     private ac.grim.grimac.internal.storage.backend.sql.v2.SqlEventStreamAdapter eventStreamAdapter;
     private ac.grim.grimac.internal.storage.backend.sql.v2.SqlKeyValueScopedAdapter kvScopedAdapter;
     private ac.grim.grimac.internal.storage.backend.sql.v2.SqlCounterAdapter counterAdapter;
@@ -111,6 +113,7 @@ public final class SqliteBackendV2 implements BackendV2 {
         }
         this.singleConnDs = new SingleConnectionDataSource(connection);
         this.entityAdapter = new SqlEntityAdapter(singleConnDs, dialect, logger);
+        this.ownershipAdapter = new ac.grim.grimac.internal.storage.backend.sql.v2.SqlServerOwnershipAdapter(singleConnDs, dialect, logger);
         this.eventStreamAdapter = new ac.grim.grimac.internal.storage.backend.sql.v2.SqlEventStreamAdapter(singleConnDs, dialect, logger);
         this.kvScopedAdapter = new ac.grim.grimac.internal.storage.backend.sql.v2.SqlKeyValueScopedAdapter(singleConnDs, dialect, logger);
         this.counterAdapter = new ac.grim.grimac.internal.storage.backend.sql.v2.SqlCounterAdapter(singleConnDs, dialect, logger);
@@ -157,6 +160,9 @@ public final class SqliteBackendV2 implements BackendV2 {
     @Override public @NotNull Optional<SearchAdapter> searchAdapter() { return Optional.empty(); }
     @Override public @NotNull Optional<TxAdapter> txAdapter() { return Optional.empty(); }
     @Override public @NotNull Optional<AdminAdapter> adminAdapter() { return Optional.empty(); }
+    @Override public @NotNull Optional<ac.grim.grimac.api.storage.instance.ServerOwnershipAdapter> ownershipAdapter() {
+        return Optional.ofNullable(ownershipAdapter);
+    }
 
     @Override @SuppressWarnings("unchecked")
     public <X> @NotNull Optional<X> unwrap(@NotNull Class<X> type) {
@@ -166,13 +172,27 @@ public final class SqliteBackendV2 implements BackendV2 {
 
     /**
      * Wraps a single persistent Connection as a DataSource. SQLite is
-     * single-writer — concurrency is handled by the RingRegistry's
-     * single-writer executor (writerThreads == 1), so only ONE thread
-     * ever calls getConnection at a time. No locks needed.
+     * single-writer. Normal category writes are serialized by the
+     * RingRegistry's single-writer executor; ownership heartbeats and
+     * recovery writes can run from lifecycle threads, so the DataSource
+     * also serializes the physical JDBC connection from getConnection()
+     * until close().
      */
-    private record SingleConnectionDataSource(Connection conn) implements javax.sql.DataSource {
-        @Override public Connection getConnection() { return new NonClosingConnection(conn); }
-        @Override public Connection getConnection(String u, String p) { return new NonClosingConnection(conn); }
+    private static final class SingleConnectionDataSource implements javax.sql.DataSource {
+        private final Connection conn;
+        private final ReentrantLock lock = new ReentrantLock();
+
+        private SingleConnectionDataSource(Connection conn) {
+            this.conn = conn;
+        }
+
+        @Override public Connection getConnection() {
+            lock.lock();
+            return new NonClosingConnection(conn, lock);
+        }
+        @Override public Connection getConnection(String u, String p) {
+            return getConnection();
+        }
         @Override public java.io.PrintWriter getLogWriter() { return null; }
         @Override public void setLogWriter(java.io.PrintWriter out) {}
         @Override public void setLoginTimeout(int seconds) {}
@@ -184,15 +204,25 @@ public final class SqliteBackendV2 implements BackendV2 {
 
     /**
      * Delegates everything to the wrapped connection. close() is a
-     * no-op so try-with-resources in adapters doesn't close the shared
-     * SQLite connection. Concurrency is handled externally by the
-     * RingRegistry's single-writer executor — this wrapper doesn't
-     * need any synchronization.
+     * lock release rather than a physical close, so try-with-resources
+     * in adapters scopes exclusive access without closing the shared
+     * SQLite connection.
      */
     private static final class NonClosingConnection implements Connection {
         private final Connection delegate;
-        NonClosingConnection(Connection delegate) { this.delegate = delegate; }
-        @Override public void close() { /* no-op */ }
+        private final ReentrantLock lock;
+        private boolean closed;
+
+        NonClosingConnection(Connection delegate, ReentrantLock lock) {
+            this.delegate = delegate;
+            this.lock = lock;
+        }
+
+        @Override public void close() {
+            if (closed) return;
+            closed = true;
+            lock.unlock();
+        }
         @Override public Statement createStatement() throws SQLException { return delegate.createStatement(); }
         @Override public PreparedStatement prepareStatement(String sql) throws SQLException { return delegate.prepareStatement(sql); }
         @Override public boolean getAutoCommit() throws SQLException { return delegate.getAutoCommit(); }

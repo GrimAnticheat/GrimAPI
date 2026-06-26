@@ -30,6 +30,7 @@ import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.BooleanSupplier;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -50,10 +51,16 @@ public final class RingRegistry {
     private final Logger logger;
     private final AtomicLong submittedTotal = new AtomicLong();
     private final AtomicLong droppedOnOverflowTotal = new AtomicLong();
+    private volatile @NotNull BooleanSupplier writeAllowed = () -> true;
 
     public RingRegistry(@NotNull WritePathConfig cfg, @NotNull Logger logger) {
         this.cfg = cfg;
         this.logger = logger;
+    }
+
+    public @NotNull RingRegistry withWriteGate(@NotNull BooleanSupplier writeAllowed) {
+        this.writeAllowed = writeAllowed;
+        return this;
     }
 
     /**
@@ -149,8 +156,12 @@ public final class RingRegistry {
         if (entries.containsKey(cat)) {
             throw new IllegalStateException("ring already registered for category " + cat.id());
         }
+        StorageEventHandler<E> guardedHandler = (event, sequence, endOfBatch) -> {
+            if (!writeAllowed.getAsBoolean()) return;
+            handler.onEvent(event, sequence, endOfBatch);
+        };
         DisruptorEventHandlerAdapter<E> adapter = new DisruptorEventHandlerAdapter<>(
-                cat.id(), handler, cfg.warnRateMs(), logger);
+                cat.id(), guardedHandler, cfg.warnRateMs(), logger);
 
         ThreadFactory tf = namedDaemon("grim-datastore-" + backendId + "-" + cat.id());
         Disruptor<E> disruptor = new Disruptor<>(

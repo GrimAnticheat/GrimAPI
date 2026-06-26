@@ -36,6 +36,7 @@ public final class MysqlBackendV2 implements BackendV2 {
     private Logger logger;
     private HikariDataSource ds;
     private SqlEntityAdapter entityAdapter;
+    private ac.grim.grimac.internal.storage.backend.sql.v2.SqlServerOwnershipAdapter ownershipAdapter;
     private ac.grim.grimac.internal.storage.backend.sql.v2.SqlEventStreamAdapter eventStreamAdapter;
     private ac.grim.grimac.internal.storage.backend.sql.v2.SqlKeyValueScopedAdapter kvScopedAdapter;
     private ac.grim.grimac.internal.storage.backend.sql.v2.SqlCounterAdapter counterAdapter;
@@ -82,6 +83,7 @@ public final class MysqlBackendV2 implements BackendV2 {
             throw new BackendException("MySQL probe failed", e);
         }
         this.entityAdapter = new SqlEntityAdapter(ds, dialect, logger);
+        this.ownershipAdapter = new ac.grim.grimac.internal.storage.backend.sql.v2.SqlServerOwnershipAdapter(ds, dialect, logger);
         this.eventStreamAdapter = new ac.grim.grimac.internal.storage.backend.sql.v2.SqlEventStreamAdapter(ds, dialect, logger);
         this.kvScopedAdapter = new ac.grim.grimac.internal.storage.backend.sql.v2.SqlKeyValueScopedAdapter(ds, dialect, logger);
         this.counterAdapter = new ac.grim.grimac.internal.storage.backend.sql.v2.SqlCounterAdapter(ds, dialect, logger);
@@ -104,6 +106,9 @@ public final class MysqlBackendV2 implements BackendV2 {
     @Override public @NotNull Optional<SearchAdapter> searchAdapter() { return Optional.empty(); }
     @Override public @NotNull Optional<TxAdapter> txAdapter() { return Optional.empty(); }
     @Override public @NotNull Optional<AdminAdapter> adminAdapter() { return Optional.empty(); }
+    @Override public @NotNull Optional<ac.grim.grimac.api.storage.instance.ServerOwnershipAdapter> ownershipAdapter() {
+        return Optional.ofNullable(ownershipAdapter);
+    }
 
     @Override @SuppressWarnings("unchecked")
     public <X> @NotNull Optional<X> unwrap(@NotNull Class<X> type) {

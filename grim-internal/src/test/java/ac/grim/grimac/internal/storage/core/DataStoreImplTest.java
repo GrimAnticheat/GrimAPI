@@ -17,6 +17,7 @@ import ac.grim.grimac.api.storage.config.WritePathConfig;
 import ac.grim.grimac.api.storage.event.PlayerIdentityEvent;
 import ac.grim.grimac.api.storage.event.ViolationEvent;
 import ac.grim.grimac.api.storage.kind.Entity;
+import ac.grim.grimac.api.storage.instance.ServerOwnershipGate;
 import ac.grim.grimac.api.storage.model.PlayerIdentity;
 import ac.grim.grimac.api.storage.model.ViolationRecord;
 import ac.grim.grimac.api.storage.registry.StoreId;
@@ -45,6 +46,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.logging.Logger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -69,6 +71,35 @@ class DataStoreImplTest {
 
             assertTrue(backend.await(), "backend received violation event");
             assertNotNull(backend.id.get(), "DataStore submit path fills violation id");
+        } finally {
+            store.flushAndClose(1_000L);
+        }
+    }
+
+    @Test
+    void queuedSubmitIsDroppedIfOwnershipClosesBeforeRingDispatch() throws Exception {
+        CapturingViolationBackend backend = new CapturingViolationBackend();
+        ServerOwnershipGate gate = new ServerOwnershipGate(true);
+        gate.open(UUID.randomUUID(), UUID.randomUUID(), 30_000L, 0L);
+
+        DataStoreImpl store = new DataStoreImpl(
+                new CategoryRouter(Map.of(Categories.VIOLATION, backend)),
+                new WritePathConfig(8, 1, 1L, 10_000L, 1_000L, WaitStrategyType.BLOCKING),
+                Logger.getLogger("DataStoreImplTest"));
+        store.withOwnershipGate(gate);
+        store.start();
+
+        try {
+            store.submit(Categories.VIOLATION, event -> {
+                event.sessionId(UUID.randomUUID())
+                        .playerUuid(UUID.randomUUID())
+                        .checkId(7)
+                        .vl(1.0)
+                        .occurredEpochMs(1_700_000_000_000L);
+                gate.close("lost-ownership");
+            });
+
+            assertFalse(backend.await(250L), "backend must not receive writes after ownership closes");
         } finally {
             store.flushAndClose(1_000L);
         }
@@ -189,7 +220,11 @@ class DataStoreImplTest {
         private final AtomicReference<UUID> id = new AtomicReference<>();
 
         boolean await() throws InterruptedException {
-            return seen.await(2, TimeUnit.SECONDS);
+            return await(2_000L);
+        }
+
+        boolean await(long timeoutMs) throws InterruptedException {
+            return seen.await(timeoutMs, TimeUnit.MILLISECONDS);
         }
 
         @Override public String id() { return "capturing"; }

@@ -28,7 +28,9 @@ import org.jetbrains.annotations.NotNull;
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.List;
 import java.util.UUID;
 import java.util.logging.Logger;
@@ -380,7 +382,7 @@ public final class MongoViolationsV6ToV7Migration implements Migration<EventStre
             for (EncodeShape.FieldDef f : shape.fields()) {
                 int pos = f.recordIndex();
                 String encoded = f.name();
-                args[pos] = coerceV6Value(v6.get(encoded), paramTypes[pos], encoded);
+                args[pos] = coerceV6Value(v6, v6.get(encoded), paramTypes[pos], encoded);
             }
 
             // Bind the canonical constructor by param types — no RecordComponents
@@ -393,7 +395,7 @@ public final class MongoViolationsV6ToV7Migration implements Migration<EventStre
         }
     }
 
-    private static Object coerceV6Value(Object raw, @NotNull Class<?> javaType, @NotNull String encoded) {
+    private static Object coerceV6Value(@NotNull Document v6, Object raw, @NotNull Class<?> javaType, @NotNull String encoded) {
         if (raw == null) {
             if (javaType.isPrimitive()) {
                 if (javaType == int.class) return 0;
@@ -419,6 +421,12 @@ public final class MongoViolationsV6ToV7Migration implements Migration<EventStre
             if (raw instanceof byte[] b) return b;
             if (raw instanceof org.bson.types.Binary b) return b.getData();
             if (raw instanceof org.bson.BsonBinary b) return b.getData();
+            if ("verbose".equals(encoded) && raw instanceof String s) {
+                Object rawFormat = v6.get("verbose_format");
+                int format = rawFormat instanceof Number n ? n.intValue() : 0;
+                if (format == 1) return Base64.getDecoder().decode(s);
+                return s.getBytes(StandardCharsets.UTF_8);
+            }
             throw new IllegalStateException("v6 " + encoded + ": unexpected binary type " + raw.getClass().getName());
         }
         if (javaType.isEnum()) {

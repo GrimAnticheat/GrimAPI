@@ -2,6 +2,7 @@ package ac.grim.grimac.api.storage.backend;
 
 import ac.grim.grimac.api.storage.category.Capability;
 import ac.grim.grimac.api.storage.category.Category;
+import ac.grim.grimac.api.storage.instance.ServerOwnershipAdapter;
 import ac.grim.grimac.api.storage.kind.DataKind;
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
@@ -45,6 +46,16 @@ public interface BackendV2 {
     @NotNull Optional<TxAdapter> txAdapter();
 
     @NotNull Optional<AdminAdapter> adminAdapter();
+
+    /**
+     * Optional authoritative ownership primitive used to prevent multiple live
+     * JVMs with the same persistent server UUID from writing to the same
+     * backing store. Backends that do not implement this cannot enforce strict
+     * duplicate UUID blocking.
+     */
+    default @NotNull Optional<ServerOwnershipAdapter> ownershipAdapter() {
+        return Optional.empty();
+    }
 
     /**
      * Last-resort escape hatch. Returns the underlying client (e.g.

@@ -11,6 +11,10 @@ import ac.grim.grimac.api.storage.config.TableNames;
 import ac.grim.grimac.api.storage.event.SettingEvent;
 import ac.grim.grimac.api.storage.event.ServerStartupEvent;
 import ac.grim.grimac.api.storage.event.SessionEvent;
+import ac.grim.grimac.api.storage.instance.OwnershipClaimResult;
+import ac.grim.grimac.api.storage.instance.OwnershipRenewResult;
+import ac.grim.grimac.api.storage.instance.ServerOwnershipAdapter;
+import ac.grim.grimac.api.storage.instance.ServerOwnershipMetadata;
 import ac.grim.grimac.api.storage.kind.Counter;
 import ac.grim.grimac.api.storage.kind.CounterEvent;
 import ac.grim.grimac.api.storage.kind.Entity;
@@ -69,6 +73,7 @@ class V2BackendIntegrationTest {
                     "v2_integ_startups_sqlite");
             exerciseSettingsKv(backend, "v2_integ_settings_sqlite");
             exerciseCounter(backend, "v2_integ_counters_sqlite");
+            exerciseOwnership(backend, "v2_integ_ownership_sqlite");
         } finally {
             backend.close();
         }
@@ -84,6 +89,7 @@ class V2BackendIntegrationTest {
                     "v2_legacy_startups_sqlite");
             exerciseSettingsKv(backend, "v2_legacy_settings_sqlite");
             exerciseCounter(backend, "v2_legacy_counters_sqlite");
+            exerciseOwnership(backend, "v2_legacy_ownership_sqlite");
         } finally {
             backend.close();
         }
@@ -360,6 +366,58 @@ class V2BackendIntegrationTest {
         long afterHigherSet = (Long) adapter.execute(counterStore, counterKind,
             new CounterOps.SetIfHigherOp<>(Categories.SETTING, "flags", 9L));
         assertEquals(9L, afterHigherSet, backend.id() + ": counter setIfHigher raises value");
+    }
+
+    private void exerciseOwnership(BackendV2 backend, String ownershipStoreName) throws Exception {
+        StoreId ownershipStore = StoreId.grim(ownershipStoreName + "_" + Long.toHexString(System.nanoTime()));
+        ServerOwnershipAdapter ownership = backend.ownershipAdapter().orElseThrow(
+            () -> new AssertionError(backend.id() + " has no ownership adapter"));
+        ownership.ensureStore(ownershipStore);
+
+        UUID persistentId = UUID.randomUUID();
+        UUID firstStartup = UUID.randomUUID();
+        UUID firstFence = UUID.randomUUID();
+        UUID secondStartup = UUID.randomUUID();
+        UUID secondFence = UUID.randomUUID();
+        ServerOwnershipMetadata metadata = new ServerOwnershipMetadata(
+            "server-a", "localhost", "test", "1.21.11");
+
+        OwnershipClaimResult firstClaim = ownership.claimOwnership(
+            ownershipStore, persistentId, firstStartup, firstFence, 250L, metadata);
+        assertTrue(firstClaim.claimed(), backend.id() + ": first ownership claim succeeds");
+        assertTrue(ownership.readOwnership(ownershipStore, persistentId).isPresent(),
+            backend.id() + ": claimed ownership row is readable");
+
+        OwnershipClaimResult duplicateClaim = ownership.claimOwnership(
+            ownershipStore, persistentId, secondStartup, secondFence, 250L, metadata);
+        assertFalse(duplicateClaim.claimed(), backend.id() + ": active duplicate claim is denied");
+        assertEquals(firstStartup, duplicateClaim.currentOwner().ownerStartupId(),
+            backend.id() + ": duplicate denial reports current owner");
+
+        OwnershipRenewResult renewed = ownership.renewOwnership(
+            ownershipStore, persistentId, firstStartup, firstFence, 250L);
+        assertTrue(renewed.renewed(), backend.id() + ": current owner renews");
+
+        Thread.sleep(300L);
+
+        OwnershipClaimResult takeover = ownership.claimOwnership(
+            ownershipStore, persistentId, secondStartup, secondFence, 1_000L, metadata);
+        assertTrue(takeover.claimed(), backend.id() + ": expired ownership can be claimed");
+        assertEquals(firstStartup, takeover.previousOwner().ownerStartupId(),
+            backend.id() + ": takeover reports expired owner for recovery");
+
+        OwnershipRenewResult staleRenew = ownership.renewOwnership(
+            ownershipStore, persistentId, firstStartup, firstFence, 1_000L);
+        assertFalse(staleRenew.renewed(), backend.id() + ": old fence cannot renew after takeover");
+
+        assertFalse(ownership.closeOwnership(ownershipStore, persistentId, firstStartup, firstFence, "stale"),
+            backend.id() + ": old fence cannot close new owner");
+        assertTrue(ownership.closeOwnership(ownershipStore, persistentId, secondStartup, secondFence, "shutdown"),
+            backend.id() + ": current owner closes cleanly");
+
+        OwnershipClaimResult afterClose = ownership.claimOwnership(
+            ownershipStore, persistentId, UUID.randomUUID(), UUID.randomUUID(), 1_000L, metadata);
+        assertTrue(afterClose.claimed(), backend.id() + ": closed ownership can be claimed immediately");
     }
 
     private static void writeSession(ac.grim.grimac.api.storage.backend.StorageEventHandler<SessionEvent> handler,

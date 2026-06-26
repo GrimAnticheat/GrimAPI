@@ -47,6 +47,7 @@ public final class MongoBackendV2 implements BackendV2 {
     private MongoKeyValueScopedAdapter kvScopedAdapter;
     private MongoEntityAdapter entityAdapter;
     private MongoCounterAdapter counterAdapter;
+    private MongoServerOwnershipAdapter ownershipAdapter;
 
     public MongoBackendV2(@NotNull MongoBackendConfig config) {
         this.config = config;
@@ -95,6 +96,7 @@ public final class MongoBackendV2 implements BackendV2 {
             this.kvScopedAdapter = new MongoKeyValueScopedAdapter(db, logger);
             this.entityAdapter = new MongoEntityAdapter(db, logger);
             this.counterAdapter = new MongoCounterAdapter(db, logger);
+            this.ownershipAdapter = new MongoServerOwnershipAdapter(db, logger);
             // Future: Blob adapter wired here (Phase 6).
         } catch (RuntimeException e) {
             throw new BackendException("failed to initialise Mongo backend v2", e);
@@ -129,6 +131,9 @@ public final class MongoBackendV2 implements BackendV2 {
     @Override public @NotNull Optional<SearchAdapter> searchAdapter() { return Optional.empty(); }
     @Override public @NotNull Optional<TxAdapter> txAdapter() { return Optional.empty(); }
     @Override public @NotNull Optional<AdminAdapter> adminAdapter() { return Optional.empty(); }
+    @Override public @NotNull Optional<ac.grim.grimac.api.storage.instance.ServerOwnershipAdapter> ownershipAdapter() {
+        return Optional.ofNullable(ownershipAdapter);
+    }
 
     @Override
     @SuppressWarnings("unchecked")
