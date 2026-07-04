@@ -5,6 +5,7 @@ import ac.grim.grimac.api.storage.backend.BackendConfig;
 import ac.grim.grimac.api.storage.backend.BackendConfigSource;
 import ac.grim.grimac.api.storage.backend.BackendProvider;
 import ac.grim.grimac.api.storage.config.TableNames;
+import ac.grim.grimac.internal.storage.backend.sql.HikariPoolSettings;
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
 
@@ -39,6 +40,7 @@ public final class PostgresBackendProvider implements BackendProvider {
                 src.getString("extra-jdbc-params", ""),
                 src.getInt("batch-flush-cap", 256),
                 wtDefault, wtPerCat,
+                HikariPoolSettings.readFrom(src, PostgresBackendConfig.DEFAULT_MAXIMUM_POOL_SIZE),
                 TableNames.readFrom(src));
     }
 

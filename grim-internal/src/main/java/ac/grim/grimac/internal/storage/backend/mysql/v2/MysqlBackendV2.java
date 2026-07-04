@@ -30,7 +30,6 @@ import java.util.logging.Logger;
 @ApiStatus.Internal
 public final class MysqlBackendV2 implements BackendV2 {
 
-    private static final int DEFAULT_MAX_POOL_SIZE = 10;
     private final @NotNull MysqlBackendConfig config;
     private final @NotNull MysqlDialect dialect = new MysqlDialect();
     private Logger logger;
@@ -68,9 +67,8 @@ public final class MysqlBackendV2 implements BackendV2 {
         hc.setJdbcUrl(config.jdbcUrl());
         hc.setUsername(config.user());
         if (config.password() != null) hc.setPassword(config.password());
-        hc.setMaximumPoolSize(DEFAULT_MAX_POOL_SIZE);
+        config.poolSettings().applyTo(hc);
         hc.setPoolName("grim-mysql-v2");
-        hc.setConnectionTimeout(5_000L);
         try {
             this.ds = new HikariDataSource(hc);
         } catch (RuntimeException e) {
