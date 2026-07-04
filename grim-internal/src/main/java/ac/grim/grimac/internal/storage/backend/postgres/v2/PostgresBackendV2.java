@@ -36,13 +36,11 @@ import java.util.logging.Logger;
  * {@link KindAdapter}s. Coexists with the legacy {@code PostgresBackend}
  * until the v2 wiring (Phase 1.4c) flips DataStore over.
  *
- * <p>Connection pooling: backed by HikariCP. The pool is sized small
- * by default (5 max connections) since the v2 adapter SPI's per-event
- * acquire pattern releases connections quickly back to the pool; a
- * busy disruptor handler thread typically holds at most one. Operators
- * who want a larger pool can override via JDBC params or a future
- * config knob (the connection-count limits live on the Postgres
- * server anyway).
+ * <p>Connection pooling: backed by HikariCP. The pool defaults small
+ * (5 max connections) since the v2 adapter SPI's per-event acquire
+ * pattern releases connections quickly back to the pool; a busy
+ * disruptor handler thread typically holds at most one. Operators can
+ * adjust the pool through the backend's {@code pool-settings} config block.
  *
  * <p>Currently wires:
  * <ul>
@@ -59,8 +57,6 @@ import java.util.logging.Logger;
 @ApiStatus.Internal
 public final class PostgresBackendV2 implements BackendV2 {
 
-    /** Default pool size; conservative — Postgres' connection limit is small. */
-    private static final int DEFAULT_MAX_POOL_SIZE = 5;
     /** Pool name prefix surfaced in HikariCP's MBean + logs. */
     private static final String POOL_NAME = "grim-postgres-v2";
 
@@ -113,22 +109,21 @@ public final class PostgresBackendV2 implements BackendV2 {
                     + "into the plugin jar or drop into server/plugins (missing: "
                     + cnf.getMessage() + ")", cnf);
         }
-        // 5-second connectTimeout bounds the TCP connect/handshake at
-        // boot so a blackholed host fails fast instead of hanging on
-        // PgJDBC's 60s default. The user's jdbcUrl() already includes
-        // their extraJdbcParams; only append connectTimeout if it
-        // isn't already specified so an operator override wins.
-        String jdbcUrl = withConnectTimeout(config.jdbcUrl(), 5);
+        // connectTimeout bounds the TCP connect/handshake at boot so a
+        // blackholed host fails fast instead of hanging on PgJDBC's 60s
+        // default. The user's jdbcUrl() already includes their
+        // extraJdbcParams; only append connectTimeout if it isn't already
+        // specified so an operator override wins.
+        String jdbcUrl = withConnectTimeout(
+                config.jdbcUrl(),
+                config.poolSettings().connectionTimeoutSeconds());
 
         HikariConfig hc = new HikariConfig();
         hc.setJdbcUrl(jdbcUrl);
         hc.setUsername(config.user());
         if (config.password() != null) hc.setPassword(config.password());
-        hc.setMaximumPoolSize(DEFAULT_MAX_POOL_SIZE);
+        config.poolSettings().applyTo(hc);
         hc.setPoolName(POOL_NAME);
-        // Mirror connectTimeout at the Hikari level so connection
-        // ACQUISITION (not just initial TCP connect) is bounded.
-        hc.setConnectionTimeout(5_000L); // ms — Hikari minimum is 250
         // Verify connections quickly on borrow; PgJDBC's default
         // isValid implementation is a cheap SELECT 1.
         hc.setValidationTimeout(3_000L);
