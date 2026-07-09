@@ -151,6 +151,8 @@ public final class SqliteDialect implements SqlDialect {
         return sb.toString();
     }
 
+    @Override public boolean rebuildsUuidIdColumns() { return true; }
+
     @Override public boolean usesLegacySqliteUpsert() { return legacyUpsert; }
 
     @Override public boolean supportsReturning() { return supportsReturning; }
