@@ -525,9 +525,7 @@ public final class SqlEventStreamAdapter implements KindAdapter<EventStream<?, ?
                             continue;
                         }
                         EncodeShape.FieldDef f = fieldDefOrNull(shape, col);
-                        Object v = rs.getObject(col);
-                        if (v == null && f != null && !f.nullable()) v = nonNullDefault(f);
-                        ins.setObject(idx++, v);
+                        ins.setObject(idx++, normalizedCopyValue(f, rs.getObject(col)));
                     }
                     ins.addBatch();
                     copied++;
@@ -569,6 +567,28 @@ public final class SqlEventStreamAdapter implements KindAdapter<EventStream<?, ?
             try { return UUID.fromString(s); } catch (IllegalArgumentException ignored) { return null; }
         }
         return null;
+    }
+
+    /**
+     * Normalize one legacy value for the rebuilt row. UUID fields stored
+     * as text are re-encoded as 16-byte blobs — the query paths bind UUID
+     * partition keys via {@link SqlBindings#bind} as blobs, so a raw TEXT
+     * carry-over would never match and the row would vanish from partition
+     * reads. Unparseable values pass through raw: the data survives even
+     * if that row stays unqueryable by partition.
+     */
+    private static @Nullable Object normalizedCopyValue(@Nullable EncodeShape.FieldDef f,
+                                                        @Nullable Object v) {
+        if (f == null) return v; // extra column carried over verbatim
+        if (v == null) return f.nullable() ? null : nonNullDefault(f);
+        if (f.javaType() == UUID.class && v instanceof String s) {
+            try {
+                return UuidCodec.toBytes(UUID.fromString(s.trim()));
+            } catch (IllegalArgumentException ignored) {
+                return v;
+            }
+        }
+        return v;
     }
 
     /**

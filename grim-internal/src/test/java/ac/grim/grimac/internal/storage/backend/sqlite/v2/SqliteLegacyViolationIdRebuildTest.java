@@ -10,6 +10,7 @@ import ac.grim.grimac.api.storage.registry.StoreId;
 import ac.grim.grimac.internal.storage.backend.sqlite.SqliteBackendConfig;
 import ac.grim.grimac.internal.storage.category.V2BuiltinKinds;
 import ac.grim.grimac.internal.storage.util.UuidCodec;
+import ac.grim.grimac.internal.storage.util.UuidV7;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -36,7 +37,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * {@code id INTEGER PRIMARY KEY AUTOINCREMENT} — the strict rowid alias —
  * so every v2 violation insert failed with SQLITE_MISMATCH. ensureStore
  * must rebuild the table with a binary id, carry every row (including
- * columns the v2 shape no longer declares) and unblock the write path.
+ * columns the v2 shape no longer declares), normalize text-backed UUID
+ * columns to blobs so partition reads still match, and unblock the
+ * write path.
  */
 @DisplayName("SQLite v2: legacy INTEGER violation ids rebuilt to UUIDv7 blobs")
 class SqliteLegacyViolationIdRebuildTest {
@@ -65,14 +68,16 @@ class SqliteLegacyViolationIdRebuildTest {
 
             adapter.ensureStore(id, kind);
 
-            // The write path must no longer raise SQLITE_MISMATCH.
+            // The write path must no longer raise SQLITE_MISMATCH. The id
+            // is a UUIDv7 (as on the real write path) so the ORDER BY id
+            // assertion below stays deterministic.
             var handler = adapter.writeHandler(id, kind, Categories.VIOLATION);
             ViolationEvent event = new ViolationEvent()
-                .id(UUID.randomUUID())
+                .id(UuidV7.fromTimestampMs(BASE_TS + 60_000, 0))
                 .sessionId(session)
                 .playerUuid(player)
                 .checkId(7)
-                .vl(4.0)
+                .vl(5.0)
                 .occurredEpochMs(BASE_TS + 60_000);
             handler.onEvent(event, 0, true);
         } finally {
@@ -87,21 +92,26 @@ class SqliteLegacyViolationIdRebuildTest {
             List<Double> vlsInIdOrder = new ArrayList<>();
             try (Statement s = c.createStatement();
                  ResultSet rs = s.executeQuery(
-                     "SELECT id, vl, metadata FROM grim_violations ORDER BY id")) {
+                     "SELECT id, vl, metadata, typeof(session_id) AS session_type, session_id"
+                         + " FROM grim_violations ORDER BY id")) {
                 while (rs.next()) {
                     byte[] idBytes = rs.getBytes("id");
                     assertNotNull(idBytes, "rebuilt id is binary");
                     assertEquals(16, idBytes.length, "rebuilt id is a 16-byte UUID");
+                    assertEquals("blob", rs.getString("session_type"),
+                        "UUID partition columns normalized to blobs");
+                    assertEquals(session, UuidCodec.fromBytes(rs.getBytes("session_id")),
+                        "partition value survives normalization");
                     vlsInIdOrder.add(rs.getDouble("vl"));
-                    if (rs.getDouble("vl") < 4.0) {
+                    if (rs.getDouble("vl") < 5.0) {
                         assertEquals("meta" + (int) (rs.getDouble("vl") - 1), rs.getString("metadata"),
                             "legacy metadata column carried over");
                     }
                 }
             }
-            // Three legacy rows plus the new write; UUIDv7 byte order keeps
+            // Four legacy rows plus the new write; UUIDv7 byte order keeps
             // the legacy order — same-ms rows by old numeric id, then by ts.
-            assertEquals(List.of(1.0, 2.0, 3.0, 4.0), vlsInIdOrder);
+            assertEquals(List.of(1.0, 2.0, 3.0, 4.0, 5.0), vlsInIdOrder);
         }
     }
 
@@ -122,14 +132,23 @@ class SqliteLegacyViolationIdRebuildTest {
                 "INSERT INTO grim_violations "
                     + "(session_id, player_uuid, check_id, vl, occurred_at, verbose, verbose_format, metadata) "
                     + "VALUES (?, ?, ?, ?, ?, ?, 0, ?)")) {
-                for (int i = 0; i < 3; i++) {
-                    ins.setBytes(1, UuidCodec.toBytes(session));
-                    ins.setBytes(2, UuidCodec.toBytes(player));
+                for (int i = 0; i < 4; i++) {
+                    // last row stores its UUIDs as text — SQLite BLOB columns
+                    // keep whatever storage class they're handed, and some
+                    // legacy writers bound strings — to exercise the
+                    // rebuild's blob normalization
+                    if (i == 3) {
+                        ins.setString(1, session.toString());
+                        ins.setString(2, player.toString());
+                    } else {
+                        ins.setBytes(1, UuidCodec.toBytes(session));
+                        ins.setBytes(2, UuidCodec.toBytes(player));
+                    }
                     ins.setInt(3, 7);
                     ins.setDouble(4, i + 1);
                     // first two rows share a millisecond to exercise the
                     // deterministic same-ms ordering of the minted UUIDv7s
-                    ins.setLong(5, i < 2 ? BASE_TS : BASE_TS + 5_000);
+                    ins.setLong(5, i < 2 ? BASE_TS : BASE_TS + 5_000L * (i - 1));
                     ins.setString(6, "row" + i);
                     ins.setString(7, "meta" + i);
                     ins.executeUpdate();
