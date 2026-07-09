@@ -17,6 +17,8 @@ import ac.grim.grimac.api.storage.query.Page;
 import ac.grim.grimac.api.storage.registry.Migration;
 import ac.grim.grimac.api.storage.registry.StoreId;
 import ac.grim.grimac.internal.storage.backend.sql.v2.dialect.SqlDialect;
+import ac.grim.grimac.internal.storage.util.UuidCodec;
+import ac.grim.grimac.internal.storage.util.UuidV7;
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
@@ -33,6 +35,7 @@ import java.util.EnumSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.logging.Logger;
 
 /**
@@ -75,19 +78,11 @@ public final class SqlEventStreamAdapter implements KindAdapter<EventStream<?, ?
     public void ensureStore(@NotNull StoreId id, @NotNull EventStream<?, ?> kind) throws BackendException {
         EncodeShape shape = kind.codec().shape();
         String table = dialect.quoteIdentifier(id.name());
-        StringBuilder ddl = new StringBuilder("CREATE TABLE IF NOT EXISTS ").append(table).append(" (");
-        boolean first = true;
-        for (EncodeShape.FieldDef f : shape.fields()) {
-            if (!first) ddl.append(", ");
-            first = false;
-            ddl.append(dialect.quoteIdentifier(f.name())).append(' ').append(dialect.columnTypeSql(f));
-            if (f.name().equals(shape.idField())) ddl.append(" PRIMARY KEY");
-        }
-        ddl.append(')');
         try (Connection c = ds.getConnection(); Statement s = c.createStatement()) {
-            s.executeUpdate(ddl.toString());
+            s.executeUpdate(createTableDdl(id.name(), shape));
             // Add missing columns from legacy tables (same pattern as SqlEntityAdapter)
             addMissingColumns(c, s, id.name(), shape);
+            maybeRebuildForUuidId(c, id.name(), kind, shape);
             for (String partition : kind.partitionFields()) {
                 String idxName = "idx_" + id.name() + "_" + partition;
                 String createIdx = "CREATE INDEX IF NOT EXISTS " + dialect.quoteIdentifier(idxName)
@@ -427,6 +422,176 @@ public final class SqlEventStreamAdapter implements KindAdapter<EventStream<?, ?
             }
         }
         return new Page<>(items, nextCursor);
+    }
+
+    private @NotNull String createTableDdl(@NotNull String tableName, @NotNull EncodeShape shape) {
+        StringBuilder ddl = new StringBuilder("CREATE TABLE IF NOT EXISTS ")
+            .append(dialect.quoteIdentifier(tableName)).append(" (");
+        boolean first = true;
+        for (EncodeShape.FieldDef f : shape.fields()) {
+            if (!first) ddl.append(", ");
+            first = false;
+            ddl.append(dialect.quoteIdentifier(f.name())).append(' ').append(dialect.columnTypeSql(f));
+            if (f.name().equals(shape.idField())) ddl.append(" PRIMARY KEY");
+        }
+        return ddl.append(')').toString();
+    }
+
+    /**
+     * Detect an EventStream table whose id column predates the UUID id
+     * scheme and rebuild it in place. Shipped pre-UUIDv7 schemas declared
+     * the violation id as {@code INTEGER PRIMARY KEY AUTOINCREMENT}; on
+     * SQLite that column is the strict rowid alias, so once the record id
+     * became a UUIDv7 every insert fails with SQLITE_MISMATCH
+     * (GrimAnticheat/Grim#2768). The versioned SqliteSchema migration that
+     * handled this shape (v3 → v4) only runs on the legacy phase-1 backend,
+     * which the v2-only cutover no longer starts — so the v2 path must
+     * detect and repair the legacy shape itself.
+     */
+    private void maybeRebuildForUuidId(@NotNull Connection c, @NotNull String tableName,
+                                       @NotNull EventStream<?, ?> kind,
+                                       @NotNull EncodeShape shape) throws SQLException {
+        EncodeShape.FieldDef idField = fieldDef(shape, shape.idField());
+        if (idField.javaType() != UUID.class) return;
+        if (!dialect.rebuildsUuidIdColumns()) return;
+        String actualType = columnType(c, tableName, idField.name());
+        if (actualType == null || dialect.isBinaryColumnType(actualType)) return;
+        rebuildForUuidId(c, tableName, kind, shape, idField, actualType);
+    }
+
+    private void rebuildForUuidId(@NotNull Connection c, @NotNull String tableName,
+                                  @NotNull EventStream<?, ?> kind, @NotNull EncodeShape shape,
+                                  @NotNull EncodeShape.FieldDef idField,
+                                  @NotNull String actualIdType) throws SQLException {
+        String table = dialect.quoteIdentifier(tableName);
+        String tmpName = tableName + "_uuid_id_rebuild";
+        String tmp = dialect.quoteIdentifier(tmpName);
+        logger.info(() -> "[v2-ensureStore] " + tableName + "." + idField.name() + " is "
+            + actualIdType + " but the record id is a UUID; rebuilding the table with a binary id"
+            + " (legacy numeric ids become deterministic UUIDv7s)");
+
+        // Columns not in the current shape (e.g. the legacy 'metadata'
+        // column) are carried over verbatim so the rebuild drops no data.
+        Map<String, String> extras = new LinkedHashMap<>();
+        try (ResultSet cols = c.getMetaData().getColumns(null, null, tableName, null)) {
+            while (cols.next()) {
+                String name = cols.getString("COLUMN_NAME");
+                if (fieldDefOrNull(shape, name) == null) extras.put(name, cols.getString("TYPE_NAME"));
+            }
+        }
+
+        StringBuilder ddl = new StringBuilder("CREATE TABLE ").append(tmp).append(" (");
+        StringBuilder colList = new StringBuilder();
+        StringBuilder placeholders = new StringBuilder();
+        List<String> copyCols = new ArrayList<>(shape.fields().size() + extras.size());
+        for (EncodeShape.FieldDef f : shape.fields()) {
+            if (!copyCols.isEmpty()) { ddl.append(", "); colList.append(", "); placeholders.append(", "); }
+            ddl.append(dialect.quoteIdentifier(f.name())).append(' ').append(dialect.columnTypeSql(f));
+            if (f.name().equals(shape.idField())) ddl.append(" PRIMARY KEY");
+            colList.append(dialect.quoteIdentifier(f.name()));
+            placeholders.append('?');
+            copyCols.add(f.name());
+        }
+        for (Map.Entry<String, String> e : extras.entrySet()) {
+            ddl.append(", ").append(dialect.quoteIdentifier(e.getKey())).append(' ').append(e.getValue());
+            colList.append(", ").append(dialect.quoteIdentifier(e.getKey()));
+            placeholders.append(", ?");
+            copyCols.add(e.getKey());
+        }
+        ddl.append(')');
+
+        long copied = 0;
+        long skipped = 0;
+        boolean priorAutoCommit = c.getAutoCommit();
+        c.setAutoCommit(false);
+        boolean committed = false;
+        try {
+            try (Statement s = c.createStatement()) {
+                s.executeUpdate("DROP TABLE IF EXISTS " + tmp);
+                s.executeUpdate(ddl.toString());
+            }
+            try (PreparedStatement sel = c.prepareStatement("SELECT " + colList + " FROM " + table);
+                 PreparedStatement ins = c.prepareStatement(
+                     "INSERT INTO " + tmp + " (" + colList + ") VALUES (" + placeholders + ")");
+                 ResultSet rs = sel.executeQuery()) {
+                int batched = 0;
+                while (rs.next()) {
+                    UUID newId = rebuiltId(rs, kind.timestampField(), idField.name());
+                    if (newId == null) { skipped++; continue; }
+                    int idx = 1;
+                    for (String col : copyCols) {
+                        if (col.equals(idField.name())) {
+                            ins.setBytes(idx++, UuidCodec.toBytes(newId));
+                            continue;
+                        }
+                        EncodeShape.FieldDef f = fieldDefOrNull(shape, col);
+                        Object v = rs.getObject(col);
+                        if (v == null && f != null && !f.nullable()) v = nonNullDefault(f);
+                        ins.setObject(idx++, v);
+                    }
+                    ins.addBatch();
+                    copied++;
+                    if (++batched % 1024 == 0) ins.executeBatch();
+                }
+                ins.executeBatch();
+            }
+            try (Statement s = c.createStatement()) {
+                s.executeUpdate("DROP TABLE " + table);
+                s.executeUpdate("ALTER TABLE " + tmp + " RENAME TO " + table);
+            }
+            c.commit();
+            committed = true;
+        } finally {
+            if (!committed) {
+                try { c.rollback(); } catch (SQLException ignored) {}
+            }
+            c.setAutoCommit(priorAutoCommit);
+        }
+        long copiedFinal = copied;
+        long skippedFinal = skipped;
+        logger.info(() -> "[v2-ensureStore] rebuilt " + tableName + ": " + copiedFinal
+            + " row(s) carried over" + (skippedFinal > 0
+                ? ", " + skippedFinal + " row(s) skipped (unreadable id)" : ""));
+    }
+
+    /**
+     * Mint the replacement id for one legacy row. Numeric ids become
+     * deterministic UUIDv7s seeded from (timestamp, old id) so same-ms
+     * rows keep their old monotonic order — identical to the phase-1
+     * v3 → v4 migration. Binary and textual UUIDs pass through.
+     */
+    private static @Nullable UUID rebuiltId(@NotNull ResultSet rs, @NotNull String tsField,
+                                            @NotNull String idColumn) throws SQLException {
+        Object raw = rs.getObject(idColumn);
+        if (raw instanceof Number n) return UuidV7.fromTimestampMs(rs.getLong(tsField), n.longValue());
+        if (raw instanceof byte[] b && b.length == 16) return UuidCodec.fromBytes(b);
+        if (raw instanceof String s) {
+            try { return UUID.fromString(s); } catch (IllegalArgumentException ignored) { return null; }
+        }
+        return null;
+    }
+
+    /**
+     * Fallback for a NULL read from a legacy row into a NOT NULL column
+     * of the rebuilt table (e.g. a column addMissingColumns added without
+     * the constraint). Types with no safe stand-in return null and let
+     * the insert surface the constraint violation.
+     */
+    private static @Nullable Object nonNullDefault(@NotNull EncodeShape.FieldDef f) {
+        Class<?> t = f.javaType();
+        if (t == long.class || t == Long.class || t == int.class || t == Integer.class
+            || t == boolean.class || t == Boolean.class || t.isEnum()) return 0;
+        if (t == double.class || t == Double.class || t == float.class || t == Float.class) return 0.0;
+        if (t == String.class) return "";
+        return null;
+    }
+
+    private static @Nullable EncodeShape.FieldDef fieldDefOrNull(@NotNull EncodeShape shape,
+                                                                 @NotNull String fieldName) {
+        for (EncodeShape.FieldDef f : shape.fields()) {
+            if (f.name().equalsIgnoreCase(fieldName)) return f;
+        }
+        return null;
     }
 
     private void addMissingColumns(@NotNull Connection c, @NotNull java.sql.Statement s,

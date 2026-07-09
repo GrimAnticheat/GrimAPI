@@ -83,6 +83,16 @@ public interface SqlDialect {
     }
 
     /**
+     * True when this dialect opts into rebuilding an EventStream table
+     * whose on-disk id column cannot store the shape's UUID id. SQLite
+     * needs this: pre-UUIDv7 schemas declared {@code id INTEGER PRIMARY
+     * KEY} — the strict rowid alias — so every 16-byte UUID insert fails
+     * with SQLITE_MISMATCH, and {@code ALTER TABLE} can't change a
+     * column's type, so the table must be rebuilt row-by-row.
+     */
+    default boolean rebuildsUuidIdColumns() { return false; }
+
+    /**
      * Vendor-correct identifier quoting (table/column names). Postgres
      * uses {@code "double quotes"}; MySQL uses {@code `backticks`};
      * SQLite accepts both but prefers double-quotes. Embedded delimiter
