@@ -60,6 +60,15 @@ public interface GrimAbstractAPI extends ConfigReloadable, BasicReloadable {
     String getGrimVersion();
 
     /**
+     * Retrieves the version of the GrimAPI bundled with the running Grim instance.
+     * This is distinct from {@link #getGrimVersion()}.
+     * @return GrimAPI version
+     */
+    default @NotNull String getGrimApiVersion() {
+        return GrimApiVersion.get();
+    }
+
+    /**
      * Used for future expansion. Don't use this unless you know what you're doing.
      */
     void registerFunction(String key, @Nullable Function<Object, Object> function);

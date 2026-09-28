@@ -184,6 +184,13 @@ dependencies {
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
 
+tasks.processResources {
+    inputs.property("version", project.version.toString())
+    filesMatching("ac/grim/grimac/api/version.properties") {
+        expand("version" to project.version.toString())
+    }
+}
+
 tasks.test {
     useJUnitPlatform()
 }
