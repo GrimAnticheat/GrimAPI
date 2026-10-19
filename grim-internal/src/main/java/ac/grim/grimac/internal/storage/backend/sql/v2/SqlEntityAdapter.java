@@ -493,6 +493,7 @@ public final class SqlEntityAdapter implements KindAdapter<Entity<?, ?, ?>> {
             if (op instanceof EntityOps.FindByIndexOp f)     return (R) findByIndex(id, kind, f);
             if (op instanceof EntityOps.PrefixIndexOp p)     return (R) prefixIndex(id, kind, p);
             if (op instanceof EntityOps.CountByIndexOp c)    return (R) Long.valueOf(countByIndex(id, kind, c));
+            if (op instanceof EntityOps.ReassignSessionOp s) return (R) Long.valueOf(reassignSession(id, kind, s));
             if (op instanceof EntityOps.SetIfSentinelOp s)   return (R) Long.valueOf(setIfSentinel(id, kind, s));
             throw new UnsupportedOperationException(
                 "SqlEntityAdapter does not handle " + op.getClass().getSimpleName());
@@ -751,6 +752,28 @@ public final class SqlEntityAdapter implements KindAdapter<Entity<?, ?, ?>> {
             try (ResultSet rs = ps.executeQuery()) {
                 return rs.next() ? rs.getLong(1) : 0L;
             }
+        }
+    }
+
+    private long reassignSession(StoreId id, Entity<?, ?, ?> kind, EntityOps.ReassignSessionOp op) throws SQLException {
+        if (kind.recordType() != ac.grim.grimac.api.storage.model.SessionRecord.class) {
+            throw new IllegalArgumentException("session reassignment requires the session entity");
+        }
+        EncodeShape shape = kind.codec().shape();
+        String owner = dialect.quoteIdentifier("startup_id");
+        String sql = "UPDATE " + dialect.quoteIdentifier(id.name()) + " SET " + owner + " = ?, "
+                + dialect.quoteIdentifier("closed_at") + " = 0 WHERE " + dialect.quoteIdentifier(shape.idField())
+                + " = ? AND " + owner + " <> ? AND " + owner + " IN ("
+                + String.join(",", java.util.Collections.nCopies(op.previousStartups().size(), "?")) + ")";
+        try (Connection c = ds.getConnection(); PreparedStatement ps = c.prepareStatement(sql)) {
+            SqlBindings.bind(ps, 1, fieldDef(shape, "startup_id"), op.startupId());
+            SqlBindings.bind(ps, 2, idFieldDef(shape), op.sessionId());
+            SqlBindings.bind(ps, 3, fieldDef(shape, "startup_id"), op.startupId());
+            int parameter = 4;
+            for (java.util.UUID previous : op.previousStartups()) {
+                SqlBindings.bind(ps, parameter++, fieldDef(shape, "startup_id"), previous);
+            }
+            return ps.executeUpdate();
         }
     }
 

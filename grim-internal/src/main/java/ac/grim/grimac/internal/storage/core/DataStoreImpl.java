@@ -223,7 +223,8 @@ public final class DataStoreImpl implements DataStore {
               || n.startsWith("Remove")
               || n.startsWith("Put")
               || n.startsWith("IncrementBy")
-              || n.startsWith("SetIf"));
+              || n.startsWith("SetIf")
+              || n.startsWith("Reassign"));
     }
 
     @Override

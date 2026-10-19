@@ -41,6 +41,7 @@ dependencies {
 
     testImplementation(libs.annotations)
     testImplementation(libs.junitJupiter)
+    testImplementation("org.mockito:mockito-core:5.14.2")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
     testImplementation(libs.sqliteJdbc)
     testImplementation(libs.mysqlJdbc)

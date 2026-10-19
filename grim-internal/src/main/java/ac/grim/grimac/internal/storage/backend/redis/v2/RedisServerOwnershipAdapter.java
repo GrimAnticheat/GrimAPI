@@ -25,42 +25,31 @@ import java.util.logging.Logger;
 public final class RedisServerOwnershipAdapter implements ServerOwnershipAdapter {
 
     private static final String CLAIM_SCRIPT = """
+        local previous = redis.call('HGETALL', KEYS[1])
+        local clock = redis.call('TIME')
+        local now = tonumber(clock[1]) * 1000 + math.floor(tonumber(clock[2]) / 1000)
+        local expires = now + tonumber(ARGV[4])
         local closed = redis.call('HGET', KEYS[1], 'closed_at_ms')
-        if not closed then
-          redis.call('HSET', KEYS[1],
-            'persistent_id', ARGV[1],
-            'owner_startup_id', ARGV[2],
-            'fence', ARGV[3],
-            'lease_expires_at_ms', ARGV[5],
-            'last_renewed_at_ms', ARGV[4],
-            'closed_at_ms', '0',
-            'server_name', ARGV[6],
-            'hostname', ARGV[7],
-            'grim_version', ARGV[8],
-            'server_version', ARGV[9])
-          redis.call('HDEL', KEYS[1], 'close_reason')
-          return 1
-        end
-        local expires = tonumber(redis.call('HGET', KEYS[1], 'lease_expires_at_ms') or '0')
+        local oldExpires = tonumber(redis.call('HGET', KEYS[1], 'lease_expires_at_ms') or '0')
         local owner = redis.call('HGET', KEYS[1], 'owner_startup_id')
         local fence = redis.call('HGET', KEYS[1], 'fence')
-        if tonumber(closed) ~= 0 or expires <= tonumber(ARGV[4])
+        if not closed or tonumber(closed) ~= 0 or oldExpires <= now
            or (owner == ARGV[2] and fence == ARGV[3]) then
           redis.call('HSET', KEYS[1],
             'persistent_id', ARGV[1],
             'owner_startup_id', ARGV[2],
             'fence', ARGV[3],
-            'lease_expires_at_ms', ARGV[5],
-            'last_renewed_at_ms', ARGV[4],
+            'lease_expires_at_ms', tostring(expires),
+            'last_renewed_at_ms', tostring(now),
             'closed_at_ms', '0',
-            'server_name', ARGV[6],
-            'hostname', ARGV[7],
-            'grim_version', ARGV[8],
-            'server_version', ARGV[9])
+            'server_name', ARGV[5],
+            'hostname', ARGV[6],
+            'grim_version', ARGV[7],
+            'server_version', ARGV[8])
           redis.call('HDEL', KEYS[1], 'close_reason')
-          return 1
+          return {1, tostring(now), tostring(expires), previous}
         end
-        return 0
+        return {0, tostring(now), tostring(expires), previous}
         """;
 
     private static final String RENEW_SCRIPT = """
@@ -133,9 +122,6 @@ public final class RedisServerOwnershipAdapter implements ServerOwnershipAdapter
             long ttlMs,
             @NotNull ServerOwnershipMetadata metadata) throws BackendException {
         try {
-            ServerOwnershipSnapshot previous = readOwnership(id, persistentId).orElse(null);
-            long now = dbNowEpochMs();
-            long expires = now + ttlMs;
             Object result;
             try (var j = pool.getResource()) {
                 result = j.eval(CLAIM_SCRIPT,
@@ -144,23 +130,30 @@ public final class RedisServerOwnershipAdapter implements ServerOwnershipAdapter
                                 persistentId.toString(),
                                 startupId.toString(),
                                 fence.toString(),
-                                Long.toString(now),
-                                Long.toString(expires),
+                                Long.toString(ttlMs),
                                 nullToEmpty(metadata.serverName()),
                                 nullToEmpty(metadata.hostname()),
                                 nullToEmpty(metadata.grimVersion()),
                                 nullToEmpty(metadata.serverVersionString())));
             }
-            if (number(result) == 1L) {
-                return OwnershipClaimResult.claimed(
-                        persistentId, startupId, fence, now, expires, previous);
+            if (!(result instanceof List<?> reply) || reply.size() != 4
+                    || !(reply.get(3) instanceof List<?> fields) || fields.size() % 2 != 0) {
+                throw new IllegalStateException("invalid Redis ownership claim response");
             }
-            ServerOwnershipSnapshot current = readOwnership(id, persistentId).orElse(null);
-            if (current == null) {
-                return OwnershipClaimResult.claimed(
-                        persistentId, startupId, fence, now, expires, previous);
+            long now = number(reply.get(1));
+            Map<String, String> hash = new java.util.HashMap<>();
+            for (int i = 0; i < fields.size(); i += 2) {
+                hash.put((String) fields.get(i), (String) fields.get(i + 1));
             }
-            return OwnershipClaimResult.denied(persistentId, startupId, fence, now, current);
+            ServerOwnershipSnapshot previous = hash.isEmpty() ? null : snapshot(hash);
+            if (number(reply.get(0)) == 1L) {
+                return OwnershipClaimResult.claimed(
+                        persistentId, startupId, fence, now, number(reply.get(2)), previous);
+            }
+            if (number(reply.get(0)) != 0L || previous == null) {
+                throw new IllegalStateException("Redis rejected ownership claim without an owner");
+            }
+            return OwnershipClaimResult.denied(persistentId, startupId, fence, now, previous);
         } catch (RuntimeException e) {
             throw new BackendException("failed to claim Redis server ownership", e);
         }

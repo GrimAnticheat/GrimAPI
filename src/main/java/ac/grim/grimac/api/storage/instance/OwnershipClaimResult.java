@@ -8,6 +8,11 @@ import java.util.UUID;
 
 /**
  * Result of an atomic ownership claim attempt.
+ *
+ * <p>For a successful claim, {@code previousOwner} is the row replaced by the
+ * claim, read atomically with that write. It is null only when the claim created
+ * a previously absent row. A separate pre-claim read is not sufficient: callers
+ * use the previous startup and fence to detect an intervening owner.</p>
  */
 @ApiStatus.Experimental
 public record OwnershipClaimResult(

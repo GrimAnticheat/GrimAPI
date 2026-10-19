@@ -36,7 +36,9 @@ import java.util.UUID;
  * Decode always reconstructs it as an empty list.
  * <p>
  * {@code startupId} identifies the durable {@link ServerStartupRecord}
- * row for the JVM boot that owns this session. It is the only owner key
+ * row for the storage generation that owns this session. A live connection
+ * keeps its session ID while an atomic handoff moves this owner after lease
+ * recovery. It is the only owner key
  * V2 needs to persist on every session; server name/version metadata
  * is resolved through the startup row when rendering history.
  * <p>
