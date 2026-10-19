@@ -215,6 +215,7 @@ public final class MongoEntityAdapter implements KindAdapter<Entity<?, ?, ?>> {
             if (op instanceof EntityOps.FindByIndexOp f)     return (R) findByIndex(id, kind, f);
             if (op instanceof EntityOps.PrefixIndexOp p)     return (R) prefixIndex(id, kind, p);
             if (op instanceof EntityOps.CountByIndexOp c)    return (R) Long.valueOf(countByIndex(id, kind, c));
+            if (op instanceof EntityOps.ReassignSessionOp s) return (R) Long.valueOf(reassignSession(id, kind, s));
             if (op instanceof EntityOps.SetIfSentinelOp s)   return (R) Long.valueOf(setIfSentinel(id, kind, s));
             if (op instanceof EntityOps.DeleteByIdOp d)    { deleteById(id, d); return null; }
             if (op instanceof EntityOps.DeleteByIndexOp d) { deleteByIndex(id, kind, d); return null; }
@@ -722,6 +723,17 @@ public final class MongoEntityAdapter implements KindAdapter<Entity<?, ?, ?>> {
         IndexSpec spec = requireIndex(kind, op.indexName());
         String leading = stripDir(spec.fields().get(0));
         return docColl(id).countDocuments(Filters.eq(leading, encodeIndexValue(op.key())));
+    }
+
+    private long reassignSession(StoreId id, Entity<?, ?, ?> kind, EntityOps.ReassignSessionOp op) {
+        if (kind.recordType() != ac.grim.grimac.api.storage.model.SessionRecord.class) {
+            throw new IllegalArgumentException("session reassignment requires the session entity");
+        }
+        Bson filter = Filters.and(Filters.eq("_id", encodeIdValue(op.sessionId())),
+                Filters.in("startup_id", op.previousStartups().stream().map(MongoEntityAdapter::encodeIndexValue).toList()),
+                Filters.ne("startup_id", encodeIndexValue(op.startupId())));
+        return docColl(id).updateOne(filter, Updates.combine(
+                Updates.set("startup_id", encodeIndexValue(op.startupId())), Updates.set("closed_at", 0L))).getModifiedCount();
     }
 
     private long setIfSentinel(@NotNull StoreId id, @NotNull Entity<?, ?, ?> kind,

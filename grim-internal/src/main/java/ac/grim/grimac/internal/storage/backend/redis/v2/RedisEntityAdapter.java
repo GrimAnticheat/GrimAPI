@@ -115,6 +115,8 @@ public final class RedisEntityAdapter implements KindAdapter<Entity<?, ?, ?>> {
                 { deleteByIndex(storePrefix, kind, d); return null; }
             if (op instanceof EntityOps.CountByIndexOp c)
                 return (R) Long.valueOf(countByIndex(storePrefix, kind, c));
+            if (op instanceof EntityOps.ReassignSessionOp r)
+                return (R) Long.valueOf(reassignSession(storePrefix, kind, r));
             if (op instanceof EntityOps.SetIfSentinelOp s)
                 return (R) Long.valueOf(setIfSentinel(storePrefix, kind, s));
             throw new UnsupportedOperationException("RedisEntityAdapter: " + op.getClass().getName());
@@ -137,22 +139,30 @@ public final class RedisEntityAdapter implements KindAdapter<Entity<?, ?, ?>> {
         EncodeShape shape = kind.codec().shape();
         Object idVal = codec.readField(record, idFieldIndex(shape));
         String redisKey = storePrefix + RedisKeys.encode(idVal);
-        Map<byte[], byte[]> fields = new LinkedHashMap<>();
-        for (int i = 0; i < shape.fields().size(); i++) {
-            Object v = codec.readField(record, i);
-            if (v != null) {
-                EncodeShape.FieldDef f = shape.fields().get(i);
-                fields.put(bytes(f.name()), fieldValueBytes(f, v));
+        mutateAtomically(storePrefix, kind, RedisKeys.encode(idVal), existing -> {
+            Map<byte[], byte[]> merged = new LinkedHashMap<>(existing);
+            for (int i = 0; i < shape.fields().size(); i++) {
+                EncodeShape.FieldDef field = shape.fields().get(i);
+                Object incoming = codec.readField(record, i);
+                byte[] old = hashGet(existing, field.name());
+                Object value = mergeField(field, old, incoming);
+                putField(merged, field.name(), value == null ? null : fieldValueBytes(field, value));
             }
-        }
-        try (var j = pool.getResource()) {
-            Map<byte[], byte[]> existing = j.hgetAll(bytes(redisKey));
-            if (existing != null && !existing.isEmpty()) {
-                removeIndexEntries(j, storePrefix, kind, shape, existing);
-            }
-            j.hset(bytes(redisKey), fields);
-            addIndexEntries(j, storePrefix, kind, shape, codec, record, idVal);
-        }
+            return merged;
+        });
+    }
+
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    private static Object mergeField(EncodeShape.FieldDef field, byte[] old, Object incoming) {
+        if (old == null) return incoming;
+        Object existing = parseField(field, old);
+        return switch (field.mergeMode()) {
+            case OVERWRITE -> incoming;
+            case INSERT_ONLY, PRESERVE_ON_NON_NULL -> existing;
+            case PRESERVE_ON_NON_SENTINEL -> ((Number) existing).longValue() == field.sentinelValue() ? incoming : existing;
+            case MAX -> incoming == null || ((Comparable) existing).compareTo(incoming) >= 0 ? existing : incoming;
+            case MIN -> incoming == null || ((Comparable) existing).compareTo(incoming) <= 0 ? existing : incoming;
+        };
     }
 
     @SuppressWarnings({"unchecked", "rawtypes"})
@@ -223,40 +233,108 @@ public final class RedisEntityAdapter implements KindAdapter<Entity<?, ?, ?>> {
         }
     }
 
+    private long reassignSession(String prefix, Entity<?, ?, ?> kind, EntityOps.ReassignSessionOp op) {
+        if (kind.recordType() != ac.grim.grimac.api.storage.model.SessionRecord.class) {
+            throw new IllegalArgumentException("session reassignment requires the session entity");
+        }
+        return mutateAtomically(prefix, kind, RedisKeys.encode(op.sessionId()), existing -> {
+            byte[] rawOwner = hashGet(existing, "startup_id");
+            if (rawOwner == null) return null;
+            UUID owner = UUID.fromString(new String(rawOwner, java.nio.charset.StandardCharsets.UTF_8));
+            if (owner.equals(op.startupId()) || !op.previousStartups().contains(owner)) return null;
+            Map<byte[], byte[]> updated = new LinkedHashMap<>(existing);
+            putField(updated, "startup_id", bytes(op.startupId().toString()));
+            putField(updated, "closed_at", bytes("0"));
+            return updated;
+        });
+    }
+
     private long setIfSentinel(String prefix, Entity<?, ?, ?> kind, EntityOps.SetIfSentinelOp op) {
         EncodeShape shape = kind.codec().shape();
         EncodeShape.FieldDef targetDef = shape.fields().get(fieldIndex(shape, op.field()));
         EncodeShape.FieldDef fromDef = op.value() == null ? shape.fields().get(fieldIndex(shape, op.fromField())) : null;
-        BsonCodec codec = BsonCodecs.regular(kind.recordType());
-        byte[] targetField = bytes(op.field());
         byte[] sentinel = fieldValueBytes(targetDef, op.sentinel());
-        long changed = 0L;
+        IndexSpec spec = op.indexName() == null ? null : requireIndex(kind, op.indexName());
+        List<String> ids;
         try (var j = pool.getResource()) {
-            IndexSpec spec = op.indexName() == null ? null : requireIndex(kind, op.indexName());
-            List<String> ids = spec == null
-                ? List.of(RedisKeys.encode(op.key()))
-                : j.zrange(exactIndexKey(prefix, spec, normalizedIndexValue(spec, op.key())), 0, -1);
-            for (String id : ids) {
-                byte[] redisKey = bytes(prefix + id);
-                Map<byte[], byte[]> existing = j.hgetAll(redisKey);
-                if (existing == null || existing.isEmpty()) continue;
+            ids = spec == null ? List.of(RedisKeys.encode(op.key()))
+                    : j.zrange(exactIndexKey(prefix, spec, normalizedIndexValue(spec, op.key())), 0, -1);
+        }
+        long changed = 0L;
+        for (String id : ids) {
+            changed += mutateAtomically(prefix, kind, id, existing -> {
+                if (existing.isEmpty()) return null;
+                // An index scan can be stale after ownership transfer. Recheck
+                // its selector while WATCH protects the actual row.
+                if (spec != null) {
+                    String leading = stripDir(spec.fields().get(0));
+                    byte[] expected = fieldValueBytes(shape.fields().get(fieldIndex(shape, leading)), op.key());
+                    if (!Arrays.equals(hashGet(existing, leading), expected)) return null;
+                }
                 byte[] current = hashGet(existing, op.field());
-                if (!Arrays.equals(current, sentinel)) continue;
+                if (!Arrays.equals(current, sentinel)) return null;
                 byte[] source = fromDef == null ? null : hashGet(existing, fromDef.name());
-                if (fromDef != null && source == null) continue;
+                if (fromDef != null && source == null) return null;
                 byte[] encoded = fieldValueBytes(targetDef, fromDef == null ? op.value() : parseField(fromDef, source));
-                if (Arrays.equals(current, encoded)) continue;
-                // The changed field may lead a secondary index, so reindex from the pre- and post-images.
-                removeIndexEntries(j, prefix, kind, shape, existing);
-                j.hset(redisKey, targetField, encoded);
-                // Jedis' binary map is content keyed, so put replaces the old value in place.
-                existing.put(targetField, encoded);
-                Object record = decodeHash(kind, existing);
-                addIndexEntries(j, prefix, kind, shape, codec, record, codec.readField(record, idFieldIndex(shape)));
-                changed++;
-            }
+                if (Arrays.equals(current, encoded)) return null;
+                Map<byte[], byte[]> updated = new LinkedHashMap<>(existing);
+                putField(updated, op.field(), encoded);
+                return updated;
+            });
         }
         return changed;
+    }
+
+    private record IndexEntry(String key, double score, String member) {}
+
+    private List<IndexEntry> indexEntries(String prefix, Entity<?, ?, ?> kind, Map<byte[], byte[]> hash) {
+        if (hash.isEmpty()) return List.of();
+        EncodeShape shape = kind.codec().shape();
+        BsonCodec codec = BsonCodecs.regular(kind.recordType());
+        Object record = decodeHash(kind, hash);
+        String id = RedisKeys.encode(codec.readField(record, idFieldIndex(shape)));
+        List<IndexEntry> entries = new ArrayList<>();
+        for (IndexSpec spec : kind.secondaryIndexes()) {
+            Object leading = codec.readField(record, fieldIndex(shape, stripDir(spec.fields().get(0))));
+            if (leading == null) continue;
+            String normalized = normalizedIndexValue(spec, leading);
+            entries.add(new IndexEntry(exactIndexKey(prefix, spec, normalized), orderedScoreFromRecord(shape, codec, record, spec), id));
+            if (spec.caseInsensitivePrefix()) entries.add(new IndexEntry(lexIndexKey(prefix, spec), 0, lexMember(normalized, id)));
+        }
+        return entries;
+    }
+
+    private long mutateAtomically(String prefix, Entity<?, ?, ?> kind, String id,
+            java.util.function.Function<Map<byte[], byte[]>, Map<byte[], byte[]>> update) {
+        byte[] key = bytes(prefix + id);
+        try (var j = pool.getResource()) {
+            for (int attempt = 0; attempt < 32; attempt++) {
+                j.watch(key);
+                try {
+                    Map<byte[], byte[]> existing = j.hgetAll(key);
+                    Map<byte[], byte[]> next = update.apply(existing);
+                    if (next == null) return 0L;
+                    List<IndexEntry> before = indexEntries(prefix, kind, existing);
+                    List<IndexEntry> after = indexEntries(prefix, kind, next);
+                    try (var tx = j.multi()) {
+                        for (IndexEntry index : before) tx.zrem(index.key(), index.member());
+                        tx.del(key);
+                        tx.hset(key, next);
+                        for (IndexEntry index : after) tx.zadd(index.key(), index.score(), index.member());
+                        if (tx.exec() != null) return 1L;
+                    }
+                } finally {
+                    j.unwatch();
+                }
+            }
+        }
+        throw new IllegalStateException("Redis entity write conflicted repeatedly");
+    }
+
+    private static void putField(Map<byte[], byte[]> hash, String name, byte[] value) {
+        byte[] key = bytes(name);
+        hash.entrySet().removeIf(entry -> Arrays.equals(entry.getKey(), key));
+        if (value != null) hash.put(key, value);
     }
 
     private void deleteById(String prefix, Entity<?, ?, ?> kind, EntityOps.DeleteByIdOp<?> op) {

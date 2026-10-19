@@ -11,6 +11,8 @@ import org.jetbrains.annotations.Nullable;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
+import java.util.UUID;
 
 @ApiStatus.Experimental
 public final class EntityOps {
@@ -19,7 +21,27 @@ public final class EntityOps {
 
     public sealed interface Op<R> extends Operation<R>
             permits UpsertOp, GetByIdOp, GetManyOp, FindByIndexOp, PrefixIndexOp, DeleteByIdOp, DeleteByIndexOp, CountByIndexOp,
-            SetIfSentinelOp {
+            SetIfSentinelOp, ReassignSessionOp {
+    }
+
+    /**
+     * Move an existing session to a recovered storage startup and clear an
+     * inferred crash closure atomically. Session identity, start time and metadata
+     * are retained. Only a session owned by one of {@code previousStartups} may
+     * move; a row already owned by {@code startupId} is left untouched, including
+     * its closure. Returns 1 if moved, 0 if missing, already moved or conflicting.
+     * Callers must hold the new server lease and prove the connection is still
+     * alive in memory. Ordinary heartbeats must never use this operation.
+     */
+    public record ReassignSessionOp(
+            @NotNull Category<?> category,
+            @NotNull UUID sessionId,
+            @NotNull Set<UUID> previousStartups,
+            @NotNull UUID startupId) implements Op<Long> {
+        public ReassignSessionOp {
+            previousStartups = Set.copyOf(previousStartups);
+            if (previousStartups.isEmpty()) throw new IllegalArgumentException("previousStartups");
+        }
     }
 
     public record UpsertOp<R>(
