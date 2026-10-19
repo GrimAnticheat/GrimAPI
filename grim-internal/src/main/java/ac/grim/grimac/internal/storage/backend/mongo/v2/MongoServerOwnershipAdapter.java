@@ -103,14 +103,16 @@ public final class MongoServerOwnershipAdapter implements ServerOwnershipAdapter
                         Updates.set("hostname", metadata.hostname()),
                         Updates.set("grim_version", metadata.grimVersion()),
                         Updates.set("server_version", metadata.serverVersionString()));
-                Document after = collection(id).findOneAndUpdate(
+                Document before = collection(id).findOneAndUpdate(
                         claimableFilter,
                         update,
                         new FindOneAndUpdateOptions()
-                                .returnDocument(ReturnDocument.AFTER));
-                if (after != null) {
+                                .returnDocument(ReturnDocument.BEFORE));
+                if (before != null) {
+                    // Return the row replaced by this atomic claim, not the
+                    // earlier observation used only to decide whether to insert.
                     return OwnershipClaimResult.claimed(
-                            persistentId, startupId, fence, now, now + ttlMs, previous);
+                            persistentId, startupId, fence, now, now + ttlMs, snapshot(before));
                 }
                 if (previous == null) {
                     try {
