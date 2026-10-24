@@ -69,6 +69,19 @@ dependencies {
 </dependency>
 ```
 
+### **Checking the running GrimAPI version**
+
+```java
+GrimAbstractAPI api = GrimAPIProvider.get();
+String apiVersion = api.getGrimApiVersion();
+String grimVersion = api.getGrimVersion();
+```
+
+`getGrimApiVersion()` reports the GrimAPI bundled with the running Grim instance,
+including development build metadata when present. It is separate from the GrimAC
+plugin version returned by `getGrimVersion()`. Call it after the API provider is
+initialized; `GrimApiVersion.get()` is also available without the provider.
+
 ### **Subscribing to events** (1.3+)
 
 The current API dispatches each event through its own `EventChannel`. Grab the
