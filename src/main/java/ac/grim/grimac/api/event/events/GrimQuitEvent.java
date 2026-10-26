@@ -38,8 +38,6 @@ public class GrimQuitEvent extends GrimEvent<GrimQuitEvent.Channel> implements G
     }
 
     public static final class Channel extends EventChannel<GrimQuitEvent, Handler> {
-        private final ThreadLocal<GrimQuitEvent> legacyPool = ThreadLocal.withInitial(GrimQuitEvent::new);
-
         public Channel() {
             super(GrimQuitEvent.class, Handler.class);
         }
@@ -77,12 +75,12 @@ public class GrimQuitEvent extends GrimEvent<GrimQuitEvent.Channel> implements G
                 }
                 return;
             }
-            GrimQuitEvent pooled = legacyPool.get();
-            pooled.init(user);
+            // A fresh event per dispatch: a listener may keep it, and a reused one would keep the last user reachable.
+            GrimQuitEvent event = new GrimQuitEvent(user);
             for (Entry<Handler> e : entries) {
                 try {
                     if (e.legacyListener != null) {
-                        e.<GrimQuitEvent>legacyListenerAs().handle(pooled);
+                        e.<GrimQuitEvent>legacyListenerAs().handle(event);
                     } else {
                         e.handler.onQuit(user);
                     }

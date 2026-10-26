@@ -38,8 +38,6 @@ public class GrimJoinEvent extends GrimEvent<GrimJoinEvent.Channel> implements G
     }
 
     public static final class Channel extends EventChannel<GrimJoinEvent, Handler> {
-        private final ThreadLocal<GrimJoinEvent> legacyPool = ThreadLocal.withInitial(GrimJoinEvent::new);
-
         public Channel() {
             super(GrimJoinEvent.class, Handler.class);
         }
@@ -77,12 +75,12 @@ public class GrimJoinEvent extends GrimEvent<GrimJoinEvent.Channel> implements G
                 }
                 return;
             }
-            GrimJoinEvent pooled = legacyPool.get();
-            pooled.init(user);
+            // A fresh event per dispatch: a listener may keep it, and a reused one would keep the last user reachable.
+            GrimJoinEvent event = new GrimJoinEvent(user);
             for (Entry<Handler> e : entries) {
                 try {
                     if (e.legacyListener != null) {
-                        e.<GrimJoinEvent>legacyListenerAs().handle(pooled);
+                        e.<GrimJoinEvent>legacyListenerAs().handle(event);
                     } else {
                         e.handler.onJoin(user);
                     }

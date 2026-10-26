@@ -65,7 +65,6 @@ public class CommandExecuteEvent extends GrimVerboseCheckEvent<CommandExecuteEve
 
     public static final class Channel extends EventChannel<CommandExecuteEvent, SupplierHandler> {
         private static final AtomicBoolean STRING_HANDLER_WARNING = new AtomicBoolean();
-        private final ThreadLocal<CommandExecuteEvent> legacyPool = ThreadLocal.withInitial(CommandExecuteEvent::new);
 
         public Channel() {
             super(CommandExecuteEvent.class, SupplierHandler.class);
@@ -170,15 +169,15 @@ public class CommandExecuteEvent extends GrimVerboseCheckEvent<CommandExecuteEve
                 return cancelled;
             }
 
-            CommandExecuteEvent pooled = legacyPool.get();
-            pooled.init(user, check, verbose, command);
+            // A fresh event per dispatch: a listener may keep it, and a reused one would keep the last user reachable.
+            CommandExecuteEvent event = new CommandExecuteEvent(user, check, verbose, command);
             for (Entry<SupplierHandler> e : entries) {
                 if (cancelled && !e.ignoreCancelled) continue;
                 try {
                     if (e.legacyListener != null) {
-                        pooled.setCancelled(cancelled);
-                        e.<CommandExecuteEvent>legacyListenerAs().handle(pooled);
-                        cancelled = pooled.isCancelled();
+                        event.setCancelled(cancelled);
+                        e.<CommandExecuteEvent>legacyListenerAs().handle(event);
+                        cancelled = event.isCancelled();
                     } else {
                         cancelled = e.handler.onCommandExecute(user, check, verbose, command, cancelled);
                     }

@@ -42,9 +42,6 @@ public class CompletePredictionEvent extends GrimCheckEvent<CompletePredictionEv
     }
 
     public static final class Channel extends EventChannel<CompletePredictionEvent, Handler> {
-        private final ThreadLocal<CompletePredictionEvent> legacyPool =
-                ThreadLocal.withInitial(CompletePredictionEvent::new);
-
         public Channel() {
             super(CompletePredictionEvent.class, Handler.class);
         }
@@ -96,15 +93,15 @@ public class CompletePredictionEvent extends GrimCheckEvent<CompletePredictionEv
                 return cancelled;
             }
 
-            CompletePredictionEvent pooled = legacyPool.get();
-            pooled.init(user, check, offset);
+            // A fresh event per dispatch: a listener may keep it, and a reused one would keep the last user reachable.
+            CompletePredictionEvent event = new CompletePredictionEvent(user, check, offset);
             for (Entry<Handler> e : entries) {
                 if (cancelled && !e.ignoreCancelled) continue;
                 try {
                     if (e.legacyListener != null) {
-                        pooled.setCancelled(cancelled);
-                        e.<CompletePredictionEvent>legacyListenerAs().handle(pooled);
-                        cancelled = pooled.isCancelled();
+                        event.setCancelled(cancelled);
+                        e.<CompletePredictionEvent>legacyListenerAs().handle(event);
+                        cancelled = event.isCancelled();
                     } else {
                         cancelled = e.handler.onCompletePrediction(user, check, offset, cancelled);
                     }

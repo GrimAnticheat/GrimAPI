@@ -1,10 +1,13 @@
 package ac.grim.grimac.internal.event;
 
+import ac.grim.grimac.api.AbstractCheck;
+import ac.grim.grimac.api.GrimUser;
 import ac.grim.grimac.api.event.EventChannel;
 import ac.grim.grimac.api.event.GrimEvent;
 import ac.grim.grimac.api.event.GrimEventHandler;
 import ac.grim.grimac.api.event.GrimEventListener;
 import ac.grim.grimac.api.event.ListenerPriority;
+import ac.grim.grimac.api.event.events.FlagEvent;
 import ac.grim.grimac.api.plugin.BasicGrimPlugin;
 import ac.grim.grimac.api.plugin.GrimPlugin;
 import ac.grim.grimac.internal.plugin.resolver.GrimExtensionManager;
@@ -20,7 +23,9 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.logging.Logger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.mockito.Mockito.mock;
 
 class OptimizedEventBusTest {
 
@@ -287,4 +292,18 @@ class OptimizedEventBusTest {
         assertEquals(1, b.get(), "reflective subscribe should be swept");
     }
 
+
+    @Test
+    void legacyListenerKeepsItsOwnEvent() {
+        List<FlagEvent> seen = new ArrayList<>();
+        bus.subscribe(plugin, FlagEvent.class, seen::add);
+        GrimUser first = mock(GrimUser.class);
+
+        bus.get(FlagEvent.class).fire(first, mock(AbstractCheck.class), "first");
+        bus.get(FlagEvent.class).fire(mock(GrimUser.class), mock(AbstractCheck.class), "second");
+
+        assertNotSame(seen.get(0), seen.get(1), "each dispatch must get its own event");
+        assertSame(first, seen.get(0).getUser(), "a kept event must not change after the next dispatch");
+        assertEquals("first", seen.get(0).getVerbose());
+    }
 }

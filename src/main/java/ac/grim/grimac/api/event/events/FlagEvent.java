@@ -59,7 +59,6 @@ public class FlagEvent extends GrimVerboseCheckEvent<FlagEvent.Channel> {
 
     public static final class Channel extends EventChannel<FlagEvent, SupplierHandler> {
         private static final AtomicBoolean STRING_HANDLER_WARNING = new AtomicBoolean();
-        private final ThreadLocal<FlagEvent> legacyPool = ThreadLocal.withInitial(FlagEvent::new);
 
         public Channel() {
             super(FlagEvent.class, SupplierHandler.class);
@@ -164,15 +163,15 @@ public class FlagEvent extends GrimVerboseCheckEvent<FlagEvent.Channel> {
                 return cancelled;
             }
 
-            FlagEvent pooled = legacyPool.get();
-            pooled.init(user, check, verbose);
+            // A fresh event per dispatch: a listener may keep it, and a reused one would keep the last user reachable.
+            FlagEvent event = new FlagEvent(user, check, verbose);
             for (Entry<SupplierHandler> e : entries) {
                 if (cancelled && !e.ignoreCancelled) continue;
                 try {
                     if (e.legacyListener != null) {
-                        pooled.setCancelled(cancelled);
-                        e.<FlagEvent>legacyListenerAs().handle(pooled);
-                        cancelled = pooled.isCancelled();
+                        event.setCancelled(cancelled);
+                        e.<FlagEvent>legacyListenerAs().handle(event);
+                        cancelled = event.isCancelled();
                     } else {
                         cancelled = e.handler.onFlag(user, check, verbose, cancelled);
                     }
