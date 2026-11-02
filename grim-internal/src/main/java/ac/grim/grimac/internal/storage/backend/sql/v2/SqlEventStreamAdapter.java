@@ -29,6 +29,9 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.sql.SQLNonTransientConnectionException;
+import java.sql.SQLRecoverableException;
+import java.sql.SQLTransientConnectionException;
 import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -94,16 +97,25 @@ public final class SqlEventStreamAdapter implements KindAdapter<EventStream<?, ?
     }
 
     private void ensureIndex(@NotNull Statement s, @NotNull String table,
-                             @NotNull String indexName, @NotNull String column) {
+                             @NotNull String indexName, @NotNull String column) throws SQLException {
         IndexSpec spec = IndexSpec.of(indexName, column);
         try {
             s.executeUpdate(dialect.createIndexSql(table, spec, indexName));
         } catch (SQLException e) {
+            if (isConnectionError(e)) throw e;
             if (dialect.isDuplicateIndexError(e)) return;
             logger.log(Level.WARNING, e, () -> "[" + dialect.name() + "] could not create index " + indexName
                 + " on " + table + " (" + column + "), SQLState " + e.getSQLState()
                 + ", error code " + e.getErrorCode() + "; continuing without it");
         }
+    }
+
+    private static boolean isConnectionError(@NotNull SQLException e) {
+        String state = e.getSQLState();
+        return e instanceof SQLNonTransientConnectionException
+            || e instanceof SQLTransientConnectionException
+            || e instanceof SQLRecoverableException
+            || (state != null && state.startsWith("08"));
     }
 
     @Override

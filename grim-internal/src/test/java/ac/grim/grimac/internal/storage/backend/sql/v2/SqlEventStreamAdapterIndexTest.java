@@ -17,10 +17,15 @@ import org.junit.jupiter.api.io.TempDir;
 import org.sqlite.SQLiteDataSource;
 
 import javax.sql.DataSource;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
+import java.lang.reflect.Proxy;
 import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.sql.SQLNonTransientConnectionException;
+import java.sql.SQLRecoverableException;
 import java.sql.SQLSyntaxErrorException;
 import java.sql.Statement;
 import java.util.ArrayList;
@@ -206,6 +211,24 @@ class SqlEventStreamAdapterIndexTest {
     }
 
     @SuppressWarnings("unchecked")
+    @Test @DisplayName("a connection lost during index creation is fatal")
+    void connectionLostDuringIndexIsFatal() throws Exception {
+        for (SQLException cause : List.of(
+                new SQLNonTransientConnectionException("connection closed", "08003"),
+                new SQLRecoverableException("Communications link failure", "08S01", 0),
+                new SQLException("connection failure", "08006"))) {
+            logs.clear();
+            DataSource wrapped = mock(DataSource.class);
+            when(wrapped.getConnection()).thenAnswer(inv -> failingIndexConnection(ds.getConnection(), cause));
+            SqlEventStreamAdapter adapter = new SqlEventStreamAdapter(wrapped, new SqliteDialect(), logger);
+            BackendException e = assertThrows(BackendException.class,
+                () -> adapter.ensureStore(StoreId.grim("grim_violations"), violations()));
+            assertSame(cause, e.getCause());
+            assertTrue(warnings().isEmpty());
+        }
+    }
+
+    @SuppressWarnings("unchecked")
     @Test @DisplayName("table creation failures are still fatal")
     void tableFailureIsFatal() throws Exception {
         DataSource failing = mock(DataSource.class);
@@ -230,6 +253,37 @@ class SqlEventStreamAdapterIndexTest {
             .checkId(7)
             .vl(1.0)
             .occurredEpochMs(ts);
+    }
+
+    private static Connection failingIndexConnection(Connection real, SQLException cause) {
+        return proxy(Connection.class, real, (method, args) -> {
+            Object result = method.invoke(real, args);
+            if (method.getName().equals("createStatement")) {
+                Statement statement = (Statement) result;
+                return proxy(Statement.class, statement, (m, a) -> {
+                    if (m.getName().equals("executeUpdate") && a != null
+                        && a[0] instanceof String sql && sql.startsWith("CREATE INDEX")) {
+                        throw cause;
+                    }
+                    return m.invoke(statement, a);
+                });
+            }
+            return result;
+        });
+    }
+
+    private interface Call {
+        Object apply(Method method, Object[] args) throws Throwable;
+    }
+
+    private static <T> T proxy(Class<T> type, T target, Call call) {
+        return type.cast(Proxy.newProxyInstance(type.getClassLoader(), new Class<?>[]{type}, (p, m, a) -> {
+            try {
+                return call.apply(m, a);
+            } catch (InvocationTargetException e) {
+                throw e.getCause();
+            }
+        }));
     }
 
     private List<LogRecord> warnings() {
