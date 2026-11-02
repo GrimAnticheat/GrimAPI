@@ -88,25 +88,33 @@ public final class SqlEventStreamAdapter implements KindAdapter<EventStream<?, ?
             addMissingColumns(c, s, id.name(), shape);
             maybeRebuildForUuidId(c, id.name(), kind, shape);
             for (String partition : kind.partitionFields()) {
-                ensureIndex(s, id.name(), "idx_" + id.name() + "_" + partition, partition);
+                ensureIndex(c, s, id.name(), "idx_" + id.name() + "_" + partition, partition);
             }
-            ensureIndex(s, id.name(), "idx_" + id.name() + "_ts", kind.timestampField());
+            ensureIndex(c, s, id.name(), "idx_" + id.name() + "_ts", kind.timestampField());
         } catch (SQLException e) {
             throw new BackendException("failed to ensure event stream table " + id, e);
         }
     }
 
-    private void ensureIndex(@NotNull Statement s, @NotNull String table,
+    private void ensureIndex(@NotNull Connection c, @NotNull Statement s, @NotNull String table,
                              @NotNull String indexName, @NotNull String column) throws SQLException {
         IndexSpec spec = IndexSpec.of(indexName, column);
         try {
             s.executeUpdate(dialect.createIndexSql(table, spec, indexName));
         } catch (SQLException e) {
-            if (isConnectionError(e)) throw e;
             if (dialect.isDuplicateIndexError(e)) return;
+            if (isConnectionError(e) || isConnectionLost(c)) throw e;
             logger.log(Level.WARNING, e, () -> "[" + dialect.name() + "] could not create index " + indexName
                 + " on " + table + " (" + column + "), SQLState " + e.getSQLState()
                 + ", error code " + e.getErrorCode() + "; continuing without it");
+        }
+    }
+
+    private static boolean isConnectionLost(@NotNull Connection c) {
+        try {
+            return c.isClosed() || !c.isValid(5);
+        } catch (SQLException e) {
+            return true;
         }
     }
 

@@ -7,9 +7,12 @@ import ac.grim.grimac.api.storage.kind.EventStream;
 import ac.grim.grimac.api.storage.kind.IndexSpec;
 import ac.grim.grimac.api.storage.kind.ops.EventStreamOps;
 import ac.grim.grimac.api.storage.registry.StoreId;
+import ac.grim.grimac.internal.storage.backend.sql.v2.dialect.PostgresDialect;
 import ac.grim.grimac.internal.storage.backend.sql.v2.dialect.SqliteDialect;
 import ac.grim.grimac.internal.storage.category.V2BuiltinKinds;
 import ac.grim.grimac.internal.storage.util.UuidV7;
+import com.zaxxer.hikari.HikariConfig;
+import com.zaxxer.hikari.HikariDataSource;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -17,13 +20,17 @@ import org.junit.jupiter.api.io.TempDir;
 import org.sqlite.SQLiteDataSource;
 
 import javax.sql.DataSource;
+import java.io.IOException;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
+import java.net.Socket;
 import java.nio.file.Path;
 import java.sql.Connection;
+import java.sql.DriverManager;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.sql.SQLTransientConnectionException;
 import java.sql.SQLNonTransientConnectionException;
 import java.sql.SQLRecoverableException;
 import java.sql.SQLSyntaxErrorException;
@@ -33,6 +40,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
 import java.util.UUID;
+import java.util.function.Predicate;
 import java.util.logging.Handler;
 import java.util.logging.Level;
 import java.util.logging.LogRecord;
@@ -44,6 +52,7 @@ import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -211,20 +220,105 @@ class SqlEventStreamAdapterIndexTest {
     }
 
     @SuppressWarnings("unchecked")
-    @Test @DisplayName("a connection lost during index creation is fatal")
-    void connectionLostDuringIndexIsFatal() throws Exception {
+    @Test @DisplayName("connection exceptions during index creation are fatal")
+    void connectionErrorDuringIndexIsFatal() throws Exception {
         for (SQLException cause : List.of(
-                new SQLNonTransientConnectionException("connection closed", "08003"),
-                new SQLRecoverableException("Communications link failure", "08S01", 0),
+                new SQLNonTransientConnectionException("connection closed", (String) null),
+                new SQLTransientConnectionException("connection timed out", "HY000"),
+                new SQLRecoverableException("Communications link failure", (String) null),
                 new SQLException("connection failure", "08006"))) {
             logs.clear();
-            DataSource wrapped = mock(DataSource.class);
-            when(wrapped.getConnection()).thenAnswer(inv -> failingIndexConnection(ds.getConnection(), cause));
-            SqlEventStreamAdapter adapter = new SqlEventStreamAdapter(wrapped, new SqliteDialect(), logger);
+            SqlEventStreamAdapter adapter = new SqlEventStreamAdapter(
+                hookedIndexes(sql -> true, (st, sql) -> { throw cause; }, true),
+                new SqliteDialect(), logger);
             BackendException e = assertThrows(BackendException.class,
-                () -> adapter.ensureStore(StoreId.grim("grim_violations"), violations()));
+                () -> adapter.ensureStore(StoreId.grim("grim_violations"), violations()), cause.toString());
             assertSame(cause, e.getCause());
             assertTrue(warnings().isEmpty());
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    @Test @DisplayName("an unclassified error on a closed connection at the last index is fatal")
+    void closedConnectionAtLastIndexIsFatal() throws Exception {
+        SQLException cause = new SQLException("terminating connection due to administrator command", "57P01");
+        SqlEventStreamAdapter adapter = new SqlEventStreamAdapter(
+            hookedIndexes(sql -> sql.contains("_ts\""), (st, sql) -> {
+                st.getConnection().close();
+                throw cause;
+            }, true),
+            new SqliteDialect(), logger);
+        BackendException e = assertThrows(BackendException.class,
+            () -> adapter.ensureStore(StoreId.grim("grim_violations"), violations()));
+        assertSame(cause, e.getCause());
+        assertTrue(warnings().isEmpty());
+        Map<String, String> expected = new TreeMap<>(EXPECTED);
+        expected.remove("idx_grim_violations_ts");
+        assertEquals(expected, secondaryIndexes("grim_violations"));
+    }
+
+    @SuppressWarnings("unchecked")
+    @Test @DisplayName("an unclassified error on an unresponsive connection is fatal")
+    void invalidConnectionIsFatal() throws Exception {
+        SQLException cause = new SQLException("server closed the connection unexpectedly", "57P02");
+        SqlEventStreamAdapter adapter = new SqlEventStreamAdapter(
+            hookedIndexes(sql -> sql.contains("_ts\""), (st, sql) -> { throw cause; }, false),
+            new SqliteDialect(), logger);
+        BackendException e = assertThrows(BackendException.class,
+            () -> adapter.ensureStore(StoreId.grim("grim_violations"), violations()));
+        assertSame(cause, e.getCause());
+        assertTrue(warnings().isEmpty());
+    }
+
+    @SuppressWarnings("unchecked")
+    @Test @DisplayName("Postgres: a session terminated at the last index is fatal")
+    void postgresTerminatedSessionIsFatal() throws Exception {
+        String host = System.getProperty("grim.test.postgres.host", "localhost");
+        int port = Integer.getInteger("grim.test.postgres.port", 5432);
+        try (Socket probe = new Socket(host, port)) {
+            assumeTrue(probe.isConnected());
+        } catch (IOException e) {
+            assumeTrue(false, host + ":" + port + " unreachable");
+        }
+        String url = "jdbc:postgresql://" + host + ":" + port + "/"
+            + System.getProperty("grim.test.postgres.database", "grim");
+        String user = System.getProperty("grim.test.postgres.user", "postgres");
+        String password = System.getProperty("grim.test.postgres.password", "grim-test-postgres");
+        String table = "idx_kill_" + Long.toHexString(System.nanoTime());
+        HikariConfig config = new HikariConfig();
+        config.setJdbcUrl(url);
+        config.setUsername(user);
+        config.setPassword(password);
+        config.setMaximumPoolSize(2);
+        try (HikariDataSource pool = new HikariDataSource(config)) {
+            DataSource killing = proxy(DataSource.class, pool, (m, a) -> {
+                Object result = m.invoke(pool, a);
+                if (!m.getName().equals("getConnection")) return result;
+                Connection real = (Connection) result;
+                int pid;
+                try (Statement st = real.createStatement(); ResultSet rs = st.executeQuery("SELECT pg_backend_pid()")) {
+                    rs.next();
+                    pid = rs.getInt(1);
+                }
+                return hook(real, sql -> sql.contains("_ts\""), (st, sql) -> {
+                    try (Connection admin = DriverManager.getConnection(url, user, password);
+                         Statement killer = admin.createStatement()) {
+                        killer.execute("SELECT pg_terminate_backend(" + pid + ")");
+                    }
+                    return st.executeUpdate(sql);
+                }, true);
+            });
+            SqlEventStreamAdapter adapter = new SqlEventStreamAdapter(killing, new PostgresDialect(), logger);
+            BackendException e = assertThrows(BackendException.class,
+                () -> adapter.ensureStore(StoreId.grim(table), violations()));
+            assertInstanceOf(SQLException.class, e.getCause());
+            assertEquals("57P01", ((SQLException) e.getCause()).getSQLState());
+            assertTrue(warnings().isEmpty());
+        } finally {
+            try (Connection admin = DriverManager.getConnection(url, user, password);
+                 Statement st = admin.createStatement()) {
+                st.execute("DROP TABLE IF EXISTS \"" + table + "\"");
+            }
         }
     }
 
@@ -255,20 +349,30 @@ class SqlEventStreamAdapterIndexTest {
             .occurredEpochMs(ts);
     }
 
-    private static Connection failingIndexConnection(Connection real, SQLException cause) {
+    private interface IndexHook {
+        Object run(Statement statement, String sql) throws Throwable;
+    }
+
+    private DataSource hookedIndexes(Predicate<String> match, IndexHook hook, boolean valid) {
+        return proxy(DataSource.class, ds, (m, a) -> {
+            Object result = m.invoke(ds, a);
+            return m.getName().equals("getConnection") ? hook((Connection) result, match, hook, valid) : result;
+        });
+    }
+
+    private static Connection hook(Connection real, Predicate<String> match, IndexHook hook, boolean valid) {
         return proxy(Connection.class, real, (method, args) -> {
+            if (!valid && method.getName().equals("isValid")) return false;
             Object result = method.invoke(real, args);
-            if (method.getName().equals("createStatement")) {
-                Statement statement = (Statement) result;
-                return proxy(Statement.class, statement, (m, a) -> {
-                    if (m.getName().equals("executeUpdate") && a != null
-                        && a[0] instanceof String sql && sql.startsWith("CREATE INDEX")) {
-                        throw cause;
-                    }
-                    return m.invoke(statement, a);
-                });
-            }
-            return result;
+            if (!method.getName().equals("createStatement")) return result;
+            Statement statement = (Statement) result;
+            return proxy(Statement.class, statement, (m, a) -> {
+                if (m.getName().equals("executeUpdate") && a != null && a[0] instanceof String sql
+                    && sql.startsWith("CREATE INDEX") && match.test(sql)) {
+                    return hook.run(statement, sql);
+                }
+                return m.invoke(statement, a);
+            });
         });
     }
 
