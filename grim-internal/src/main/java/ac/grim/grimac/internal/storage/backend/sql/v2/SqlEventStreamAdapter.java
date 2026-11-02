@@ -9,6 +9,7 @@ import ac.grim.grimac.api.storage.codec.EncodeShape;
 import ac.grim.grimac.internal.storage.codec.bson.BsonCodec;
 import ac.grim.grimac.internal.storage.codec.bson.BsonCodecs;
 import ac.grim.grimac.api.storage.kind.EventStream;
+import ac.grim.grimac.api.storage.kind.IndexSpec;
 import ac.grim.grimac.api.storage.kind.Operation;
 import ac.grim.grimac.api.storage.kind.ops.EventStreamOps;
 import ac.grim.grimac.api.storage.query.Cursor;
@@ -36,6 +37,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.logging.Level;
 import java.util.logging.Logger;
 
 /**
@@ -77,24 +79,30 @@ public final class SqlEventStreamAdapter implements KindAdapter<EventStream<?, ?
     @Override
     public void ensureStore(@NotNull StoreId id, @NotNull EventStream<?, ?> kind) throws BackendException {
         EncodeShape shape = kind.codec().shape();
-        String table = dialect.quoteIdentifier(id.name());
         try (Connection c = ds.getConnection(); Statement s = c.createStatement()) {
             s.executeUpdate(createTableDdl(id.name(), shape));
             // Add missing columns from legacy tables (same pattern as SqlEntityAdapter)
             addMissingColumns(c, s, id.name(), shape);
             maybeRebuildForUuidId(c, id.name(), kind, shape);
             for (String partition : kind.partitionFields()) {
-                String idxName = "idx_" + id.name() + "_" + partition;
-                String createIdx = "CREATE INDEX IF NOT EXISTS " + dialect.quoteIdentifier(idxName)
-                    + " ON " + table + " (" + dialect.quoteIdentifier(partition) + ")";
-                try { s.executeUpdate(createIdx); } catch (SQLException ignore) {}
+                ensureIndex(s, id.name(), "idx_" + id.name() + "_" + partition, partition);
             }
-            String tsIdx = "idx_" + id.name() + "_ts";
-            String createTsIdx = "CREATE INDEX IF NOT EXISTS " + dialect.quoteIdentifier(tsIdx)
-                + " ON " + table + " (" + dialect.quoteIdentifier(kind.timestampField()) + ")";
-            try { s.executeUpdate(createTsIdx); } catch (SQLException ignore) {}
+            ensureIndex(s, id.name(), "idx_" + id.name() + "_ts", kind.timestampField());
         } catch (SQLException e) {
             throw new BackendException("failed to ensure event stream table " + id, e);
+        }
+    }
+
+    private void ensureIndex(@NotNull Statement s, @NotNull String table,
+                             @NotNull String indexName, @NotNull String column) {
+        IndexSpec spec = IndexSpec.of(indexName, column);
+        try {
+            s.executeUpdate(dialect.createIndexSql(table, spec, indexName));
+        } catch (SQLException e) {
+            if (dialect.isDuplicateIndexError(e)) return;
+            logger.log(Level.WARNING, e, () -> "[" + dialect.name() + "] could not create index " + indexName
+                + " on " + table + " (" + column + "), SQLState " + e.getSQLState()
+                + ", error code " + e.getErrorCode() + "; continuing without it");
         }
     }
 

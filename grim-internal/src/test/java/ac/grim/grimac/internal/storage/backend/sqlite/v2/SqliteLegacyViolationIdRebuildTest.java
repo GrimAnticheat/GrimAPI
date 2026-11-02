@@ -24,6 +24,8 @@ import java.sql.ResultSet;
 import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.TreeMap;
 import java.util.UUID;
 import java.util.logging.Logger;
 
@@ -112,6 +114,18 @@ class SqliteLegacyViolationIdRebuildTest {
             // Four legacy rows plus the new write; UUIDv7 byte order keeps
             // the legacy order — same-ms rows by old numeric id, then by ts.
             assertEquals(List.of(1.0, 2.0, 3.0, 4.0, 5.0), vlsInIdOrder);
+            Map<String, String> indexes = new TreeMap<>();
+            try (ResultSet rs = c.getMetaData().getIndexInfo(null, null, "grim_violations", false, false)) {
+                while (rs.next()) {
+                    String name = rs.getString("INDEX_NAME");
+                    if (name != null && name.startsWith("idx_")) indexes.put(name, rs.getString("COLUMN_NAME"));
+                }
+            }
+            assertEquals(Map.of(
+                "idx_grim_violations_session_id", "session_id",
+                "idx_grim_violations_player_uuid", "player_uuid",
+                "idx_grim_violations_check_id", "check_id",
+                "idx_grim_violations_ts", "occurred_at"), indexes, "indexes exist on the rebuilt table");
         }
     }
 
