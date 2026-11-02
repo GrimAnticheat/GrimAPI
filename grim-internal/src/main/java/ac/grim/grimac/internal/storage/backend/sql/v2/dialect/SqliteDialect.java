@@ -62,9 +62,15 @@ public final class SqliteDialect implements SqlDialect {
 
     @Override
     public @NotNull String createIndexSql(@NotNull String tableName, @NotNull IndexSpec spec) {
+        return createIndexSql(tableName, spec, tableName + "_" + spec.name());
+    }
+
+    @Override
+    public @NotNull String createIndexSql(@NotNull String tableName, @NotNull IndexSpec spec,
+                                          @NotNull String physicalIndexName) {
         StringBuilder sb = new StringBuilder("CREATE ");
         if (spec.unique()) sb.append("UNIQUE ");
-        sb.append("INDEX IF NOT EXISTS ").append(q(tableName + "_" + spec.name()));
+        sb.append("INDEX IF NOT EXISTS ").append(q(physicalIndexName));
         sb.append(" ON ").append(q(tableName)).append(" (");
         boolean first = true;
         for (String f : spec.fields()) {
