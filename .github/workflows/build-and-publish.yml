@@ -63,6 +63,8 @@ jobs:
         env:
           MAVEN_REPO_NAME: ${{ secrets.MAVEN_REPO_NAME }}
           MAVEN_REPO_URL: ${{ secrets.MAVEN_REPO_URL }}
+          MAVEN_SNAPSHOT_URL: https://maven.grim.ac/public/snapshots
+          MAVEN_RELEASE_URL: https://maven.grim.ac/public/releases
           MAVEN_USERNAME: ${{ secrets.MAVEN_USERNAME }}
           MAVEN_PASSWORD: ${{ secrets.MAVEN_PASSWORD }}
 
