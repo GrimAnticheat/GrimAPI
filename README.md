@@ -194,3 +194,41 @@ public void onDisable() {
 and `@GrimEventHandler` reflective registration are preserved for source
 compatibility with 1.2.4.0 callers, route through the same channels, and are
 marked `@Deprecated` with doc pointing at `bus.get(E.class).on…(grim, handler)`.
+
+### Transfer state
+
+Before the destination server sends its first teleport, a transfer integration can
+seed the user's position and velocity. Optional rotation uses Minecraft degrees.
+Call this on the user's packet thread, before the initial server teleport:
+
+```java
+user.setTransferData(TransferData.builder()
+        .position(x, y, z)
+        .velocity(velocityX, velocityY, velocityZ)
+        .rotation(yaw, pitch)
+        .build());
+```
+
+Both position and velocity are required. Grim rejects transfer state after the
+first server teleport has established a safe position. This does not mark the
+spawn teleport as accepted. Older `GrimUser` implementations can keep using the
+interface without implementing this method; calling it on those implementations
+throws `UnsupportedOperationException`.
+
+### Verification
+
+Run `./gradlew check -PmavenLocalOverride=false` with Java 21. Dependency resolution
+ignores Maven local unless `-PmavenLocalOverride=true` is supplied. The datastore
+suite always runs SQLite tests. Network database tests use the `grim.test.mysql.*`,
+`grim.test.postgres.*`, `grim.test.redis.*` and `grim.test.mongo.uri` system properties
+and report skipped tests when a configured service is unavailable.
+
+History deletion requires the host to enable `database.retention.enabled`; existing
+per-category age settings alone do not enable it. The datastore batches expiration
+work and stops its schedule when the store closes.
+
+`./gradlew verifyCompatibilityConsumer -Prelease=true` compiles the compatibility
+consumer against this public API jar and runs it. To test the same compiled
+consumer with another runtime API jar, repeat with
+`-PcompatibilityRuntimeJar=/absolute/path/to/runtime-api.jar`. The task changes
+only the runtime classpath; the consumer's compilation always uses the public jar.

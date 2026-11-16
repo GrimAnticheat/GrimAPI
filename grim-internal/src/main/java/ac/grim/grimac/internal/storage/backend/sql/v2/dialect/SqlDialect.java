@@ -2,9 +2,13 @@ package ac.grim.grimac.internal.storage.backend.sql.v2.dialect;
 
 import ac.grim.grimac.api.storage.codec.EncodeShape;
 import ac.grim.grimac.api.storage.kind.IndexSpec;
+import ac.grim.grimac.internal.storage.backend.IndexCoverage;
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
 
+import java.sql.Connection;
+import java.sql.SQLException;
 import java.util.List;
 import java.util.Locale;
 
@@ -22,8 +26,9 @@ import java.util.Locale;
  *   <li>{@code ON CONFLICT (id) DO UPDATE} (Postgres/SQLite) vs.
  *       {@code ON DUPLICATE KEY UPDATE} (MySQL).</li>
  *   <li>{@code CREATE INDEX IF NOT EXISTS} is a MariaDB extension —
- *       real MySQL needs an {@code information_schema} probe or
- *       try/catch on duplicate-key error 1061. (Tracked as #2667.)</li>
+ *       real MySQL needs an {@code information_schema} probe first
+ *       ({@link #existingIndexes}) and reports a lost race as
+ *       duplicate-key error 1061 ({@link #isDuplicateIndex}).</li>
  * </ul>
  *
  * <p>Implementations are stateless and thread-safe; one instance per
@@ -49,6 +54,93 @@ public interface SqlDialect {
      * {@code CREATE INDEX}; SQLite and Postgres do).
      */
     @NotNull String createIndexSql(@NotNull String tableName, @NotNull IndexSpec spec);
+
+    /**
+     * Generate a {@code CREATE INDEX} for a plain ascending index named exactly
+     * {@code indexName} (the event-stream adapters' defaults). Uses
+     * {@code IF NOT EXISTS} where the database supports it; real MySQL does not,
+     * so its dialect leaves it out and the caller checks the catalog first.
+     */
+    default @NotNull String createPlainIndexSql(@NotNull String tableName, @NotNull String indexName,
+                                                @NotNull List<String> columns) {
+        StringBuilder sb = new StringBuilder("CREATE INDEX ");
+        if (supportsCreateIndexIfNotExists()) sb.append("IF NOT EXISTS ");
+        sb.append(quoteIdentifier(indexName)).append(" ON ").append(quoteIdentifier(tableName)).append(" (");
+        for (int i = 0; i < columns.size(); i++) {
+            if (i > 0) sb.append(", ");
+            sb.append(quoteIdentifier(columns.get(i)));
+        }
+        return sb.append(')').toString();
+    }
+
+    /**
+     * A {@code DELETE} of at most {@code limit} rows matching {@code where} (already
+     * rendered, with {@code ?} placeholders). Postgres and SQLite have no
+     * {@code DELETE ... LIMIT}, so the default selects the ids first.
+     */
+    default @NotNull String deleteLimitedSql(@NotNull String tableName, @NotNull String idColumn,
+                                             @NotNull String where, int limit) {
+        String table = quoteIdentifier(tableName);
+        String id = quoteIdentifier(idColumn);
+        return "DELETE FROM " + table + " WHERE " + id + " IN (SELECT " + id + " FROM " + table
+            + " WHERE " + where + " LIMIT " + limit + ")";
+    }
+
+    /**
+     * A second index for a case-insensitive prefix spec, when the dialect's main index cannot serve
+     * {@code LIKE 'prefix%'} itself, or null. Named {@code spec.name() + "_prefix"} (through
+     * {@link #physicalIndexName}). Default: none.
+     */
+    default @Nullable String prefixPatternIndexSql(@NotNull String tableName, @NotNull IndexSpec spec) {
+        return null;
+    }
+
+    /**
+     * The name {@link #createIndexSql} gives the secondary index {@code indexName} on {@code tableName}, so the
+     * default can be recognised exactly among a table's existing indexes. Default: the spec name itself.
+     */
+    default @NotNull String physicalIndexName(@NotNull String tableName, @NotNull String indexName) {
+        return indexName;
+    }
+
+    /**
+     * The expression a case-insensitive index and its lookups use for {@code quotedColumn}
+     * (already quoted); {@code columnIgnoresCase} is what {@link #columnIgnoresCase} found for it.
+     * Default {@code LOWER(col)}, matching the expression index the dialect builds; callers
+     * lowercase the value they compare with.
+     */
+    default @NotNull String caseInsensitiveExpr(@NotNull String quotedColumn, boolean columnIgnoresCase) {
+        return "LOWER(" + quotedColumn + ")";
+    }
+
+    /**
+     * Whether {@code column} of {@code tableName} already compares case-insensitively (its collation),
+     * so a lowercased value matches the bare column. Default false.
+     */
+    default boolean columnIgnoresCase(@NotNull Connection connection, @NotNull String tableName,
+                                      @NotNull String column) throws SQLException {
+        return false;
+    }
+
+    /** False for real MySQL, which rejects {@code CREATE INDEX IF NOT EXISTS} (MariaDB accepts it). */
+    default boolean supportsCreateIndexIfNotExists() { return true; }
+
+    /**
+     * True when {@code e} only says the index already exists: another server created it
+     * first, or the catalog could not be read beforehand. Any other failure is reported.
+     */
+    default boolean isDuplicateIndex(@NotNull SQLException e) {
+        String message = e.getMessage();
+        return message != null && message.toLowerCase(Locale.ROOT).contains("already exists");
+    }
+
+    /**
+     * The indexes {@code tableName} has now, read from the database's catalog, so an
+     * adapter can skip a default index that an operator's index already covers (see
+     * {@link IndexCoverage}). Key columns only, in index order.
+     */
+    @NotNull List<IndexCoverage.Existing> existingIndexes(@NotNull Connection connection,
+                                                          @NotNull String tableName) throws SQLException;
 
     /**
      * Map a {@link ac.grim.grimac.api.storage.codec.FieldKind} +

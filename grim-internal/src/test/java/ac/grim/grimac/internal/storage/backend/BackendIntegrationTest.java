@@ -71,24 +71,24 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class BackendIntegrationTest {
 
     /** Shared creds come from /opt/grim-setup/test-data.conf. */
-    private static final String MYSQL_HOST = "localhost";
-    private static final int MYSQL_PORT = 3306;
-    private static final String MYSQL_DB = "grim";
-    private static final String MYSQL_USER = "root";
-    private static final String MYSQL_PASS = "grim-test-mysql-root";
+    private static final String MYSQL_HOST = System.getProperty("grim.test.mysql.host", "localhost");
+    private static final int MYSQL_PORT = Integer.getInteger("grim.test.mysql.port", 3306);
+    private static final String MYSQL_DB = System.getProperty("grim.test.mysql.database", "grim");
+    private static final String MYSQL_USER = System.getProperty("grim.test.mysql.user", "root");
+    private static final String MYSQL_PASS = System.getProperty("grim.test.mysql.password", "grim-test-mysql-root");
 
-    private static final String PG_HOST = "localhost";
-    private static final int PG_PORT = 5432;
-    private static final String PG_DB = "grim";
-    private static final String PG_USER = "postgres";
-    private static final String PG_PASS = "grim-test-postgres";
+    private static final String PG_HOST = System.getProperty("grim.test.postgres.host", "localhost");
+    private static final int PG_PORT = Integer.getInteger("grim.test.postgres.port", 5432);
+    private static final String PG_DB = System.getProperty("grim.test.postgres.database", "grim");
+    private static final String PG_USER = System.getProperty("grim.test.postgres.user", "postgres");
+    private static final String PG_PASS = System.getProperty("grim.test.postgres.password", "grim-test-postgres");
 
     private static final String MONGO_CS = "mongodb://root:grim-test-mongo@localhost:27017/?authSource=admin";
     private static final String MONGO_DB = "grim_it";
 
-    private static final String REDIS_HOST = "localhost";
-    private static final int REDIS_PORT = 6379;
-    private static final String REDIS_PASS = "grim-test-redis";
+    private static final String REDIS_HOST = System.getProperty("grim.test.redis.host", "localhost");
+    private static final int REDIS_PORT = Integer.getInteger("grim.test.redis.port", 6379);
+    private static final String REDIS_PASS = System.getProperty("grim.test.redis.password", "grim-test-redis");
 
     private static Stream<Arguments> backends() {
         String runId = "it_" + Long.toHexString(System.nanoTime());

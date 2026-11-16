@@ -25,6 +25,8 @@ import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
@@ -53,6 +55,7 @@ public final class DataStoreImpl implements DataStore {
     private final long shutdownDrainTimeoutMs;
     private final Logger logger;
     private volatile boolean closed;
+    private final List<Runnable> closeListeners = new ArrayList<>();
     private volatile ServerOwnershipGate ownershipGate = ServerOwnershipGate.disabled();
 
     /**
@@ -317,7 +320,8 @@ public final class DataStoreImpl implements DataStore {
         }
         V2Routes.Route<?> route = v2Routes.routeFor(cat);
         if (route != null) {
-            Operation<Void> v2Op = DeleteCriteriaTranslator.translate(cat, criteria);
+            // Typed loosely: a translated op may report a row count, which is ignored here.
+            Operation<?> v2Op = DeleteCriteriaTranslator.translate(cat, criteria);
             if (v2Op != null) {
                 // If the routed adapter doesn't yet support this Op
                 // (e.g. RedisEntityAdapter.DeleteByIndexOp before secondary
@@ -549,10 +553,33 @@ public final class DataStoreImpl implements DataStore {
         return closed ? 0 : rings.awaitDrain(timeoutMs);
     }
 
+    /** True once {@link #flushAndClose} has started. */
+    public boolean isClosed() { return closed; }
+
+    /**
+     * Runs {@code listener} when the store starts closing (immediately if it already has),
+     * so a service that runs on its own schedule stops with the store.
+     */
+    public synchronized void onClose(@NotNull Runnable listener) {
+        if (closed) {
+            listener.run();
+            return;
+        }
+        closeListeners.add(listener);
+    }
+
     @Override
     public synchronized void flushAndClose(long drainTimeoutMs) {
         if (closed) return;
         closed = true;
+        for (Runnable listener : closeListeners) {
+            try {
+                listener.run();
+            } catch (RuntimeException e) {
+                logger.log(java.util.logging.Level.WARNING, "[grim-datastore] close listener failed", e);
+            }
+        }
+        closeListeners.clear();
         long effective = drainTimeoutMs > 0 ? drainTimeoutMs : shutdownDrainTimeoutMs;
         long leftover = rings.shutdown(effective);
 

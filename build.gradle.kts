@@ -168,7 +168,7 @@ publishing {
 
 // --- Repositories for Dependencies ---
 repositories {
-    mavenLocal()
+    if (BuildFlags.mavenLocalOverride) mavenLocal()
     maven("https://jitpack.io/")
     maven("https://repo.viaversion.com")
     mavenCentral()
@@ -186,4 +186,25 @@ dependencies {
 
 tasks.test {
     useJUnitPlatform()
+}
+
+// Compile this consumer against the public jar, then run those same classes against a chosen runtime jar.
+val compatibilityClasses = layout.buildDirectory.dir("compatibility-consumer/classes")
+val compileCompatibilityConsumer = tasks.register<JavaCompile>("compileCompatibilityConsumer") {
+    group = "verification"
+    source(fileTree("src/compatibility/java") { include("**/*.java") })
+    classpath = files(tasks.named<Jar>("jar")) + configurations.compileClasspath.get()
+    destinationDirectory.set(compatibilityClasses)
+    options.release.set(17)
+}
+
+tasks.register<JavaExec>("verifyCompatibilityConsumer") {
+    group = "verification"
+    description = "Runs the public consumer unchanged with compatibilityRuntimeJar, or this build's API jar."
+    dependsOn(compileCompatibilityConsumer)
+    val runtimeJar = providers.gradleProperty("compatibilityRuntimeJar")
+        .map { file(it) }.orElse(tasks.named<Jar>("jar").flatMap { it.archiveFile }.map { it.asFile })
+    classpath = files(compatibilityClasses, runtimeJar)
+    mainClass.set("PublicApiConsumer")
+    argumentProviders.add(org.gradle.process.CommandLineArgumentProvider { listOf(runtimeJar.get().name) })
 }

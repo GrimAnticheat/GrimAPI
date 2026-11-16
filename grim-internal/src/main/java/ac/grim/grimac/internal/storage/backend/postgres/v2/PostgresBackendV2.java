@@ -1,7 +1,7 @@
 package ac.grim.grimac.internal.storage.backend.postgres.v2;
 
-import ac.grim.grimac.api.storage.backend.ApiVersion;
 import ac.grim.grimac.api.storage.backend.AdminAdapter;
+import ac.grim.grimac.api.storage.backend.ApiVersion;
 import ac.grim.grimac.api.storage.backend.BackendContext;
 import ac.grim.grimac.api.storage.backend.BackendException;
 import ac.grim.grimac.api.storage.backend.BackendV2;
@@ -37,9 +37,9 @@ import java.util.logging.Logger;
  * until the v2 wiring (Phase 1.4c) flips DataStore over.
  *
  * <p>Connection pooling: backed by HikariCP. The pool defaults small
- * (5 max connections) since the v2 adapter SPI's per-event acquire
- * pattern releases connections quickly back to the pool; a busy
- * disruptor handler thread typically holds at most one. Operators can
+ * (5 max connections) since the v2 adapter SPI's per-event
+ * acquire pattern releases connections quickly back to the pool; a
+ * busy disruptor handler thread typically holds at most one. Operators can
  * adjust the pool through the backend's {@code pool-settings} config block.
  *
  * <p>Currently wires:
@@ -109,14 +109,11 @@ public final class PostgresBackendV2 implements BackendV2 {
                     + "into the plugin jar or drop into server/plugins (missing: "
                     + cnf.getMessage() + ")", cnf);
         }
-        // connectTimeout bounds the TCP connect/handshake at boot so a
-        // blackholed host fails fast instead of hanging on PgJDBC's 60s
-        // default. The user's jdbcUrl() already includes their
-        // extraJdbcParams; only append connectTimeout if it isn't already
+        // PgJDBC has separate timeout knobs for connect/handshake and
+        // in-flight socket reads. The user's jdbcUrl() already includes
+        // their extraJdbcParams; only append a timeout if it isn't already
         // specified so an operator override wins.
-        String jdbcUrl = withConnectTimeout(
-                config.jdbcUrl(),
-                config.poolSettings().connectionTimeoutSeconds());
+        String jdbcUrl = jdbcUrlWithTimeouts(config);
 
         HikariConfig hc = new HikariConfig();
         hc.setJdbcUrl(jdbcUrl);
@@ -207,15 +204,28 @@ public final class PostgresBackendV2 implements BackendV2 {
     }
 
     /**
-     * Append {@code connectTimeout=<seconds>} to a JDBC URL if the
-     * URL doesn't already specify one. Operator-supplied overrides
-     * in {@code config.extraJdbcParams} take precedence (their
-     * {@code connectTimeout} appears in the URL before this one and
-     * Postgres uses the first occurrence).
+     * Append PgJDBC timeout params to a JDBC URL if the URL doesn't already
+     * specify them. Operator-supplied overrides in {@code config.extraJdbcParams}
+     * take precedence.
      */
-    static @NotNull String withConnectTimeout(@NotNull String url, int seconds) {
-        if (url.contains("connectTimeout=")) return url;
+    static @NotNull String jdbcUrlWithTimeouts(@NotNull PostgresBackendConfig config) {
+        String url = withTimeoutParamSeconds(
+                config.jdbcUrl(),
+                "connectTimeout",
+                millisecondsToPgJdbcSeconds(config.connectTimeoutMs()));
+        return withTimeoutParamSeconds(
+                url,
+                "socketTimeout",
+                millisecondsToPgJdbcSeconds(config.socketTimeoutMs()));
+    }
+
+    static @NotNull String withTimeoutParamSeconds(@NotNull String url, @NotNull String param, int seconds) {
+        if (url.contains(param + "=")) return url;
         char sep = url.indexOf('?') >= 0 ? '&' : '?';
-        return url + sep + "connectTimeout=" + seconds;
+        return url + sep + param + "=" + seconds;
+    }
+
+    static int millisecondsToPgJdbcSeconds(int millis) {
+        return Math.max(1, (millis + 999) / 1000);
     }
 }

@@ -27,6 +27,7 @@ object BuildFlags {
         raw(key)?.toBooleanStrictOrNull() ?: default
 
     /* public, strongly typed flags --------------------------------------- */
+    val mavenLocalOverride get() = bool("mavenLocalOverride", default = false)
     val release  get() = bool("release" , default = false)
     val shadePE  get() = bool("shadePE" , default = true)
     val relocate get() = bool("relocate", default = true)
