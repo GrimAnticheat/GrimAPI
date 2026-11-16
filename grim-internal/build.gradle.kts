@@ -1,3 +1,5 @@
+import versioning.BuildFlags
+
 plugins {
     `java-library`
     `maven-publish`
@@ -76,7 +78,7 @@ publishing {
 }
 
 repositories {
-    mavenLocal()
+    if (BuildFlags.mavenLocalOverride) mavenLocal()
     mavenCentral()
 }
 

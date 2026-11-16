@@ -3,9 +3,18 @@ package ac.grim.grimac.internal.storage.backend.sql.v2.dialect;
 import ac.grim.grimac.api.storage.codec.EncodeShape;
 import ac.grim.grimac.api.storage.codec.MergeMode;
 import ac.grim.grimac.api.storage.kind.IndexSpec;
+import ac.grim.grimac.internal.storage.backend.IndexCoverage;
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
 
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.util.Map;
+import java.util.LinkedHashMap;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 
@@ -44,6 +53,11 @@ public final class PostgresDialect implements SqlDialect {
         return sb.toString();
     }
 
+    /** duplicate_table: the relation (here, the index) already exists. */
+    @Override public boolean isDuplicateIndex(@NotNull SQLException e) {
+        return "42P07".equals(e.getSQLState());
+    }
+
     @Override
     public @NotNull String createIndexSql(@NotNull String tableName, @NotNull IndexSpec spec) {
         StringBuilder sb = new StringBuilder();
@@ -54,7 +68,7 @@ public final class PostgresDialect implements SqlDialect {
         // table with the same spec name would silently no-op. Prefix
         // the name with the table to scope it; trim to Postgres'
         // 63-character NAMEDATALEN cap if the combined string overflows.
-        String physical = qualifiedIndexName(tableName, spec.name());
+        String physical = physicalIndexName(tableName, spec.name());
         sb.append("INDEX IF NOT EXISTS ").append(quoteId(physical));
         sb.append(" ON ").append(quoteId(tableName)).append(" (");
         boolean first = true;
@@ -89,6 +103,26 @@ public final class PostgresDialect implements SqlDialect {
      * known limitation — operators with very long table names should
      * pick shorter index names.
      */
+    /**
+     * Under any collation but "C", a B-tree on {@code LOWER(col)} cannot bound {@code LIKE 'prefix%'}: the planner
+     * walks the whole index (or the table) filtering every name, so a prefix with few matches reads them all. The
+     * same expression with {@code text_pattern_ops} compares bytewise and turns the prefix into an index range;
+     * the main index stays for ordering and cursors.
+     */
+    @Override
+    public @Nullable String prefixPatternIndexSql(@NotNull String tableName, @NotNull IndexSpec spec) {
+        if (!spec.caseInsensitivePrefix()) return null;
+        String column = spec.fields().get(0);
+        if (column.startsWith("-")) column = column.substring(1);
+        return "CREATE INDEX IF NOT EXISTS " + quoteId(physicalIndexName(tableName, spec.name() + "_prefix"))
+            + " ON " + quoteId(tableName) + " (LOWER(" + quoteId(column) + ") text_pattern_ops)";
+    }
+
+    @Override
+    public @NotNull String physicalIndexName(@NotNull String tableName, @NotNull String indexName) {
+        return qualifiedIndexName(tableName, indexName);
+    }
+
     static @NotNull String qualifiedIndexName(@NotNull String tableName, @NotNull String indexName) {
         String combined = tableName + "_" + indexName;
         return combined.length() <= 63 ? combined : combined.substring(0, 63);
@@ -125,6 +159,50 @@ public final class PostgresDialect implements SqlDialect {
         String column = quoteId(field.name());
         return List.of("ALTER TABLE " + quoteId(tableName)
             + " ALTER COLUMN " + column + " TYPE BYTEA USING convert_to(" + column + ", 'UTF8')");
+    }
+
+    /**
+     * Reads {@code pg_index} for the table that {@code tableName} resolves to on the
+     * search path. Only valid B-tree indexes without a predicate are usable, and only when
+     * every key column uses the column's own collation and its type's default operator class:
+     * an index built {@code COLLATE "C"} or with {@code text_pattern_ops} orders text
+     * differently from the default index it would replace. An expression key column has no name.
+     */
+    @Override
+    public @NotNull List<IndexCoverage.Existing> existingIndexes(@NotNull Connection connection,
+                                                                 @NotNull String tableName) throws SQLException {
+        String sql = "SELECT i.relname, ix.indisunique, ix.indisvalid AND ix.indisready, ix.indpred IS NOT NULL,"
+            + " am.amname, a.attname, (ix.indoption[k.n - 1]::int & 1) = 1,"
+            + " ix.indcollation[k.n - 1] = coalesce(a.attcollation, 0) AND coalesce(oc.opcdefault, false)"
+            + " FROM pg_index ix"
+            + " JOIN pg_class i ON i.oid = ix.indexrelid"
+            + " JOIN pg_am am ON am.oid = i.relam"
+            + " CROSS JOIN LATERAL generate_series(1, ix.indnkeyatts) AS k(n)"
+            + " LEFT JOIN pg_attribute a ON a.attrelid = ix.indrelid AND a.attnum = ix.indkey[k.n - 1]"
+            + " LEFT JOIN pg_opclass oc ON oc.oid = ix.indclass[k.n - 1]"
+            + " WHERE ix.indrelid = to_regclass(?)"
+            + " ORDER BY i.relname, k.n";
+        Map<String, Boolean> unique = new LinkedHashMap<>();
+        Map<String, Boolean> usable = new LinkedHashMap<>();
+        Map<String, List<IndexCoverage.Column>> keys = new LinkedHashMap<>();
+        try (PreparedStatement ps = connection.prepareStatement(sql)) {
+            ps.setString(1, quoteId(tableName));
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    String index = rs.getString(1);
+                    unique.put(index, rs.getBoolean(2));
+                    boolean column = rs.getBoolean(3) && !rs.getBoolean(4) && "btree".equals(rs.getString(5))
+                        && rs.getBoolean(8);
+                    usable.merge(index, column, Boolean::logicalAnd);
+                    keys.computeIfAbsent(index, ignored -> new ArrayList<>())
+                        .add(new IndexCoverage.Column(rs.getString(6), rs.getBoolean(7)));
+                }
+            }
+        }
+        List<IndexCoverage.Existing> out = new ArrayList<>(keys.size());
+        keys.forEach((index, columns) ->
+            out.add(new IndexCoverage.Existing(index, unique.get(index), usable.get(index), columns)));
+        return out;
     }
 
     @Override

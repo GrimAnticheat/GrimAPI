@@ -3,9 +3,18 @@ package ac.grim.grimac.internal.storage.backend.sql.v2.dialect;
 import ac.grim.grimac.api.storage.codec.EncodeShape;
 import ac.grim.grimac.api.storage.codec.MergeMode;
 import ac.grim.grimac.api.storage.kind.IndexSpec;
+import ac.grim.grimac.internal.storage.backend.IndexCoverage;
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
 
+import java.sql.Connection;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Statement;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -60,11 +69,17 @@ public final class SqliteDialect implements SqlDialect {
         return sb.toString();
     }
 
+    /** SQLite index names are database-wide, so the spec name is prefixed with the table. */
+    @Override
+    public @NotNull String physicalIndexName(@NotNull String tableName, @NotNull String indexName) {
+        return tableName + "_" + indexName;
+    }
+
     @Override
     public @NotNull String createIndexSql(@NotNull String tableName, @NotNull IndexSpec spec) {
         StringBuilder sb = new StringBuilder("CREATE ");
         if (spec.unique()) sb.append("UNIQUE ");
-        sb.append("INDEX IF NOT EXISTS ").append(q(tableName + "_" + spec.name()));
+        sb.append("INDEX IF NOT EXISTS ").append(q(physicalIndexName(tableName, spec.name())));
         sb.append(" ON ").append(q(tableName)).append(" (");
         boolean first = true;
         for (String f : spec.fields()) {
@@ -95,6 +110,45 @@ public final class SqliteDialect implements SqlDialect {
         else throw new IllegalArgumentException("SqliteDialect: unsupported type " + t.getName());
         boolean primitive = t.isPrimitive();
         return primitive || !field.nullable() ? base + " NOT NULL" : base;
+    }
+
+    /**
+     * Reads {@code PRAGMA index_list} and {@code PRAGMA index_xinfo}. Partial indexes,
+     * expression columns and non-BINARY collations are not usable. SQLite older than
+     * 3.9 has no {@code index_xinfo}; the caller then creates its indexes as before.
+     */
+    @Override
+    public @NotNull List<IndexCoverage.Existing> existingIndexes(@NotNull Connection connection,
+                                                                 @NotNull String tableName) throws SQLException {
+        Map<String, Boolean> unique = new LinkedHashMap<>();
+        Map<String, Boolean> partial = new LinkedHashMap<>();
+        try (Statement s = connection.createStatement();
+             ResultSet rs = s.executeQuery("PRAGMA index_list(" + q(tableName) + ")")) {
+            while (rs.next()) {
+                String index = rs.getString("name");
+                unique.put(index, rs.getInt("unique") != 0);
+                partial.put(index, rs.getInt("partial") != 0);
+            }
+        }
+        List<IndexCoverage.Existing> out = new ArrayList<>(unique.size());
+        for (Map.Entry<String, Boolean> entry : unique.entrySet()) {
+            String index = entry.getKey();
+            boolean usable = !partial.get(index);
+            List<IndexCoverage.Column> keys = new ArrayList<>();
+            try (Statement s = connection.createStatement();
+                 ResultSet rs = s.executeQuery("PRAGMA index_xinfo(" + q(index) + ")")) {
+                while (rs.next()) {
+                    if (rs.getInt("key") == 0) continue; // the rowid / included columns
+                    String collation = rs.getString("coll");
+                    usable &= collation == null || "BINARY".equalsIgnoreCase(collation);
+                    // cid -2 is an expression, -1 the rowid: neither is a named column.
+                    String column = rs.getInt("cid") >= 0 ? rs.getString("name") : null;
+                    keys.add(new IndexCoverage.Column(column, rs.getInt("desc") != 0));
+                }
+            }
+            out.add(new IndexCoverage.Existing(index, entry.getValue(), usable, keys));
+        }
+        return out;
     }
 
     @Override

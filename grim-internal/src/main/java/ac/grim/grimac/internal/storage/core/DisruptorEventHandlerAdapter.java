@@ -4,8 +4,10 @@ import ac.grim.grimac.api.storage.backend.BackendException;
 import ac.grim.grimac.api.storage.backend.StorageEventHandler;
 import com.lmax.disruptor.EventHandler;
 import org.jetbrains.annotations.ApiStatus;
+import org.jetbrains.annotations.Nullable;
 
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.LongSupplier;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -17,32 +19,55 @@ import java.util.logging.Logger;
  * relocation-safe interface so packaging (shadow jar, shaded Disruptor)
  * doesn't break them.
  * <p>
- * Rate-limits exception warnings and counts error drops for metrics.
+ * Counts error drops for metrics and rate-limits the warning. While writes keep
+ * failing, a warning reports the drops since the previous one, first after
+ * {@code warnRateMs} and then twice as far apart each time, up to
+ * {@link #MAX_WARN_INTERVAL_MS}. A failure's stack trace is printed the first
+ * time it is seen and again at most every {@link #TRACE_INTERVAL_MS}; the
+ * other warnings are one line. After {@link #MAX_WARN_INTERVAL_MS} without a
+ * failure the interval starts over.
  */
 @ApiStatus.Internal
 final class DisruptorEventHandlerAdapter<E> implements EventHandler<E> {
+
+    static final long MAX_WARN_INTERVAL_MS = 5L * 60L * 1000L;
+    static final long TRACE_INTERVAL_MS = 60L * 60L * 1000L;
 
     private final String categoryId;
     private final StorageEventHandler<E> delegate;
     private final long warnRateMs;
     private final Logger logger;
+    private final LongSupplier clock;
 
     private final AtomicLong droppedOnErrorTotal = new AtomicLong();
     private final AtomicLong handledTotal = new AtomicLong();
     private final AtomicLong batchCommitLatencyMsEma = new AtomicLong();
 
     private long batchStartNanos;
-    private long lastWarnAtMs;
+    private long lastFailureAtMs = Long.MIN_VALUE;
+    private long lastWarnAtMs = Long.MIN_VALUE;
+    private long warnIntervalMs;
     private long dropsAccumulatedSinceLastWarn;
+    private @Nullable String lastTracedKind;
+    private long lastTraceAtMs;
 
     DisruptorEventHandlerAdapter(String categoryId,
                                  StorageEventHandler<E> delegate,
                                  long warnRateMs,
                                  Logger logger) {
+        this(categoryId, delegate, warnRateMs, logger, System::currentTimeMillis);
+    }
+
+    DisruptorEventHandlerAdapter(String categoryId,
+                                 StorageEventHandler<E> delegate,
+                                 long warnRateMs,
+                                 Logger logger,
+                                 LongSupplier clock) {
         this.categoryId = categoryId;
         this.delegate = delegate;
         this.warnRateMs = warnRateMs;
         this.logger = logger;
+        this.clock = clock;
     }
 
     @Override
@@ -65,16 +90,38 @@ final class DisruptorEventHandlerAdapter<E> implements EventHandler<E> {
 
     private synchronized void registerDropWarn(Throwable cause) {
         dropsAccumulatedSinceLastWarn++;
-        long now = System.currentTimeMillis();
-        if (now - lastWarnAtMs >= warnRateMs) {
-            logger.log(Level.WARNING,
-                    "[grim-datastore] backend event handler failed for " + categoryId
-                            + "; dropped " + dropsAccumulatedSinceLastWarn
-                            + " events in the last " + warnRateMs + "ms",
-                    cause);
-            lastWarnAtMs = now;
-            dropsAccumulatedSinceLastWarn = 0L;
+        long now = clock.getAsLong();
+        long base = Math.max(1L, warnRateMs);
+        boolean newEpisode = lastFailureAtMs == Long.MIN_VALUE || now - lastFailureAtMs >= MAX_WARN_INTERVAL_MS;
+        if (newEpisode) warnIntervalMs = base;
+        lastFailureAtMs = now;
+        if (lastWarnAtMs != Long.MIN_VALUE && now - lastWarnAtMs < warnIntervalMs) return;
+
+        String kind = kind(cause);
+        String message = "[grim-datastore] backend event handler failed for " + categoryId + "; dropped "
+                + dropsAccumulatedSinceLastWarn + " event(s)"
+                + (lastWarnAtMs == Long.MIN_VALUE ? "" : " in the last " + (now - lastWarnAtMs) / 1000L + " s");
+        if (!kind.equals(lastTracedKind) || now - lastTraceAtMs >= TRACE_INTERVAL_MS) {
+            logger.log(Level.WARNING, message, cause);
+            lastTracedKind = kind;
+            lastTraceAtMs = now;
+        } else {
+            logger.log(Level.WARNING, message + ": " + kind + " (stack trace logged earlier)");
         }
+        lastWarnAtMs = now;
+        // The first warning of an episode is followed by one after warnRateMs, then twice as far each time.
+        if (!newEpisode) warnIntervalMs = Math.min(MAX_WARN_INTERVAL_MS, warnIntervalMs * 2L);
+        dropsAccumulatedSinceLastWarn = 0L;
+    }
+
+    /** The root cause's type and message: what makes two failures "the same". */
+    private static String kind(Throwable t) {
+        Throwable root = t;
+        for (int depth = 0; root.getCause() != null && root.getCause() != root && depth < 32; depth++) {
+            root = root.getCause();
+        }
+        String message = root.getMessage();
+        return root.getClass().getName() + (message == null ? "" : ": " + message);
     }
 
     long droppedOnErrorTotal() { return droppedOnErrorTotal.get(); }

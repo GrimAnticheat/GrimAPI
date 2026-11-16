@@ -17,6 +17,7 @@ import ac.grim.grimac.api.storage.query.Page;
 import ac.grim.grimac.api.storage.registry.Migration;
 import ac.grim.grimac.api.storage.registry.StoreId;
 import ac.grim.grimac.internal.storage.backend.sql.v2.dialect.SqlDialect;
+import ac.grim.grimac.internal.storage.retention.DeleteOlderThanOp;
 import ac.grim.grimac.internal.storage.util.UuidCodec;
 import ac.grim.grimac.internal.storage.util.UuidV7;
 import org.jetbrains.annotations.ApiStatus;
@@ -83,16 +84,17 @@ public final class SqlEventStreamAdapter implements KindAdapter<EventStream<?, ?
             // Add missing columns from legacy tables (same pattern as SqlEntityAdapter)
             addMissingColumns(c, s, id.name(), shape);
             maybeRebuildForUuidId(c, id.name(), kind, shape);
+            // An operator's composite index whose leading column is the partition (or timestamp)
+            // column serves the same reads, so the single-column default is only created without one.
+            CoveringIndexes existing = CoveringIndexes.read(c, dialect, id.name(), logger);
             for (String partition : kind.partitionFields()) {
                 String idxName = "idx_" + id.name() + "_" + partition;
-                String createIdx = "CREATE INDEX IF NOT EXISTS " + dialect.quoteIdentifier(idxName)
-                    + " ON " + table + " (" + dialect.quoteIdentifier(partition) + ")";
-                try { s.executeUpdate(createIdx); } catch (SQLException ignore) {}
+                existing.ensure(s, idxName, List.of(partition), false,
+                    dialect.createPlainIndexSql(id.name(), idxName, List.of(partition)));
             }
             String tsIdx = "idx_" + id.name() + "_ts";
-            String createTsIdx = "CREATE INDEX IF NOT EXISTS " + dialect.quoteIdentifier(tsIdx)
-                + " ON " + table + " (" + dialect.quoteIdentifier(kind.timestampField()) + ")";
-            try { s.executeUpdate(createTsIdx); } catch (SQLException ignore) {}
+            existing.ensure(s, tsIdx, List.of(kind.timestampField()), false,
+                dialect.createPlainIndexSql(id.name(), tsIdx, List.of(kind.timestampField())));
         } catch (SQLException e) {
             throw new BackendException("failed to ensure event stream table " + id, e);
         }
@@ -135,6 +137,8 @@ public final class SqlEventStreamAdapter implements KindAdapter<EventStream<?, ?
             if (op instanceof EventStreamOps.CountDistinctOp c)     return (R) Long.valueOf(countDistinct(id, kind, c));
             if (op instanceof EventStreamOps.DeleteByPartitionOp d) { deleteByPartition(id, kind, d); return null; }
             if (op instanceof EventStreamOps.DeleteOlderThanOp d)   { deleteOlderThan(id, kind, d); return null; }
+            if (op instanceof DeleteOlderThanOp d)
+                return (R) Long.valueOf(SqlRetention.deleteOlderThan(ds, dialect, id.name(), kind.codec().shape().idField(), d));
             throw new UnsupportedOperationException(
                 "SqlEventStreamAdapter does not handle " + op.getClass().getName());
         } catch (SQLException e) {

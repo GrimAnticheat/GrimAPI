@@ -25,7 +25,10 @@ import org.jetbrains.annotations.Nullable;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executor;
+import java.util.concurrent.Future;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
@@ -107,15 +110,27 @@ public final class RingRegistry {
                 // For now, run synchronously on the executor to avoid
                 // the snapshot complexity. The Disruptor thread blocks
                 // briefly but there's only one consumer per ring anyway.
+                // A failure is rethrown here so DisruptorEventHandlerAdapter
+                // counts the drop and rate-limits the warning.
+                Future<?> done;
                 try {
-                    exec.submit(() -> {
-                        try { original.onEvent(event, sequence, endOfBatch); }
-                        catch (Exception e) { logger.log(Level.WARNING,
-                            "[grim-datastore] single-writer handler failed", e); }
-                    }).get(); // block until I/O completes
-                } catch (Exception e) {
-                    throw new ac.grim.grimac.api.storage.backend.BackendException(
-                        "single-writer submit failed", e);
+                    done = exec.submit(() -> {
+                        original.onEvent(event, sequence, endOfBatch);
+                        return null;
+                    });
+                } catch (RejectedExecutionException e) {
+                    throw new BackendException("single-writer submit failed", e);
+                }
+                try {
+                    done.get(); // block until I/O completes
+                } catch (ExecutionException e) {
+                    Throwable cause = e.getCause();
+                    if (cause instanceof BackendException be) throw be;
+                    if (cause instanceof RuntimeException re) throw re;
+                    throw new BackendException("single-writer handler failed", cause);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw new BackendException("single-writer write interrupted", e);
                 }
             };
         }

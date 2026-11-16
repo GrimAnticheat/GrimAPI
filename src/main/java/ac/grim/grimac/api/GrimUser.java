@@ -11,6 +11,14 @@ import java.util.UUID;
 
 public interface GrimUser extends ConfigReloadable, BasicReloadable, UserHandlerHolder, GrimIdentity {
 
+    /**
+     * Seeds Grim's initial simulation state for a proxy/server transfer.
+     * This must be called before the first server teleport is established.
+     */
+    default void setTransferData(TransferData transferData) {
+        throw new UnsupportedOperationException("This GrimUser implementation does not support transfer data");
+    }
+
     String getName();
 
     String getBrand();

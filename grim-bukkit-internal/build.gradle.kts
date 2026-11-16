@@ -1,3 +1,5 @@
+import versioning.BuildFlags
+
 plugins {
     `java-library`
     `maven-publish`
@@ -45,7 +47,7 @@ publishing {
 }
 
 repositories {
-    mavenLocal()
+    if (BuildFlags.mavenLocalOverride) mavenLocal()
     maven("https://hub.spigotmc.org/nexus/content/repositories/snapshots/")
     mavenCentral()
 }

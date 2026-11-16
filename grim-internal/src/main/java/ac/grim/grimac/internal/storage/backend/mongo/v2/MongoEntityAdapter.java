@@ -20,6 +20,7 @@ import ac.grim.grimac.internal.storage.codec.bson.BsonBinaries;
 import ac.grim.grimac.internal.storage.codec.bson.BsonCodec;
 import ac.grim.grimac.internal.storage.codec.bson.BsonCodecImpl;
 import ac.grim.grimac.internal.storage.codec.bson.BsonCodecs;
+import ac.grim.grimac.internal.storage.retention.DeleteOlderThanOp;
 import com.mongodb.client.MongoCollection;
 import com.mongodb.client.MongoDatabase;
 import com.mongodb.client.model.Filters;
@@ -165,9 +166,12 @@ public final class MongoEntityAdapter implements KindAdapter<Entity<?, ?, ?>> {
                 }
             }
             MongoCollection<Document> c = db.getCollection(coll);
+            MongoCoveringIndexes existing = MongoCoveringIndexes.read(c, logger);
             for (IndexSpec spec : kind.secondaryIndexes()) {
-                createIndexIgnoringConflict(c, buildIndex(spec),
-                    new IndexOptions().unique(spec.unique()).name(spec.name()));
+                if (!existing.covered(spec.name(), spec.fields(), spec.unique())) {
+                    createIndexIgnoringConflict(c, buildIndex(spec),
+                        new IndexOptions().unique(spec.unique()).name(spec.name()));
+                }
                 if (spec.caseInsensitivePrefix()) {
                     // Companion lowercased-prefix index. Application is responsible
                     // for writing both the original + _lower variant; the codec
@@ -219,6 +223,7 @@ public final class MongoEntityAdapter implements KindAdapter<Entity<?, ?, ?>> {
             if (op instanceof EntityOps.SetIfSentinelOp s)   return (R) Long.valueOf(setIfSentinel(id, kind, s));
             if (op instanceof EntityOps.DeleteByIdOp d)    { deleteById(id, d); return null; }
             if (op instanceof EntityOps.DeleteByIndexOp d) { deleteByIndex(id, kind, d); return null; }
+            if (op instanceof DeleteOlderThanOp d)           return (R) Long.valueOf(deleteOlderThan(id, d));
             throw new UnsupportedOperationException(
                 "MongoEntityAdapter does not handle " + op.getClass().getName());
         } catch (RuntimeException e) {
@@ -760,6 +765,19 @@ public final class MongoEntityAdapter implements KindAdapter<Entity<?, ?, ?>> {
 
     private <ID> void deleteById(@NotNull StoreId id, @NotNull EntityOps.DeleteByIdOp<ID> op) {
         docColl(id).deleteOne(Filters.eq("_id", encodeIdValue(op.id())));
+    }
+
+    private long deleteOlderThan(@NotNull StoreId id, @NotNull DeleteOlderThanOp op) {
+        List<Bson> filters = new ArrayList<>();
+        for (String field : op.fields()) filters.add(Filters.lt(field, op.cutoffEpochMs()));
+        Bson filter = Filters.and(filters);
+        if (op.limit() == 0) return docColl(id).deleteMany(filter).getDeletedCount();
+        List<Object> ids = new ArrayList<>(op.limit());
+        for (Document d : docColl(id).find(filter).projection(new Document("_id", 1)).limit(op.limit())) {
+            ids.add(d.get("_id"));
+        }
+        if (ids.isEmpty()) return 0;
+        return docColl(id).deleteMany(Filters.in("_id", ids)).getDeletedCount();
     }
 
     private void deleteByIndex(@NotNull StoreId id, @NotNull Entity<?, ?, ?> kind,

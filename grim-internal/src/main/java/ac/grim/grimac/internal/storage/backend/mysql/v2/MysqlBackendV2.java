@@ -63,12 +63,21 @@ public final class MysqlBackendV2 implements BackendV2 {
         } catch (ClassNotFoundException cnf) {
             throw new BackendException("MySQL JDBC driver or HikariCP missing: " + cnf.getMessage(), cnf);
         }
+        // Connector/J defaults both connectTimeout and socketTimeout to 0
+        // (infinite). socketTimeout is the only bound on an in-flight
+        // statement whose TCP peer went away without a FIN/RST — without it
+        // a renew/upsert/commit can block for hours until the OS or a
+        // middlebox kills the connection. Operator overrides in the
+        // configured jdbcUrl win; we only append what isn't already set.
+        String jdbcUrl = jdbcUrlWithTimeouts(config);
+
         HikariConfig hc = new HikariConfig();
-        hc.setJdbcUrl(config.jdbcUrl());
+        hc.setJdbcUrl(jdbcUrl);
         hc.setUsername(config.user());
         if (config.password() != null) hc.setPassword(config.password());
         config.poolSettings().applyTo(hc);
         hc.setPoolName("grim-mysql-v2");
+        hc.setValidationTimeout(3_000L);
         try {
             this.ds = new HikariDataSource(hc);
         } catch (RuntimeException e) {
@@ -112,5 +121,22 @@ public final class MysqlBackendV2 implements BackendV2 {
     public <X> @NotNull Optional<X> unwrap(@NotNull Class<X> type) {
         if (type.isAssignableFrom(javax.sql.DataSource.class) && ds != null) return Optional.of((X) ds);
         return Optional.empty();
+    }
+
+    /**
+     * Append {@code <param>=<millis>} to a Connector/J JDBC URL if the URL
+     * doesn't already specify it, so operator-supplied values in the
+     * configured URL take precedence. Connector/J timeout params are in
+     * milliseconds (unlike PgJDBC's seconds).
+     */
+    static @NotNull String jdbcUrlWithTimeouts(@NotNull MysqlBackendConfig config) {
+        String url = withTimeoutParam(config.jdbcUrl(), "connectTimeout", config.connectTimeoutMs());
+        return withTimeoutParam(url, "socketTimeout", config.socketTimeoutMs());
+    }
+
+    static @NotNull String withTimeoutParam(@NotNull String url, @NotNull String param, long millis) {
+        if (url.contains(param + "=")) return url;
+        char sep = url.indexOf('?') >= 0 ? '&' : '?';
+        return url + sep + param + "=" + millis;
     }
 }

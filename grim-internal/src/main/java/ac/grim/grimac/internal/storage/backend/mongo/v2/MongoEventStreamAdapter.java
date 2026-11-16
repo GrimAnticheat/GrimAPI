@@ -18,12 +18,16 @@ import ac.grim.grimac.internal.storage.codec.bson.BsonBinaries;
 import ac.grim.grimac.internal.storage.codec.bson.BsonTsCodec;
 import ac.grim.grimac.internal.storage.codec.bson.BsonTsCodecImpl;
 import ac.grim.grimac.internal.storage.codec.bson.BsonCodecs;
+import ac.grim.grimac.internal.storage.retention.DeleteOlderThanOp;
 import com.mongodb.client.MongoCollection;
 import com.mongodb.client.MongoDatabase;
 import com.mongodb.client.model.Aggregates;
 import com.mongodb.client.model.CreateCollectionOptions;
+import com.mongodb.MongoCommandException;
 import com.mongodb.client.model.Filters;
 import com.mongodb.client.model.Indexes;
+import com.mongodb.client.model.Projections;
+import com.mongodb.client.model.Sorts;
 import com.mongodb.client.model.TimeSeriesGranularity;
 import com.mongodb.client.model.TimeSeriesOptions;
 import org.bson.BsonWriter;
@@ -66,6 +70,7 @@ public final class MongoEventStreamAdapter implements KindAdapter<EventStream<?,
 
     /** {@code MongoCommandException} error code for "namespace already exists". */
     private static final int NAMESPACE_EXISTS = 48;
+    private static final int UNAUTHORIZED = 13;
 
     private final @NotNull MongoDatabase db;
     private final @NotNull Logger logger;
@@ -84,6 +89,9 @@ public final class MongoEventStreamAdapter implements KindAdapter<EventStream<?,
     // ============================== KindAdapter SPI ==============================
 
     @SuppressWarnings("unchecked")
+    /** The TTL earlier builds gave the violations collection: 180 days. */
+    static final long LEGACY_BUILTIN_TTL_SECONDS = 180L * 24L * 60L * 60L;
+
     @Override
     public @NotNull Class<EventStream<?, ?>> kindType() {
         return (Class<EventStream<?, ?>>) (Class<?>) EventStream.class;
@@ -119,6 +127,8 @@ public final class MongoEventStreamAdapter implements KindAdapter<EventStream<?,
                     logger.fine(() -> "timeseries collection " + coll
                         + " was created concurrently by another instance; continuing");
                 }
+            } else {
+                dropBuiltinTtl(coll, kind);
             }
             ensureIndexes(coll, kind);
         } catch (RuntimeException e) {
@@ -174,6 +184,9 @@ public final class MongoEventStreamAdapter implements KindAdapter<EventStream<?,
                 deleteOlderThan(id, kind, d);
                 return null;
             }
+            if (op instanceof DeleteOlderThanOp d) {
+                return (R) Long.valueOf(deleteOlderThanBatch(id, d));
+            }
             throw new UnsupportedOperationException(
                 "MongoEventStreamAdapter does not handle " + op.getClass().getName());
         } catch (RuntimeException e) {
@@ -192,6 +205,35 @@ public final class MongoEventStreamAdapter implements KindAdapter<EventStream<?,
     }
 
     // ============================== ensureStore helpers ==============================
+
+    /**
+     * Earlier builds created the violations collection with a fixed 180-day TTL, which
+     * deleted history whatever the retention config said. Deletion now only happens through
+     * the opt-in retention sweeper, so that TTL is switched off. A TTL of any other length
+     * was set by the operator and is left alone.
+     */
+    private void dropBuiltinTtl(@NotNull String coll, @NotNull EventStream<?, ?> kind) {
+        if (kind.retention() != null) return;
+        Document info = db.listCollections().filter(new Document("name", coll)).first();
+        if (info == null) return;
+        Object options = info.get("options");
+        if (!(options instanceof Document opts)) return;
+        Object ttl = opts.get("expireAfterSeconds");
+        if (!(ttl instanceof Number n) || n.longValue() != LEGACY_BUILTIN_TTL_SECONDS) return;
+        try {
+            db.runCommand(new Document("collMod", coll).append("expireAfterSeconds", "off"));
+            logger.info(() -> "[grim-datastore] switched off the built-in 180-day expiry on " + coll
+                + "; old violations are now deleted only when retention is enabled");
+        } catch (MongoCommandException e) {
+            // Say why, without a stack trace: this repeats on every start until someone acts on it.
+            String reason = e.getErrorCode() == UNAUTHORIZED
+                ? "the database user may not run collMod (it needs the collMod action, for example from the dbAdmin role)"
+                : "MongoDB refused collMod (" + e.getErrorCodeName() + " " + e.getErrorCode() + ": " + e.getErrorMessage() + ")";
+            logger.warning("[grim-datastore] could not switch off the built-in 180-day expiry on " + coll + ": "
+                + reason + ". Violations older than 180 days keep being deleted by MongoDB until it is switched off,"
+                + " for example by an admin: db.runCommand({collMod: \"" + coll + "\", expireAfterSeconds: \"off\"})");
+        }
+    }
 
     private boolean collectionExists(@NotNull String name) {
         for (String existing : db.listCollectionNames()) {
@@ -233,12 +275,21 @@ public final class MongoEventStreamAdapter implements KindAdapter<EventStream<?,
      */
     private void ensureIndexes(@NotNull String coll, @NotNull EventStream<?, ?> kind) {
         MongoCollection<Document> c = db.getCollection(coll);
-        c.createIndex(Indexes.ascending(kind.timestampField()));
+        // Each index is skipped when an existing one leads with the same fields (see IndexCoverage).
+        // Names are the ones Mongo generates for these keys, so the defaults themselves log nothing.
+        MongoCoveringIndexes existing = MongoCoveringIndexes.read(c, logger);
+        String ts = kind.timestampField();
+        if (!existing.covered(ts + "_1", List.of(ts), false)) {
+            c.createIndex(Indexes.ascending(ts));
+        }
         for (String partition : kind.partitionFields()) {
-            c.createIndex(Indexes.ascending("meta." + partition));
-            c.createIndex(Indexes.compoundIndex(
-                Indexes.ascending("meta." + partition),
-                Indexes.ascending(kind.timestampField())));
+            String meta = "meta." + partition;
+            if (!existing.covered(meta + "_1", List.of(meta), false)) {
+                c.createIndex(Indexes.ascending(meta));
+            }
+            if (!existing.covered(meta + "_1_" + ts + "_1", List.of(meta, ts), false)) {
+                c.createIndex(Indexes.compoundIndex(Indexes.ascending(meta), Indexes.ascending(ts)));
+            }
         }
     }
 
@@ -373,6 +424,27 @@ public final class MongoEventStreamAdapter implements KindAdapter<EventStream<?,
      * cleanup, prefer the native TTL set via {@code kind.retention()} at
      * {@code ensureStore} (works on every 5.0.x).
      */
+    /**
+     * Retention's batched delete: at most about {@code limit} events per call ({@code 0} = all). Mongo takes no
+     * collection lock, but one unbounded delete of a large backlog runs past the sweeper's batch timeout, cannot
+     * be stopped between batches and floods the oplog in one go. A time-series collection deletes efficiently by
+     * its time field and scans for anything else (such as {@code _id}), so a batch is everything up to the
+     * {@code limit}-th oldest matching event, found through the time field's index. Events sharing that exact
+     * timestamp are deleted together, so a batch can exceed {@code limit} by those ties.
+     */
+    private long deleteOlderThanBatch(@NotNull StoreId id, @NotNull DeleteOlderThanOp op) {
+        List<Bson> filters = new ArrayList<>();
+        for (String field : op.fields()) filters.add(Filters.lt(field, new Date(op.cutoffEpochMs())));
+        Bson older = Filters.and(filters);
+        MongoCollection<Document> collection = rawDocColl(id);
+        if (op.limit() == 0) return collection.deleteMany(older).getDeletedCount();
+        String field = op.fields().get(0);
+        Document boundary = collection.find(older).sort(Sorts.ascending(field)).skip(op.limit() - 1).limit(1)
+            .projection(Projections.include(field)).first();
+        Bson batch = boundary == null ? older : Filters.and(older, Filters.lte(field, boundary.get(field)));
+        return collection.deleteMany(batch).getDeletedCount();
+    }
+
     private void deleteOlderThan(@NotNull StoreId id, @NotNull EventStream<?, ?> kind, @NotNull EventStreamOps.DeleteOlderThanOp op) {
         rawDocColl(id).deleteMany(Filters.lt(kind.timestampField(), new Date(op.cutoffEpochMs())));
     }

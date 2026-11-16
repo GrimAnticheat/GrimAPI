@@ -39,6 +39,8 @@ public final class PostgresBackendProvider implements BackendProvider {
                 pw.isEmpty() ? null : pw,
                 src.getString("extra-jdbc-params", ""),
                 src.getInt("batch-flush-cap", 256),
+                src.getInt("connect-timeout-ms", PostgresBackendConfig.DEFAULT_CONNECT_TIMEOUT_MS),
+                src.getInt("socket-timeout-ms", PostgresBackendConfig.DEFAULT_SOCKET_TIMEOUT_MS),
                 wtDefault, wtPerCat,
                 HikariPoolSettings.readFrom(src, PostgresBackendConfig.DEFAULT_MAXIMUM_POOL_SIZE),
                 TableNames.readFrom(src));

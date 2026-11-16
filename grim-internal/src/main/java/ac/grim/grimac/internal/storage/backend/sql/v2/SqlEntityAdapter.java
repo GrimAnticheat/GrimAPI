@@ -18,6 +18,7 @@ import org.jetbrains.annotations.Nullable;
 import ac.grim.grimac.api.storage.registry.Migration;
 import ac.grim.grimac.api.storage.registry.StoreId;
 import ac.grim.grimac.internal.storage.backend.sql.v2.dialect.SqlDialect;
+import ac.grim.grimac.internal.storage.retention.DeleteOlderThanOp;
 import ac.grim.grimac.internal.storage.codec.bson.BsonCodec;
 import ac.grim.grimac.internal.storage.codec.bson.BsonCodecs;
 import org.jetbrains.annotations.ApiStatus;
@@ -115,6 +116,9 @@ public final class SqlEntityAdapter implements KindAdapter<Entity<?, ?, ?>> {
     private final @NotNull SqlDialect dialect;
     private final @NotNull Logger logger;
 
+    /** Tables whose case-insensitive index column already ignores case (see {@link SqlDialect#columnIgnoresCase}). */
+    private final java.util.Set<String> caseIgnoringColumns = java.util.concurrent.ConcurrentHashMap.newKeySet();
+
     public SqlEntityAdapter(@NotNull DataSource ds, @NotNull SqlDialect dialect, @NotNull Logger logger) {
         this.ds = ds;
         this.dialect = dialect;
@@ -148,13 +152,23 @@ public final class SqlEntityAdapter implements KindAdapter<Entity<?, ?, ?>> {
             // against both old and new rows.
             addMissingColumns(c, s, table, shape);
 
+            CoveringIndexes existing = CoveringIndexes.read(c, dialect, table, logger);
             for (IndexSpec spec : kind.secondaryIndexes()) {
                 String createIdx = dialect.createIndexSql(table, spec);
                 logger.log(Level.FINE, () -> "ensureStore DDL: " + createIdx);
-                try { s.executeUpdate(createIdx); }
-                catch (SQLException ignored) {
-                    // Index may already exist under a different name
-                    // (legacy layout). Swallow and continue.
+                // A case-insensitive prefix index is an expression index; only its own definition serves it.
+                if (spec.caseInsensitivePrefix()) {
+                    String column = stripDir(spec.fields().get(0));
+                    if (dialect.columnIgnoresCase(c, table, column)) {
+                        caseIgnoringColumns.add(table + "." + column);
+                    } else {
+                        caseIgnoringColumns.remove(table + "." + column);
+                    }
+                    existing.ensureUnchecked(s, spec.name(), spec.fields(), createIdx);
+                    String prefixIdx = dialect.prefixPatternIndexSql(table, spec);
+                    if (prefixIdx != null) existing.ensureUnchecked(s, spec.name() + "_prefix", spec.fields(), prefixIdx);
+                } else {
+                    existing.ensure(s, spec.name(), spec.fields(), spec.unique(), createIdx);
                 }
             }
         } catch (SQLException e) {
@@ -495,6 +509,8 @@ public final class SqlEntityAdapter implements KindAdapter<Entity<?, ?, ?>> {
             if (op instanceof EntityOps.CountByIndexOp c)    return (R) Long.valueOf(countByIndex(id, kind, c));
             if (op instanceof EntityOps.ReassignSessionOp s) return (R) Long.valueOf(reassignSession(id, kind, s));
             if (op instanceof EntityOps.SetIfSentinelOp s)   return (R) Long.valueOf(setIfSentinel(id, kind, s));
+            if (op instanceof DeleteOlderThanOp d)
+                return (R) Long.valueOf(SqlRetention.deleteOlderThan(ds, dialect, id.name(), kind.codec().shape().idField(), d));
             throw new UnsupportedOperationException(
                 "SqlEntityAdapter does not handle " + op.getClass().getSimpleName());
         } catch (java.sql.SQLException | RuntimeException e) {
@@ -694,7 +710,7 @@ public final class SqlEntityAdapter implements KindAdapter<Entity<?, ?, ?>> {
         String leadingCol = stripDir(spec.fields().get(0));
         EncodeShape.FieldDef leadingDef = fieldDef(shape, leadingCol);
         String leadingExpr = spec.caseInsensitivePrefix()
-            ? "LOWER(" + dialect.quoteIdentifier(leadingCol) + ")"
+            ? caseInsensitiveExpr(id.name(), leadingCol)
             : dialect.quoteIdentifier(leadingCol);
         Object leadingValue = spec.caseInsensitivePrefix() && op.key() instanceof String s
             ? s.toLowerCase(java.util.Locale.ROOT)
@@ -703,7 +719,7 @@ public final class SqlEntityAdapter implements KindAdapter<Entity<?, ?, ?>> {
         StringBuilder where = new StringBuilder();
         where.append(leadingExpr).append(" = ?");
         params.add(new BoundValue(leadingDef, leadingValue));
-        appendCursorWhere(where, params, shape, spec, /*equalityColumnIndex=*/0, op.cursor());
+        appendCursorWhere(id.name(), where, params, shape, spec, /*equalityColumnIndex=*/0, op.cursor());
         return pageRead(id, kind, shape, codec, spec, /*equalityColumnIndex=*/0, where, params, op.pageSize());
     }
 
@@ -720,7 +736,7 @@ public final class SqlEntityAdapter implements KindAdapter<Entity<?, ?, ?>> {
         // and lowercase the prefix value. Without caseInsensitivePrefix
         // we hit the plain column.
         String filterExpr = spec.caseInsensitivePrefix()
-            ? "LOWER(" + dialect.quoteIdentifier(leadingCol) + ")"
+            ? caseInsensitiveExpr(id.name(), leadingCol)
             : dialect.quoteIdentifier(leadingCol);
         String prefix = spec.caseInsensitivePrefix()
             ? op.prefix().toLowerCase(java.util.Locale.ROOT)
@@ -736,7 +752,7 @@ public final class SqlEntityAdapter implements KindAdapter<Entity<?, ?, ?>> {
         params.add(new BoundValue(stringFieldDef(), escaped + "%"));
         // Cursor: range scan on leading column, no equality pin, so
         // ordered column is field 0 itself (equalityColumnIndex = -1).
-        appendCursorWhere(where, params, shape, spec, /*equalityColumnIndex=*/-1, op.cursor());
+        appendCursorWhere(id.name(), where, params, shape, spec, /*equalityColumnIndex=*/-1, op.cursor());
         return pageRead(id, kind, shape, codec, spec, /*equalityColumnIndex=*/-1, where, params, op.pageSize());
     }
 
@@ -800,6 +816,10 @@ public final class SqlEntityAdapter implements KindAdapter<Entity<?, ?, ?>> {
         }
     }
 
+    private @NotNull String caseInsensitiveExpr(@NotNull String table, @NotNull String column) {
+        return dialect.caseInsensitiveExpr(dialect.quoteIdentifier(column), caseIgnoringColumns.contains(table + "." + column));
+    }
+
     @SuppressWarnings({"rawtypes", "unchecked"})
     private <R> Page<R> pageRead(@NotNull StoreId id, @NotNull Entity<?, ?, ?> kind,
                                  @NotNull EncodeShape shape, @NotNull BsonCodec codec,
@@ -807,7 +827,7 @@ public final class SqlEntityAdapter implements KindAdapter<Entity<?, ?, ?>> {
                                  @NotNull StringBuilder where, @NotNull List<BoundValue> params,
                                  int pageSize) throws java.sql.SQLException {
         int ps = Math.max(1, pageSize);
-        String orderBy = buildOrderBy(spec, shape);
+        String orderBy = buildOrderBy(id.name(), spec, shape);
         String sql = "SELECT * FROM " + dialect.quoteIdentifier(id.name())
             + " WHERE " + where + " " + orderBy + " LIMIT " + (ps + 1);
         try (Connection c = ds.getConnection(); PreparedStatement st = c.prepareStatement(sql)) {
@@ -842,7 +862,7 @@ public final class SqlEntityAdapter implements KindAdapter<Entity<?, ?, ?>> {
      * the spec's direction prefixes and always tie-breaks by the id
      * column ASC so pagination is deterministic.
      */
-    private @NotNull String buildOrderBy(@NotNull IndexSpec spec, @NotNull EncodeShape shape) {
+    private @NotNull String buildOrderBy(@NotNull String table, @NotNull IndexSpec spec, @NotNull EncodeShape shape) {
         StringBuilder sb = new StringBuilder("ORDER BY ");
         for (int i = 0; i < spec.fields().size(); i++) {
             String f = spec.fields().get(i);
@@ -853,7 +873,7 @@ public final class SqlEntityAdapter implements KindAdapter<Entity<?, ?, ?>> {
             // LOWER() so the planner uses the functional index for
             // ordering too (matches the WHERE clause).
             if (i == 0 && spec.caseInsensitivePrefix()) {
-                sb.append("LOWER(").append(dialect.quoteIdentifier(name)).append(')');
+                sb.append(caseInsensitiveExpr(table, name));
             } else {
                 sb.append(dialect.quoteIdentifier(name));
             }
@@ -926,7 +946,8 @@ public final class SqlEntityAdapter implements KindAdapter<Entity<?, ?, ?>> {
      * the seek-key value(s) into {@code params}. Mirrors the
      * MongoEntityAdapter ordered-past-OR-tied-then-id-past pattern.
      */
-    private void appendCursorWhere(@NotNull StringBuilder where,
+    private void appendCursorWhere(@NotNull String table,
+                                   @NotNull StringBuilder where,
                                    @NotNull List<BoundValue> params,
                                    @NotNull EncodeShape shape,
                                    @NotNull IndexSpec spec,
@@ -947,7 +968,7 @@ public final class SqlEntityAdapter implements KindAdapter<Entity<?, ?, ?>> {
         String orderedCol = stripDir(spec.fields().get(orderedIdx));
         EncodeShape.FieldDef orderedDef = fieldDef(shape, orderedCol);
         String orderedExpr = (spec.caseInsensitivePrefix() && orderedIdx == 0)
-            ? "LOWER(" + dialect.quoteIdentifier(orderedCol) + ")"
+            ? caseInsensitiveExpr(table, orderedCol)
             : dialect.quoteIdentifier(orderedCol);
         boolean desc = spec.fields().get(orderedIdx).startsWith("-");
         Object orderedVal;

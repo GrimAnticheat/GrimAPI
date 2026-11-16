@@ -9,6 +9,8 @@ import ac.grim.grimac.api.storage.kind.ops.KeyValueScopedOps;
 import ac.grim.grimac.api.storage.model.SettingScope;
 import ac.grim.grimac.api.storage.query.DeleteCriteria;
 import ac.grim.grimac.api.storage.query.Deletes;
+import ac.grim.grimac.internal.storage.retention.DeleteOlderThanOp;
+import ac.grim.grimac.internal.storage.retention.RetentionSweeper;
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.Nullable;
 
@@ -56,8 +58,12 @@ final class DeleteCriteriaTranslator {
                 long cutoff = System.currentTimeMillis() - ot.maxAgeMs();
                 return (Operation) new EventStreamOps.DeleteOlderThanOp(cat, cutoff);
             }
-            // SESSION olderThan: no v2 Entity "delete by timestamp
-            // range" Op exists yet. Fall back to legacy.
+            if (cat == Categories.SESSION) {
+                // A session is old once it both started and was last active
+                // before the cutoff, so a session still in use is never removed.
+                long cutoff = System.currentTimeMillis() - ot.maxAgeMs();
+                return (Operation) new DeleteOlderThanOp(cat, RetentionSweeper.SESSION_AGE_FIELDS, cutoff, 0);
+            }
         }
         return null;
     }

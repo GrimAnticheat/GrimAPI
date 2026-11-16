@@ -28,7 +28,6 @@ import ac.grim.grimac.internal.storage.codec.MethodHandleCodecFactory;
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
 
-import java.time.Duration;
 import java.util.List;
 import java.util.UUID;
 
@@ -66,10 +65,8 @@ public final class V2BuiltinKinds {
             .eventToRecord(V2BuiltinKinds::violationEventToRecord)
             .timestamp("occurred_at")
             .partition("session_id", "player_uuid", "check_id")
-            // Binary verbose rows are ~70-90 bytes all-in, so half a year of
-            // history is cheap; deployments override (or disable) sweeping
-            // via the storage config's retention.violations rule.
-            .retention(Duration.ofDays(180))
+            // No native TTL: deletion is opt-in and runs through RetentionSweeper,
+            // per the storage config's retention rules.
             .granularity(Granularity.SECONDS)
             .build();
     }

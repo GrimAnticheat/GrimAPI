@@ -13,6 +13,7 @@ import ac.grim.grimac.api.storage.history.SessionDetail;
 import ac.grim.grimac.api.storage.history.SessionSummary;
 import ac.grim.grimac.api.storage.history.ViolationEntry;
 import ac.grim.grimac.api.storage.kind.ops.EntityOps;
+import ac.grim.grimac.api.storage.kind.ops.EventStreamOps;
 import ac.grim.grimac.api.storage.model.ServerStartupRecord;
 import ac.grim.grimac.api.storage.model.SessionRecord;
 import ac.grim.grimac.api.storage.model.ViolationRecord;
@@ -26,6 +27,7 @@ import ac.grim.grimac.api.storage.verbose.VerboseRenderContext;
 import ac.grim.grimac.api.storage.verbose.VerboseSchema;
 import ac.grim.grimac.api.storage.verbose.VerboseSink;
 import ac.grim.grimac.internal.storage.checks.CheckRegistry;
+import ac.grim.grimac.internal.storage.core.DataStoreImpl;
 import ac.grim.grimac.internal.storage.instance.StartupLiveness;
 import ac.grim.grimac.internal.storage.verbose.GenericVerboseReader;
 import ac.grim.grimac.internal.storage.verbose.VerboseManifest;
@@ -166,7 +168,7 @@ public final class HistoryServiceImpl implements HistoryService {
             return CompletableFuture.completedFuture(new Page<>(List.of(), page.nextCursor()));
         }
         return resolveStartups(sessions).thenCompose(startups -> {
-            EventStreamCategory<ViolationEvent, ViolationRecord> v2 = this.v2Violations;
+            Category<?> v2 = batchedViolationCategory();
             if (v2 != null) {
                 return toSummaryPageV2(v2, sessions, startups, page.nextCursor(), total, sessionsBefore);
             }
@@ -181,9 +183,23 @@ public final class HistoryServiceImpl implements HistoryService {
      * adds {@code countDistinctMany}, the unique-checks call also collapses
      * to a single round-trip.
      */
+    /**
+     * The category the batched counts go to: the installed v2 violations category, or, when
+     * none was installed but violations have a V2 route, {@link Categories#VIOLATION} itself.
+     * Null only for a store without V2 violations, which takes the legacy per-session path.
+     */
+    private @Nullable Category<?> batchedViolationCategory() {
+        EventStreamCategory<ViolationEvent, ViolationRecord> installed = this.v2Violations;
+        if (installed != null) return installed;
+        if (store instanceof DataStoreImpl impl && impl.v2Routes().contains(Categories.VIOLATION)) {
+            return Categories.VIOLATION;
+        }
+        return null;
+    }
+
     @SuppressWarnings("unchecked")
     private CompletionStage<Page<SessionSummary>> toSummaryPageV2(
-            @NotNull EventStreamCategory<ViolationEvent, ViolationRecord> v2,
+            @NotNull Category<?> v2,
             @NotNull List<SessionRecord> sessions,
             @NotNull Map<UUID, ServerStartupRecord> startups,
             @Nullable Cursor nextCursor,
@@ -194,7 +210,7 @@ public final class HistoryServiceImpl implements HistoryService {
 
         CompletionStage<Map<UUID, Long>> countsByIdStage =
             (CompletionStage<Map<UUID, Long>>) (CompletionStage<?>)
-                store.execute(v2.countMany("session_id", sessionIds));
+                store.execute(new EventStreamOps.CountManyOp<>(v2, "session_id", sessionIds));
 
         return countsByIdStage.thenCompose(countsById -> {
             SessionSummary[] out = new SessionSummary[sessions.size()];
@@ -203,7 +219,7 @@ public final class HistoryServiceImpl implements HistoryService {
             for (int i = 0; i < sessions.size(); i++) {
                 UUID sid = sessions.get(i).sessionId();
                 uniqueStages[i] = (CompletionStage<Long>) (CompletionStage<?>)
-                    store.execute(v2.countDistinct("session_id", sid, "check_id"));
+                    store.execute(new EventStreamOps.CountDistinctOp(v2, "session_id", sid, "check_id"));
             }
             CompletionStage<Void> all = CompletableFuture.completedStage(null);
             for (int i = 0; i < sessions.size(); i++) {
@@ -213,7 +229,7 @@ public final class HistoryServiceImpl implements HistoryService {
                 long violationCount = countsById.getOrDefault(s.sessionId(), 0L);
                 CompletionStage<Long> uniqueStage = uniqueStages[i];
                 all = all.thenCombine(uniqueStage, (v, unique) -> {
-                    out[slot] = toSummary(s, startups.get(s.startupId()), ordinal, violationCount, unique.intValue());
+                    out[slot] = toSummary(s, startupOf(startups, s), ordinal, violationCount, unique.intValue());
                     return null;
                 });
             }
@@ -238,9 +254,15 @@ public final class HistoryServiceImpl implements HistoryService {
             chain = chain.thenCompose(v -> store.countViolationsInSession(s.sessionId())
                     .thenCompose(count -> store.countUniqueChecksInSession(s.sessionId())
                             .thenAccept(unique -> out[slot] =
-                                    toSummary(s, startups.get(s.startupId()), ordinal, count, unique.intValue()))));
+                                    toSummary(s, startupOf(startups, s), ordinal, count, unique.intValue()))));
         }
         return chain.thenApply(v -> new Page<>(List.of(out), nextCursor));
+    }
+
+    /** A session without a startup id has no startup row; immutable maps reject a null key. */
+    private static @Nullable ServerStartupRecord startupOf(@NotNull Map<UUID, ServerStartupRecord> startups,
+                                                           @NotNull SessionRecord s) {
+        return s.startupId() == null ? null : startups.get(s.startupId());
     }
 
     private SessionSummary toSummary(

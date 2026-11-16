@@ -12,6 +12,7 @@ import ac.grim.grimac.internal.storage.backend.sql.v2.SqlEntityAdapter;
 import ac.grim.grimac.internal.storage.backend.sql.v2.dialect.SqliteDialect;
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -22,7 +23,9 @@ import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.EnumSet;
+import java.util.Locale;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.logging.Logger;
 
@@ -45,6 +48,7 @@ public final class SqliteBackendV2 implements BackendV2 {
     private SqliteDialect dialect;
     private Logger logger;
     private Connection connection;
+    private @Nullable SqliteProcessLock processLock;
     private javax.sql.DataSource singleConnDs;
     private SqlEntityAdapter entityAdapter;
     private ac.grim.grimac.internal.storage.backend.sql.v2.SqlServerOwnershipAdapter ownershipAdapter;
@@ -93,22 +97,30 @@ public final class SqliteBackendV2 implements BackendV2 {
             }
         }
         try {
+            this.processLock = SqliteProcessLock.acquire(dbFile, logger);
+        } catch (SqliteProcessLock.InUseException e) {
+            throw new BackendException(e.getMessage(), e);
+        }
+        try {
             this.connection = DriverManager.getConnection(jdbcUrl);
+            // journal-mode, synchronous-mode and cache-pages from databases/sqlite.yml.
+            // An unknown mode falls back to the default (WAL, NORMAL) rather than reaching SQL.
             try (Statement s = connection.createStatement()) {
-                s.execute("PRAGMA journal_mode=WAL");
+                s.execute("PRAGMA journal_mode=" + pragmaValue(config.journalMode(), JOURNAL_MODES, "WAL"));
+                s.execute("PRAGMA synchronous=" + pragmaValue(config.synchronousMode(), SYNCHRONOUS_MODES, "NORMAL"));
+                if (config.cachePages() > 0) s.execute("PRAGMA cache_size=" + config.cachePages());
             }
-            // High busy_timeout so the v2 connection waits for the
-            // legacy backend's connection to release the write lock
-            // instead of failing immediately with SQLITE_BUSY. WAL
-            // mode allows concurrent reads, so the contention is only
-            // on writes — and both backends should never write
-            // simultaneously once Layer 1 routes v2-category writes
-            // exclusively through the v2 writeHandler.
+            // Every write of this process goes through this one connection
+            // and SqliteProcessLock keeps other processes off the file, so
+            // the busy timeout only covers outside readers (a backup, the
+            // sqlite3 shell) and WAL checkpoints. A configured timeout
+            // above 30 s is kept.
             try (Statement s = connection.createStatement()) {
-                s.execute("PRAGMA busy_timeout=30000");
+                s.execute("PRAGMA busy_timeout=" + Math.max(30_000, config.busyTimeoutMs()));
             }
             this.dialect = dialectOverride != null ? dialectOverride : selectDialect(connection, logger);
         } catch (SQLException e) {
+            closeQuietly();
             throw new BackendException("failed to open SQLite database " + dbFile, e);
         }
         this.singleConnDs = new SingleConnectionDataSource(connection);
@@ -117,6 +129,17 @@ public final class SqliteBackendV2 implements BackendV2 {
         this.eventStreamAdapter = new ac.grim.grimac.internal.storage.backend.sql.v2.SqlEventStreamAdapter(singleConnDs, dialect, logger);
         this.kvScopedAdapter = new ac.grim.grimac.internal.storage.backend.sql.v2.SqlKeyValueScopedAdapter(singleConnDs, dialect, logger);
         this.counterAdapter = new ac.grim.grimac.internal.storage.backend.sql.v2.SqlCounterAdapter(singleConnDs, dialect, logger);
+    }
+
+    private static final Set<String> JOURNAL_MODES = Set.of("DELETE", "TRUNCATE", "PERSIST", "MEMORY", "WAL", "OFF");
+    private static final Set<String> SYNCHRONOUS_MODES = Set.of("OFF", "NORMAL", "FULL", "EXTRA");
+
+    private @NotNull String pragmaValue(@NotNull String configured, @NotNull Set<String> allowed,
+                                        @NotNull String fallback) {
+        String value = configured.trim().toUpperCase(Locale.ROOT);
+        if (allowed.contains(value)) return value;
+        logger.warning("[grim-datastore] unknown SQLite setting '" + configured + "'; using " + fallback);
+        return fallback;
     }
 
     private static @NotNull SqliteDialect selectDialect(
@@ -142,10 +165,24 @@ public final class SqliteBackendV2 implements BackendV2 {
 
     @Override public void flush() {}
     @Override public void close() throws BackendException {
-        if (connection != null) {
-            try { connection.close(); }
-            catch (SQLException e) { throw new BackendException("SQLite close failed", e); }
+        try {
+            if (connection != null) {
+                try { connection.close(); }
+                catch (SQLException e) { throw new BackendException("SQLite close failed", e); }
+            }
+        } finally {
+            if (processLock != null) processLock.close();
+            processLock = null;
         }
+    }
+
+    private void closeQuietly() {
+        try {
+            if (connection != null) connection.close();
+        } catch (SQLException ignored) {
+        }
+        if (processLock != null) processLock.close();
+        processLock = null;
     }
 
     @Override @SuppressWarnings({"unchecked", "rawtypes"})

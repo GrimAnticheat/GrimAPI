@@ -18,6 +18,8 @@ import ac.grim.grimac.internal.storage.codec.bson.BsonCodecs;
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
 import redis.clients.jedis.JedisPool;
+import redis.clients.jedis.Pipeline;
+import redis.clients.jedis.Response;
 import redis.clients.jedis.resps.Tuple;
 
 import java.util.*;
@@ -107,12 +109,14 @@ public final class RedisEventStreamAdapter implements KindAdapter<EventStream<?,
         try {
             if (op instanceof EventStreamOps.CountOp c)
                 return (R) Long.valueOf(count(storePrefix, c));
+            if (op instanceof EventStreamOps.CountManyOp<?> c)
+                return (R) countMany(storePrefix, c);
             if (op instanceof EventStreamOps.DeleteByPartitionOp d)
                 { deleteByPartition(storePrefix, kind, d); return null; }
             if (op instanceof EventStreamOps.DeleteOlderThanOp d)
                 { deleteOlderThan(storePrefix, kind, d); return null; }
             if (op instanceof EventStreamOps.CountDistinctOp c)
-                return (R) Long.valueOf(0L); // TODO: expensive scan
+                return (R) Long.valueOf(countDistinct(storePrefix, c));
             if (op instanceof EventStreamOps.PageOp<?> p)
                 return (R) page(storePrefix, kind, p);
             throw new UnsupportedOperationException("RedisEventStreamAdapter: " + op.getClass().getName());
@@ -127,6 +131,41 @@ public final class RedisEventStreamAdapter implements KindAdapter<EventStream<?,
         String indexKey = prefix + "by-" + op.partition() + ":" + RedisKeys.encode(op.key());
         try (var j = pool.getResource()) {
             return j.zcard(indexKey);
+        }
+    }
+
+    /** One ZCARD per key on one connection; a key without events counts 0. */
+    private <K> Map<K, Long> countMany(String prefix, EventStreamOps.CountManyOp<K> op) {
+        Map<K, Long> out = new LinkedHashMap<>();
+        if (op.keys().isEmpty()) return out;
+        try (var j = pool.getResource()) {
+            for (K key : op.keys()) {
+                out.put(key, j.zcard(prefix + "by-" + op.partition() + ":" + RedisKeys.encode(key)));
+            }
+        }
+        return out;
+    }
+
+    /**
+     * Distinct values of {@code field} among the events in one partition: the partition index's members, then that
+     * field of each event hash, read in one pipeline. Events without the field are not counted.
+     */
+    private long countDistinct(String prefix, EventStreamOps.CountDistinctOp op) {
+        String indexKey = prefix + "by-" + op.partition() + ":" + RedisKeys.encode(op.key());
+        try (var j = pool.getResource()) {
+            List<String> members = j.zrange(indexKey, 0, -1);
+            if (members.isEmpty()) return 0;
+            byte[] field = bytes(op.field());
+            Pipeline pipeline = j.pipelined();
+            List<Response<byte[]>> values = new ArrayList<>(members.size());
+            for (String eventId : members) values.add(pipeline.hget(bytes(prefix + eventId), field));
+            pipeline.sync();
+            Set<String> distinct = new HashSet<>();
+            for (Response<byte[]> value : values) {
+                byte[] raw = value.get();
+                if (raw != null) distinct.add(new String(raw, java.nio.charset.StandardCharsets.UTF_8));
+            }
+            return distinct.size();
         }
     }
 
