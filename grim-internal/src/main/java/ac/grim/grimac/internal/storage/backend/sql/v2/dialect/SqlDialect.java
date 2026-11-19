@@ -5,6 +5,7 @@ import ac.grim.grimac.api.storage.kind.IndexSpec;
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
 
+import java.sql.SQLException;
 import java.util.List;
 import java.util.Locale;
 
@@ -49,6 +50,13 @@ public interface SqlDialect {
      * {@code CREATE INDEX}; SQLite and Postgres do).
      */
     @NotNull String createIndexSql(@NotNull String tableName, @NotNull IndexSpec spec);
+
+    @NotNull String createIndexSql(@NotNull String tableName, @NotNull IndexSpec spec,
+                                   @NotNull String physicalIndexName);
+
+    default boolean isDuplicateIndexError(@NotNull SQLException e) {
+        return false;
+    }
 
     /**
      * Map a {@link ac.grim.grimac.api.storage.codec.FieldKind} +

@@ -10,6 +10,7 @@ import ac.grim.grimac.api.storage.codec.Codec;
 import ac.grim.grimac.api.storage.codec.EncodeShape;
 import ac.grim.grimac.api.storage.config.TableNames;
 import ac.grim.grimac.api.storage.event.SettingEvent;
+import ac.grim.grimac.api.storage.event.ViolationEvent;
 import ac.grim.grimac.api.storage.event.ServerStartupEvent;
 import ac.grim.grimac.api.storage.event.SessionEvent;
 import ac.grim.grimac.api.storage.instance.OwnershipClaimResult;
@@ -19,14 +20,17 @@ import ac.grim.grimac.api.storage.instance.ServerOwnershipMetadata;
 import ac.grim.grimac.api.storage.kind.Counter;
 import ac.grim.grimac.api.storage.kind.CounterEvent;
 import ac.grim.grimac.api.storage.kind.Entity;
+import ac.grim.grimac.api.storage.kind.EventStream;
 import ac.grim.grimac.api.storage.kind.KeyValueScoped;
 import ac.grim.grimac.api.storage.kind.ops.CounterOps;
 import ac.grim.grimac.api.storage.kind.ops.EntityOps;
+import ac.grim.grimac.api.storage.kind.ops.EventStreamOps;
 import ac.grim.grimac.api.storage.kind.ops.KeyValueScopedOps;
 import ac.grim.grimac.api.storage.model.PlayerIdentity;
 import ac.grim.grimac.api.storage.model.ServerStartupRecord;
 import ac.grim.grimac.api.storage.model.SessionRecord;
 import ac.grim.grimac.api.storage.model.SettingScope;
+import ac.grim.grimac.api.storage.query.Page;
 import ac.grim.grimac.api.storage.registry.StoreId;
 import ac.grim.grimac.internal.storage.backend.mongo.MongoBackendConfig;
 import ac.grim.grimac.internal.storage.backend.mongo.v2.MongoBackendV2;
@@ -40,6 +44,7 @@ import ac.grim.grimac.internal.storage.backend.sqlite.SqliteBackendConfig;
 import ac.grim.grimac.internal.storage.backend.sqlite.v2.SqliteBackendV2;
 import ac.grim.grimac.internal.storage.backend.sql.v2.dialect.SqliteDialect;
 import ac.grim.grimac.internal.storage.category.V2BuiltinKinds;
+import ac.grim.grimac.internal.storage.util.UuidV7;
 import com.mongodb.ConnectionString;
 import com.mongodb.ServerAddress;
 import org.junit.jupiter.api.Assumptions;
@@ -50,8 +55,26 @@ import org.junit.jupiter.api.io.TempDir;
 import java.net.Socket;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Statement;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.TreeMap;
 import java.util.UUID;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.logging.Handler;
+import java.util.logging.Level;
+import java.util.logging.LogRecord;
 import java.util.logging.Logger;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -80,6 +103,9 @@ class V2BackendIntegrationTest {
             exerciseCounter(backend, "v2_integ_counters_sqlite");
             exerciseOwnership(backend, "v2_integ_ownership_sqlite");
             exerciseSetIfSentinel(backend, "v2_integ_set_if_sentinel_sqlite");
+            Path db = tempDir.resolve("data/v2-integ.db").toAbsolutePath();
+            exerciseViolationIndexes(backend, "v2_integ_violations_sqlite",
+                    () -> DriverManager.getConnection("jdbc:sqlite:" + db), "DROP INDEX \"%1$s\"", false);
         } finally {
             backend.close();
         }
@@ -119,6 +145,10 @@ class V2BackendIntegrationTest {
             exerciseEntityIndexes(backend, "v2_integ_players_pg", "v2_integ_sessions_pg",
                     "v2_integ_startups_pg");
             exerciseSetIfSentinel(backend, "v2_integ_set_if_sentinel_pg");
+            exerciseViolationIndexes(backend, "v2_integ_violations_pg",
+                    () -> DriverManager.getConnection("jdbc:postgresql://" + host + ":" + port + "/" + cfg.database(),
+                            cfg.user(), cfg.password()),
+                    "DROP INDEX \"%1$s\"", false);
         } finally {
             backend.close();
         }
@@ -160,6 +190,10 @@ class V2BackendIntegrationTest {
             exerciseEntityIndexes(backend, "v2_integ_players_mysql", "v2_integ_sessions_mysql",
                     "v2_integ_startups_mysql");
             exerciseSetIfSentinel(backend, "v2_integ_set_if_sentinel_mysql");
+            exerciseViolationIndexes(backend, "v2_integ_violations_mysql",
+                    () -> DriverManager.getConnection("jdbc:mysql://" + host + ":" + port + "/" + cfg.database(),
+                            cfg.user(), cfg.password()),
+                    "DROP INDEX `%1$s` ON `%2$s`", true);
         } finally {
             backend.close();
         }
@@ -181,6 +215,115 @@ class V2BackendIntegrationTest {
         } finally {
             backend.close();
         }
+    }
+
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private void exerciseViolationIndexes(BackendV2 backend, String storeName, JdbcConnector jdbc,
+                                          String dropIndexSql, boolean raceInitializers) throws Exception {
+        String table = storeName + "_" + Long.toHexString(System.nanoTime());
+        StoreId store = StoreId.grim(table);
+        EventStream kind = V2BuiltinKinds.violations();
+        KindAdapter adapter = backend.adapterFor(kind)
+                .orElseThrow(() -> new AssertionError(backend.id() + " has no EventStream adapter"));
+        Map<String, String> expected = new TreeMap<>(Map.of(
+                "idx_" + table + "_session_id", "session_id",
+                "idx_" + table + "_player_uuid", "player_uuid",
+                "idx_" + table + "_check_id", "check_id",
+                "idx_" + table + "_ts", "occurred_at"));
+        List<LogRecord> warnings = new CopyOnWriteArrayList<>();
+        Handler capture = new Handler() {
+            @Override public void publish(LogRecord record) {
+                if (record.getLevel() == Level.WARNING) warnings.add(record);
+            }
+            @Override public void flush() {}
+            @Override public void close() {}
+        };
+        LOG.addHandler(capture);
+        try {
+            adapter.ensureStore(store, kind);
+            assertEquals(expected, violationIndexes(jdbc, table), backend.id() + ": fresh table indexes");
+
+            UUID session = UUID.randomUUID();
+            UUID player = UUID.randomUUID();
+            long ts = 1_700_000_000_000L;
+            var handler = adapter.writeHandler(store, kind, Categories.VIOLATION);
+            for (int i = 0; i < 3; i++) {
+                handler.onEvent(new ViolationEvent()
+                        .id(UuidV7.fromTimestampMs(ts, i))
+                        .sessionId(session)
+                        .playerUuid(player)
+                        .checkId(7)
+                        .vl(1.0)
+                        .occurredEpochMs(ts), 0L, i == 2);
+            }
+
+            adapter.ensureStore(store, kind);
+            assertEquals(expected, violationIndexes(jdbc, table), backend.id() + ": repeated ensureStore");
+
+            try (Connection c = jdbc.open(); Statement s = c.createStatement()) {
+                s.executeUpdate(String.format(dropIndexSql, "idx_" + table + "_check_id", table));
+                s.executeUpdate(String.format(dropIndexSql, "idx_" + table + "_ts", table));
+            }
+            adapter.ensureStore(store, kind);
+            assertEquals(expected, violationIndexes(jdbc, table), backend.id() + ": partial schema repaired");
+
+            if (raceInitializers) {
+                try (Connection c = jdbc.open(); Statement s = c.createStatement()) {
+                    for (String index : expected.keySet()) s.executeUpdate(String.format(dropIndexSql, index, table));
+                }
+                assertTrue(violationIndexes(jdbc, table).isEmpty(), backend.id() + ": indexes dropped before race");
+                CyclicBarrier start = new CyclicBarrier(2);
+                ExecutorService pool = Executors.newFixedThreadPool(2);
+                try {
+                    List<Future<?>> runs = new ArrayList<>();
+                    for (int i = 0; i < 2; i++) {
+                        runs.add(pool.submit(() -> {
+                            start.await();
+                            adapter.ensureStore(store, kind);
+                            return null;
+                        }));
+                    }
+                    for (Future<?> run : runs) run.get(60, TimeUnit.SECONDS);
+                } finally {
+                    pool.shutdownNow();
+                }
+                assertEquals(expected, violationIndexes(jdbc, table), backend.id() + ": concurrent initializers");
+            }
+
+            assertEquals(3L, (long) adapter.execute(store, kind,
+                    new EventStreamOps.CountOp(Categories.VIOLATION, "player_uuid", player)),
+                    backend.id() + ": rows survive index repair");
+            Page<?> bySession = (Page<?>) adapter.execute(store, kind,
+                    new EventStreamOps.PageOp<>(Categories.VIOLATION, "session_id", session, null, 10));
+            assertEquals(3, bySession.items().size(), backend.id() + ": page by session");
+            Page<?> byTime = (Page<?>) adapter.execute(store, kind,
+                    new EventStreamOps.RangeByTimeOp<>(Categories.VIOLATION, ts - 1, ts + 1, null, 10));
+            assertEquals(3, byTime.items().size(), backend.id() + ": range by time");
+            assertTrue(warnings.isEmpty(), backend.id() + ": no index warnings, got " + warnings.stream()
+                    .map(r -> r.getMessage() + " / " + r.getThrown()).toList());
+        } finally {
+            LOG.removeHandler(capture);
+            adapter.dropStore(store, kind);
+        }
+    }
+
+    private interface JdbcConnector {
+        Connection open() throws SQLException;
+    }
+
+    private static Map<String, String> violationIndexes(JdbcConnector jdbc, String table)
+            throws SQLException {
+        Map<String, String> out = new TreeMap<>();
+        try (Connection c = jdbc.open();
+             ResultSet rs = c.getMetaData().getIndexInfo(c.getCatalog(), c.getSchema(), table, false, false)) {
+            while (rs.next()) {
+                String name = rs.getString("INDEX_NAME");
+                if (name == null || !name.startsWith("idx_")) continue;
+                assertTrue(rs.getBoolean("NON_UNIQUE"), name + " is non-unique");
+                assertNull(out.put(name, rs.getString("COLUMN_NAME")), name + " is single-column");
+            }
+        }
+        return out;
     }
 
     private void exerciseSetIfSentinel(BackendV2 backend, String storeName) throws Exception {

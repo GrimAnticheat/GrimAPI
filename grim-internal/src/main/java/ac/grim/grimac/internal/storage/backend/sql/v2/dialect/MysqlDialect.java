@@ -6,6 +6,7 @@ import ac.grim.grimac.api.storage.kind.IndexSpec;
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
 
+import java.sql.SQLException;
 import java.util.List;
 import java.util.UUID;
 
@@ -38,9 +39,15 @@ public final class MysqlDialect implements SqlDialect {
 
     @Override
     public @NotNull String createIndexSql(@NotNull String tableName, @NotNull IndexSpec spec) {
+        return createIndexSql(tableName, spec, spec.name());
+    }
+
+    @Override
+    public @NotNull String createIndexSql(@NotNull String tableName, @NotNull IndexSpec spec,
+                                          @NotNull String physicalIndexName) {
         StringBuilder sb = new StringBuilder("CREATE ");
         if (spec.unique()) sb.append("UNIQUE ");
-        sb.append("INDEX ").append(q(spec.name()));
+        sb.append("INDEX ").append(q(physicalIndexName));
         sb.append(" ON ").append(q(tableName)).append(" (");
         boolean first = true;
         for (String f : spec.fields()) {
@@ -56,6 +63,11 @@ public final class MysqlDialect implements SqlDialect {
         }
         sb.append(')');
         return sb.toString();
+    }
+
+    @Override
+    public boolean isDuplicateIndexError(@NotNull SQLException e) {
+        return e.getErrorCode() == 1061 && "42000".equals(e.getSQLState());
     }
 
     @Override

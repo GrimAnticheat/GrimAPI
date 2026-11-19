@@ -46,16 +46,21 @@ public final class PostgresDialect implements SqlDialect {
 
     @Override
     public @NotNull String createIndexSql(@NotNull String tableName, @NotNull IndexSpec spec) {
-        StringBuilder sb = new StringBuilder();
-        sb.append("CREATE ");
-        if (spec.unique()) sb.append("UNIQUE ");
         // Postgres index names are SCHEMA-global, not table-local like
         // Mongo. CREATE INDEX IF NOT EXISTS "by_name" on a second
         // table with the same spec name would silently no-op. Prefix
         // the name with the table to scope it; trim to Postgres'
         // 63-character NAMEDATALEN cap if the combined string overflows.
-        String physical = qualifiedIndexName(tableName, spec.name());
-        sb.append("INDEX IF NOT EXISTS ").append(quoteId(physical));
+        return createIndexSql(tableName, spec, qualifiedIndexName(tableName, spec.name()));
+    }
+
+    @Override
+    public @NotNull String createIndexSql(@NotNull String tableName, @NotNull IndexSpec spec,
+                                          @NotNull String physicalIndexName) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("CREATE ");
+        if (spec.unique()) sb.append("UNIQUE ");
+        sb.append("INDEX IF NOT EXISTS ").append(quoteId(physicalIndexName));
         sb.append(" ON ").append(quoteId(tableName)).append(" (");
         boolean first = true;
         for (int i = 0; i < spec.fields().size(); i++) {
